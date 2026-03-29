@@ -88,6 +88,19 @@ auto is_view_like_type(const TypeContext& types, const Type* type) -> bool {
     return is_borrow_like_type(type) || type->kind == TypeKind::Slice;
 }
 
+auto is_direct_shared_view_slice(const TypeContext& types, const Type* type)
+    -> bool {
+    if (type == nullptr) {
+        return false;
+    }
+    type = types.unqualify(type);
+    if (type->kind != TypeKind::Slice || type->element_type == nullptr) {
+        return false;
+    }
+    const auto* element = types.unqualify(type->element_type);
+    return is_borrow_like_type(element) && !element->is_mut;
+}
+
 auto same_concrete_base_type(const TypeContext& types, const Type* lhs,
                              const Type* rhs) -> bool {
     lhs = types.unqualify(lhs);
@@ -249,8 +262,8 @@ auto describe_type_syntax(const ast::TypeSyntax& type) -> std::string {
             return self(*inner.element_type, self) + '*';
         case ast::TypeSyntax::Kind::Array: {
             std::ostringstream stream;
-            stream << self(*inner.element_type, self) << '['
-                   << inner.array_size << ']';
+            stream << self(*inner.element_type, self) << '[' << inner.array_size
+                   << ']';
             return stream.str();
         }
         }
@@ -385,7 +398,8 @@ auto impl_target_group_key(const TypeContext& types, const Type* type)
         }
         return "named:" + type->name;
     case TypeKind::Enum:
-        if (type->enum_decl != nullptr && type->enum_decl->template_decl != nullptr) {
+        if (type->enum_decl != nullptr &&
+            type->enum_decl->template_decl != nullptr) {
             return "named:" + type->enum_decl->template_decl->name;
         }
         return "named:" + type->name;

@@ -122,6 +122,7 @@ struct CachedViewBinding {
     std::vector<std::uint32_t> path;
     std::optional<ResolvedPlace> source_place;
     std::optional<std::size_t> source_local_id;
+    std::vector<ResolvedPlace> element_sources;
 };
 
 struct IntegerLiteralExpr {

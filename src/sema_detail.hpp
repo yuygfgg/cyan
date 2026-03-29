@@ -68,6 +68,8 @@ auto make_impl_key(std::string_view interface_name, std::string_view type_name)
     -> std::string;
 auto is_borrow_like_type(const Type* type) -> bool;
 auto is_view_like_type(const TypeContext& types, const Type* type) -> bool;
+auto is_direct_shared_view_slice(const TypeContext& types, const Type* type)
+    -> bool;
 auto same_concrete_base_type(const TypeContext& types, const Type* lhs,
                              const Type* rhs) -> bool;
 auto can_add_const_in_object_graph(const TypeContext& types, const Type* source,

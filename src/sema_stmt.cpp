@@ -258,9 +258,9 @@ auto SemanticAnalyzer::analyzeVarDecl(FunctionState& state,
         auto& local = state.locals[*declared];
         local.status = LocalState::Status::Live;
         if (typeContainsViews(*resolved_type)) {
-            auto assigned = setAggregateViewSlots(
-                state, localPlace(local_id), *resolved_type, view_bindings,
-                stmt.initializer->range);
+            auto assigned = setAggregateViewSlots(state, localPlace(local_id),
+                                                  *resolved_type, view_bindings,
+                                                  stmt.initializer->range);
             if (!assigned) {
                 return std::unexpected(assigned.error());
             }
@@ -339,8 +339,7 @@ auto SemanticAnalyzer::analyzeAssign(FunctionState& state,
     if (local_index.has_value()) {
         auto& root = state.locals[*local_index];
         root_was_live_before_assign =
-            place->fields.empty() &&
-            root.status == LocalState::Status::Live;
+            place->fields.empty() && root.status == LocalState::Status::Live;
         if (root.status != LocalState::Status::Live) {
             if (place->fields.empty()) {
                 root.status = LocalState::Status::Live;
@@ -373,22 +372,20 @@ auto SemanticAnalyzer::analyzeAssign(FunctionState& state,
     if (local_index.has_value() && place->fields.empty()) {
         const auto root_still_holds_old_value =
             state.locals[*local_index].status == LocalState::Status::Live;
-        stmt.drop_old_value =
-            root_was_live_before_assign && root_still_holds_old_value &&
-            types.needsDrop(target_type);
+        stmt.drop_old_value = root_was_live_before_assign &&
+                              root_still_holds_old_value &&
+                              types.needsDrop(target_type);
         state.locals[*local_index].status = LocalState::Status::Live;
         if (typeContainsViews(target_type)) {
-            auto assigned = setAggregateViewSlots(state, *place, target_type,
-                                                  view_bindings,
-                                                  stmt.value->range);
+            auto assigned = setAggregateViewSlots(
+                state, *place, target_type, view_bindings, stmt.value->range);
             if (!assigned) {
                 return std::unexpected(assigned.error());
             }
         }
     } else if (typeContainsViews(target_type)) {
-        auto assigned =
-            setAggregateViewSlots(state, *place, target_type, view_bindings,
-                                  stmt.value->range);
+        auto assigned = setAggregateViewSlots(state, *place, target_type,
+                                              view_bindings, stmt.value->range);
         if (!assigned) {
             return std::unexpected(assigned.error());
         }
@@ -561,6 +558,7 @@ auto SemanticAnalyzer::analyzeReturn(FunctionState& state,
                     .path = std::move(target_path),
                     .source_place = source_binding->source_place,
                     .source_local_id = source_binding->source_local_id,
+                    .element_sources = source_binding->element_sources,
                     .type = target_leaves[index].type,
                 });
             }

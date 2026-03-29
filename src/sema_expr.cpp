@@ -547,6 +547,7 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                                 .path = std::move(path),
                                 .source_place = binding.source_place,
                                 .source_local_id = binding.source_local_id,
+                                .element_sources = binding.element_sources,
                             });
                         }
                     }
@@ -597,6 +598,10 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                 const auto* elem_type =
                     types.unqualify(expected_base->element_type);
                 const bool elem_is_borrow_like = is_borrow_like_type(elem_type);
+                const bool track_element_sources =
+                    expected_base->kind == TypeKind::Slice &&
+                    is_direct_shared_view_slice(types, expected_type);
+                std::vector<ast::ResolvedPlace> element_sources;
 
                 for (auto& element : array_literal.elements) {
                     auto analyzed = consumeValue(state, *element,
@@ -604,12 +609,17 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                     if (!analyzed) {
                         return std::unexpected(analyzed.error());
                     }
-                    if (elem_is_borrow_like &&
+                    if ((elem_is_borrow_like || track_element_sources) &&
                         expected_base->kind == TypeKind::Slice) {
                         auto src = borrowFromExpr(state, *element,
                                                   elem_type->is_mut, false);
                         if (!src) {
                             return std::unexpected(src.error());
+                        }
+                        if (track_element_sources &&
+                            std::ranges::find(element_sources, *src) ==
+                                element_sources.end()) {
+                            element_sources.push_back(*src);
                         }
                         if (!most_restrictive_source.has_value()) {
                             most_restrictive_source = *src;
@@ -650,6 +660,17 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                 }
                 expr.resolved_type = expected_type;
                 expr.resolved_place.reset();
+                if (track_element_sources) {
+                    expr.cached_view_bindings =
+                        std::vector<ast::CachedViewBinding>{
+                            ast::CachedViewBinding{
+                                .path = {},
+                                .source_place = expr.slice_source_place,
+                                .source_local_id = std::nullopt,
+                                .element_sources = std::move(element_sources),
+                            },
+                        };
+                }
                 return expr.resolved_type;
             },
             [&](ast::CastExpr& cast_expr)
@@ -903,6 +924,15 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
             }
         }
         for (const auto& binding : call_view_bindings) {
+            if (!binding.element_sources.empty()) {
+                for (auto loan_place : binding.element_sources) {
+                    state.temporary_loans.push_back(TemporaryLoan{
+                        .place = std::move(loan_place),
+                        .is_mut = false,
+                    });
+                }
+                continue;
+            }
             if (!binding.source_place.has_value()) {
                 continue;
             }
@@ -1250,6 +1280,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                         .path = std::move(path),
                         .source_place = binding.source_place,
                         .source_local_id = binding.source_local_id,
+                        .element_sources = binding.element_sources,
                     });
                 }
                 expr.cached_view_bindings = std::move(cached_bindings);
@@ -1295,6 +1326,15 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
     auto& resolved_function = *function;
     call.function = &resolved_function;
     call.callee = resolved_function.name;
+    if (resolved_function.resolved_return_type == nullptr ||
+        std::ranges::any_of(resolved_function.parameters,
+                            [](const ast::Parameter& parameter) {
+                                return parameter.resolved_type == nullptr;
+                            })) {
+        return unexpected_result<const Type*>(
+            "cannot call a function with an invalid type signature",
+            expr.range);
+    }
     if (call.arguments.size() != resolved_function.parameters.size()) {
         return unexpected_result<const Type*>(
             "call argument count does not match function signature",
@@ -1384,6 +1424,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                     .path = std::move(target_path),
                     .source_place = source_binding->source_place,
                     .source_local_id = source_binding->source_local_id,
+                    .element_sources = source_binding->element_sources,
                 });
             }
         }

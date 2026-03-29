@@ -30,6 +30,13 @@ auto SemanticAnalyzer::branchMerge(FunctionState& into,
                     local.name + "'",
                 range);
         }
+        if (then_local.element_origins != else_local.element_origins) {
+            return make_error(
+                "control-flow merge requires identical view element origins "
+                "for '" +
+                    local.name + "'",
+                range);
+        }
         if (then_local.reborrow_parent_local_id !=
             else_local.reborrow_parent_local_id) {
             return make_error(
@@ -46,6 +53,7 @@ auto SemanticAnalyzer::branchMerge(FunctionState& into,
         }
         local.status = then_state.locals[*then_index].status;
         local.borrow_origin = then_state.locals[*then_index].borrow_origin;
+        local.element_origins = then_state.locals[*then_index].element_origins;
         local.reborrow_parent_local_id =
             then_state.locals[*then_index].reborrow_parent_local_id;
         local.in_scope = then_state.locals[*then_index].in_scope;
@@ -106,6 +114,7 @@ auto SemanticAnalyzer::requireLoopBreakState(const FunctionState& state,
         const auto& current_local = state.locals[*current_index];
         if (current_local.status != entry_local.status ||
             current_local.borrow_origin != entry_local.borrow_origin ||
+            current_local.element_origins != entry_local.element_origins ||
             current_local.reborrow_parent_local_id !=
                 entry_local.reborrow_parent_local_id) {
             return make_error("break is only allowed when loop entry "
@@ -207,6 +216,18 @@ auto SemanticAnalyzer::activeNamedLoans(const FunctionState& state) const
         const auto* local_type = types.unqualify(local.type);
         if (!is_borrow_like_type(local.type) &&
             local_type->kind != TypeKind::Slice) {
+            continue;
+        }
+        if (is_direct_shared_view_slice(types, local.type) &&
+            !local.element_origins.empty()) {
+            for (const auto& source_place : local.element_origins) {
+                auto place = source_place;
+                place.owner_local_id = local.unique_id;
+                loans.push_back(TemporaryLoan{
+                    .place = place,
+                    .is_mut = false,
+                });
+            }
             continue;
         }
         auto place = *local.borrow_origin;

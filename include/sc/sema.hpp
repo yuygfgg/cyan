@@ -125,6 +125,7 @@ class SemanticAnalyzer {
         std::size_t unique_id = 0;
         Status status = Status::Uninitialized;
         std::optional<ast::ResolvedPlace> borrow_origin;
+        std::vector<ast::ResolvedPlace> element_origins;
         std::optional<std::size_t> reborrow_parent_local_id;
         bool is_parameter = false;
         bool is_hidden = false;
@@ -178,6 +179,7 @@ class SemanticAnalyzer {
         std::vector<std::uint32_t> path;
         std::optional<ast::ResolvedPlace> source_place;
         std::optional<std::size_t> source_local_id;
+        std::vector<ast::ResolvedPlace> element_sources;
         const Type* type = nullptr;
     };
 

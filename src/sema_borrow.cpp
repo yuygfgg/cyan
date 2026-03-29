@@ -23,6 +23,16 @@ auto has_direct_interface_source(const ast::Expr& expr) -> bool {
            expr.resolved_place.has_value();
 }
 
+auto view_source_places(const auto& local) -> std::vector<ast::ResolvedPlace> {
+    if (!local.element_origins.empty()) {
+        return local.element_origins;
+    }
+    if (local.borrow_origin.has_value()) {
+        return {*local.borrow_origin};
+    }
+    return {};
+}
+
 } // namespace
 
 auto SemanticAnalyzer::borrowSourcePlace(FunctionState& state, ast::Expr& expr)
@@ -253,6 +263,7 @@ auto SemanticAnalyzer::declareLocal(FunctionState& state, std::string name,
                    .unique_id = next_local_id++,
                    .status = LocalState::Status::Uninitialized,
                    .borrow_origin = std::nullopt,
+                   .element_origins = {},
                    .reborrow_parent_local_id = std::nullopt,
                    .is_parameter = is_parameter,
                    .is_hidden = false,
@@ -274,6 +285,7 @@ auto SemanticAnalyzer::declareHiddenLocal(FunctionState& state,
         .unique_id = next_local_id++,
         .status = LocalState::Status::Live,
         .borrow_origin = std::nullopt,
+        .element_origins = {},
         .reborrow_parent_local_id = std::nullopt,
         .is_parameter = false,
         .is_hidden = true,
@@ -418,10 +430,11 @@ auto SemanticAnalyzer::ensureBorrowSourceType(FunctionState& state,
     }
 
     if (source_type != nullptr &&
-        (!target_type->is_mut ||
-         !source_from_existing_borrow || source_is_mut_borrow) &&
+        (!target_type->is_mut || !source_from_existing_borrow ||
+         source_is_mut_borrow) &&
         (!target_type->is_mut || !source_type->is_const) &&
-        types.sameIgnoringTopLevelConst(source_type, target_type->element_type)) {
+        types.sameIgnoringTopLevelConst(source_type,
+                                        target_type->element_type)) {
         return {};
     }
 
@@ -458,7 +471,8 @@ auto SemanticAnalyzer::createNamedBorrow(FunctionState& state,
         return std::unexpected(origin.error());
     }
     if (target_type != nullptr && target_type->kind == TypeKind::Borrow) {
-        auto compatible = ensureBorrowSourceType(state, initializer, target_type);
+        auto compatible =
+            ensureBorrowSourceType(state, initializer, target_type);
         if (!compatible) {
             return std::unexpected(compatible.error());
         }
@@ -472,6 +486,7 @@ auto SemanticAnalyzer::createNamedBorrow(FunctionState& state,
     }
     releaseReborrowParent(state, local);
     local.borrow_origin = *origin;
+    local.element_origins.clear();
     local.status = LocalState::Status::Live;
     auto attached = attachReborrowParent(state, local, initializer);
     if (!attached) {
@@ -518,6 +533,7 @@ auto SemanticAnalyzer::assignNamedBorrow(FunctionState& state,
     releaseReborrowParent(state, local);
     local.status = LocalState::Status::Moved;
     local.borrow_origin.reset();
+    local.element_origins.clear();
     local.borrow_origin = *origin;
     local.status = LocalState::Status::Live;
     auto attached = attachReborrowParent(state, local, value);
@@ -531,22 +547,28 @@ auto SemanticAnalyzer::ensureViewSourceLive(FunctionState& state,
                                             const LocalState& local,
                                             SourceRange range)
     -> std::expected<void, Diagnostic> {
-    if (!local.borrow_origin.has_value() || local.borrow_origin->is_external) {
+    const auto sources = view_source_places(local);
+    if (sources.empty()) {
         return {};
     }
 
     const auto kind = view_source_kind(types, local.type);
-    const auto source_index =
-        findLocalById(state, local.borrow_origin->root_id);
-    if (!source_index.has_value()) {
-        return make_error("invalid " + std::string(kind) + " source", range);
-    }
+    for (const auto& source_place : sources) {
+        if (source_place.is_external) {
+            continue;
+        }
+        const auto source_index = findLocalById(state, source_place.root_id);
+        if (!source_index.has_value()) {
+            return make_error("invalid " + std::string(kind) + " source",
+                              range);
+        }
 
-    const auto& source_local = state.locals[*source_index];
-    if (!source_local.in_scope ||
-        source_local.status != LocalState::Status::Live) {
-        return make_error(std::string(kind) + " source is no longer live",
-                          range);
+        const auto& source_local = state.locals[*source_index];
+        if (!source_local.in_scope ||
+            source_local.status != LocalState::Status::Live) {
+            return make_error(std::string(kind) + " source is no longer live",
+                              range);
+        }
     }
     return {};
 }
@@ -555,17 +577,17 @@ auto SemanticAnalyzer::ensureViewSourceOutlivesLocal(
     FunctionState& state, const LocalState& local,
     const std::optional<ast::ResolvedPlace>& source_place, SourceRange range)
     -> std::expected<void, Diagnostic> {
-    if (!source_place.has_value() || source_place->is_external) {
+    std::vector<ast::ResolvedPlace> sources;
+    if (source_place.has_value()) {
+        sources.push_back(*source_place);
+    } else {
+        sources = view_source_places(local);
+    }
+    if (sources.empty()) {
         return {};
     }
 
     const auto kind = view_source_kind(types, local.type);
-    const auto source_index = findLocalById(state, source_place->root_id);
-    if (!source_index.has_value()) {
-        return make_error("invalid " + std::string(kind) + " source", range);
-    }
-
-    const auto& source_local = state.locals[*source_index];
     const auto* target_local = &local;
     if (local.is_view_slot && !local.slot_root_is_external) {
         const auto target_root_index = findLocalById(state, local.slot_root_id);
@@ -573,21 +595,33 @@ auto SemanticAnalyzer::ensureViewSourceOutlivesLocal(
             target_local = &state.locals[*target_root_index];
         }
     }
-    if (!source_local.in_scope ||
-        source_local.status != LocalState::Status::Live) {
-        return make_error(std::string(kind) + " source is no longer live",
-                          range);
-    }
-    const auto source_drops_after_target =
-        source_local.is_hidden != target_local->is_hidden
-            ? source_local.is_hidden && !target_local->is_hidden
-            : source_local.unique_id < target_local->unique_id;
-    if (source_local.scope_depth > target_local->scope_depth ||
-        (source_local.scope_depth == target_local->scope_depth &&
-         !source_drops_after_target)) {
-        return make_error(std::string(kind) + " source does not live long "
-                                              "enough",
-                          range);
+    for (const auto& source : sources) {
+        if (source.is_external) {
+            continue;
+        }
+        const auto source_index = findLocalById(state, source.root_id);
+        if (!source_index.has_value()) {
+            return make_error("invalid " + std::string(kind) + " source",
+                              range);
+        }
+
+        const auto& source_local = state.locals[*source_index];
+        if (!source_local.in_scope ||
+            source_local.status != LocalState::Status::Live) {
+            return make_error(std::string(kind) + " source is no longer live",
+                              range);
+        }
+        const auto source_drops_after_target =
+            source_local.is_hidden != target_local->is_hidden
+                ? source_local.is_hidden && !target_local->is_hidden
+                : source_local.unique_id < target_local->unique_id;
+        if (source_local.scope_depth > target_local->scope_depth ||
+            (source_local.scope_depth == target_local->scope_depth &&
+             !source_drops_after_target)) {
+            return make_error(std::string(kind) + " source does not live long "
+                                                  "enough",
+                              range);
+        }
     }
     return {};
 }
@@ -698,9 +732,9 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
 
     if (!source_local_id->has_value()) {
         if (expr.resolved_place.has_value()) {
-            auto borrow =
-                ensureCanBorrow(state, *expr.resolved_place, want_mut,
-                                expr.range, expr.resolved_place->owner_local_id);
+            auto borrow = ensureCanBorrow(state, *expr.resolved_place, want_mut,
+                                          expr.range,
+                                          expr.resolved_place->owner_local_id);
             if (!borrow) {
                 return std::unexpected(borrow.error());
             }

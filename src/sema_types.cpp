@@ -238,9 +238,8 @@ auto SemanticAnalyzer::ensureDropImplForType(const Type* type)
         return {};
     }
 
-    const auto impl_it =
-        package_impls.find(make_impl_key("drop",
-                                         impl_target_group_key(types, type)));
+    const auto impl_it = package_impls.find(
+        make_impl_key("drop", impl_target_group_key(types, type)));
     if (impl_it == package_impls.end()) {
         return {};
     }
@@ -428,9 +427,23 @@ auto SemanticAnalyzer::resolveType(ast::TypeSyntax& type)
             return unexpected_result<const Type*>(
                 "slice elements cannot have type void", type.range);
         }
+        if (is_borrow_like_type(*element)) {
+            if ((*element)->is_mut) {
+                return unexpected_result<const Type*>(
+                    "slice elements cannot have mutable borrow type",
+                    type.range);
+            }
+            return apply_const(types.getSlice(*element));
+        }
         if (types.unqualify(*element)->kind == TypeKind::Slice) {
             return unexpected_result<const Type*>(
                 "slice elements cannot themselves be slice types", type.range);
+        }
+        if (typeContainsViews(*element)) {
+            return unexpected_result<const Type*>(
+                "slice elements cannot contain borrow, interface, or slice "
+                "subobjects",
+                type.range);
         }
         return apply_const(types.getSlice(*element));
     }
@@ -463,6 +476,12 @@ auto SemanticAnalyzer::resolveType(ast::TypeSyntax& type)
         if (types.unqualify(*element)->kind == TypeKind::Slice) {
             return unexpected_result<const Type*>(
                 "array elements cannot have slice type", type.range);
+        }
+        if (typeContainsViews(*element)) {
+            return unexpected_result<const Type*>(
+                "array elements cannot contain borrow, interface, or slice "
+                "subobjects",
+                type.range);
         }
         return apply_const(types.getArray(*element, type.array_size));
     }
@@ -576,15 +595,13 @@ auto SemanticAnalyzer::findImplForType(const ast::InterfaceDecl& interface_decl,
             interface_decl.range);
     }
 
-    const auto impl_it =
-        package_impls.find(make_impl_key(interface_decl.name,
-                                         impl_target_group_key(types,
-                                                               concrete_type)));
+    const auto impl_it = package_impls.find(make_impl_key(
+        interface_decl.name, impl_target_group_key(types, concrete_type)));
     const auto concrete_name = types.describe(concrete_type);
     if (impl_it == package_impls.end()) {
         return unexpected_result<ast::FunctionDecl*>(
-            "type '" + concrete_name +
-                "' does not implement interface '" + interface_decl.name + "'",
+            "type '" + concrete_name + "' does not implement interface '" +
+                interface_decl.name + "'",
             interface_decl.range);
     }
 
@@ -618,8 +635,8 @@ auto SemanticAnalyzer::findImplForType(const ast::InterfaceDecl& interface_decl,
 
     if (matched_impl == nullptr) {
         return unexpected_result<ast::FunctionDecl*>(
-            "type '" + concrete_name +
-                "' does not implement interface '" + interface_decl.name + "'",
+            "type '" + concrete_name + "' does not implement interface '" +
+                interface_decl.name + "'",
             interface_decl.range);
     }
     return matched_impl;
