@@ -343,7 +343,7 @@ auto SemanticAnalyzer::analyzeAssign(FunctionState& state,
         if (root_was_live_before_assign && types.needsDrop(target_type) &&
             typeContainsViews(target_type)) {
             auto live = ensureViewSubtreeLive(state, *place, target_type,
-                                             stmt.target->range);
+                                              stmt.target->range);
             if (!live) {
                 return std::unexpected(live.error());
             }
@@ -918,13 +918,24 @@ auto SemanticAnalyzer::analyzeFor(FunctionState& state, ast::ForStmt& stmt)
 
 auto SemanticAnalyzer::analyzeBreak(FunctionState& state, ast::BreakStmt& stmt)
     -> std::expected<void, Diagnostic> {
-    const auto result = requireLoopBreakState(state, state.function != nullptr
-                                                         ? state.function->range
-                                                         : SourceRange{});
+    const auto break_range =
+        state.function != nullptr ? state.function->range : SourceRange{};
+    if (state.loops.empty()) {
+        return make_error("break must appear inside a loop", break_range);
+    }
+
+    const auto loop_depth = state.loops.back().body_scope_depth;
+    auto break_state = state;
+    while (break_state.scopes.size() > loop_depth) {
+        leaveScope(break_state);
+    }
+    clearStatementTemporaries(break_state);
+
+    const auto result = requireLoopBreakState(break_state, break_range);
     if (!result) {
         return std::unexpected(result.error());
     }
-    const auto loop_depth = state.loops.back().body_scope_depth;
+
     stmt.drop_local_ids =
         collectDropLocalIds(state, [&](const LocalState& local) {
             return local.in_scope && local.scope_depth >= loop_depth;
