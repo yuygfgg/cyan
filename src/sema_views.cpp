@@ -268,7 +268,7 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                 .source_place = binding.source_place,
                 .source_local_id = binding.source_local_id,
                 .element_sources = binding.element_sources,
-                .type = nullptr,
+                .type = binding.type,
             });
         }
         return bindings;
@@ -305,6 +305,15 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
             }
             binding.source_place = *place;
             binding.source_local_id = *local_id;
+            if (expr.resolved_place.has_value()) {
+                const auto slot_index = findViewSlotLocal(
+                    state, expr.resolved_place->is_external,
+                    expr.resolved_place->root_id, expr.resolved_place->fields);
+                if (slot_index.has_value()) {
+                    binding.element_sources =
+                        state.locals[*slot_index].element_origins;
+                }
+            }
         } else {
             auto place = sliceSourcePlace(state, expr);
             if (!place) {

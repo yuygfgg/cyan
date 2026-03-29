@@ -123,6 +123,7 @@ struct CachedViewBinding {
     std::optional<ResolvedPlace> source_place;
     std::optional<std::size_t> source_local_id;
     std::vector<ResolvedPlace> element_sources;
+    const Type* type = nullptr;
 };
 
 struct IntegerLiteralExpr {

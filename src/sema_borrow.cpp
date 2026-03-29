@@ -478,15 +478,34 @@ auto SemanticAnalyzer::createNamedBorrow(FunctionState& state,
         }
     }
 
+    std::vector<ast::ResolvedPlace> element_origins;
+    auto source_bindings = collectExprViewBindings(state, initializer);
+    if (!source_bindings) {
+        return std::unexpected(source_bindings.error());
+    }
+    if (const auto binding_it = std::ranges::find_if(
+            *source_bindings, [](const ViewLeafBinding& binding) {
+                return binding.path.empty();
+            });
+        binding_it != source_bindings->end()) {
+        element_origins = binding_it->element_sources;
+    }
+
     auto& local = state.locals[*local_index];
-    auto outlives =
-        ensureViewSourceOutlivesLocal(state, local, *origin, initializer.range);
+    auto prospective_local = local;
+    prospective_local.borrow_origin = *origin;
+    prospective_local.element_origins = element_origins;
+    auto outlives = ensureViewSourceOutlivesLocal(
+        state, prospective_local,
+        element_origins.empty() ? std::optional<ast::ResolvedPlace>(*origin)
+                                : std::nullopt,
+        initializer.range);
     if (!outlives) {
         return std::unexpected(outlives.error());
     }
     releaseReborrowParent(state, local);
     local.borrow_origin = *origin;
-    local.element_origins.clear();
+    local.element_origins = std::move(element_origins);
     local.status = LocalState::Status::Live;
     auto attached = attachReborrowParent(state, local, initializer);
     if (!attached) {
@@ -525,8 +544,28 @@ auto SemanticAnalyzer::assignNamedBorrow(FunctionState& state,
             return std::unexpected(compatible.error());
         }
     }
-    auto outlives =
-        ensureViewSourceOutlivesLocal(state, local, *origin, value.range);
+
+    std::vector<ast::ResolvedPlace> element_origins;
+    auto source_bindings = collectExprViewBindings(state, value);
+    if (!source_bindings) {
+        return std::unexpected(source_bindings.error());
+    }
+    if (const auto binding_it = std::ranges::find_if(
+            *source_bindings, [](const ViewLeafBinding& binding) {
+                return binding.path.empty();
+            });
+        binding_it != source_bindings->end()) {
+        element_origins = binding_it->element_sources;
+    }
+
+    auto prospective_local = local;
+    prospective_local.borrow_origin = *origin;
+    prospective_local.element_origins = element_origins;
+    auto outlives = ensureViewSourceOutlivesLocal(
+        state, prospective_local,
+        element_origins.empty() ? std::optional<ast::ResolvedPlace>(*origin)
+                                : std::nullopt,
+        value.range);
     if (!outlives) {
         return std::unexpected(outlives.error());
     }
@@ -535,6 +574,7 @@ auto SemanticAnalyzer::assignNamedBorrow(FunctionState& state,
     local.borrow_origin.reset();
     local.element_origins.clear();
     local.borrow_origin = *origin;
+    local.element_origins = std::move(element_origins);
     local.status = LocalState::Status::Live;
     auto attached = attachReborrowParent(state, local, value);
     if (!attached) {
@@ -725,12 +765,57 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
         return *expr.resolved_place;
     }
 
+    auto top_level_binding =
+        [&](ast::Expr& source_expr)
+        -> std::expected<std::optional<ViewLeafBinding>, Diagnostic> {
+        auto bindings = collectExprViewBindings(state, source_expr);
+        if (!bindings) {
+            return std::unexpected(bindings.error());
+        }
+        const auto it = std::ranges::find_if(
+            *bindings,
+            [](const ViewLeafBinding& binding) { return binding.path.empty(); });
+        if (it == bindings->end()) {
+            return std::optional<ViewLeafBinding>{};
+        }
+        return std::optional<ViewLeafBinding>(*it);
+    };
+
     auto source_local_id = borrowSourceLocalId(state, expr);
     if (!source_local_id) {
         return std::unexpected(source_local_id.error());
     }
 
     if (!source_local_id->has_value()) {
+        if (!want_mut) {
+            auto binding = top_level_binding(expr);
+            if (!binding) {
+                return std::unexpected(binding.error());
+            }
+            if (binding->has_value() && !(*binding)->element_sources.empty()) {
+                for (const auto& source_place : (*binding)->element_sources) {
+                    auto borrow =
+                        ensureCanBorrow(state, source_place, false, expr.range);
+                    if (!borrow) {
+                        return std::unexpected(borrow.error());
+                    }
+                }
+                if (temporary_only) {
+                    for (auto loan_place : (*binding)->element_sources) {
+                        if ((*binding)->source_local_id.has_value()) {
+                            loan_place.owner_local_id =
+                                *(*binding)->source_local_id;
+                        }
+                        state.temporary_loans.push_back(
+                            TemporaryLoan{std::move(loan_place), false});
+                    }
+                }
+                if ((*binding)->source_place.has_value()) {
+                    return *(*binding)->source_place;
+                }
+                return (*binding)->element_sources.front();
+            }
+        }
         if (expr.resolved_place.has_value()) {
             auto borrow = ensureCanBorrow(state, *expr.resolved_place, want_mut,
                                           expr.range,
@@ -787,6 +872,24 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
             local.status = LocalState::Status::Moved;
             state.temporary_loans.push_back(TemporaryLoan{loan_place, true});
             state.temporary_suspended_local_ids.push_back(local.unique_id);
+        }
+        return *local.borrow_origin;
+    }
+
+    if (!local.element_origins.empty()) {
+        for (const auto& source_place : local.element_origins) {
+            auto borrow = ensureCanBorrow(state, source_place, false,
+                                          expr.range, local.unique_id);
+            if (!borrow) {
+                return std::unexpected(borrow.error());
+            }
+        }
+        if (temporary_only) {
+            for (auto loan_place : local.element_origins) {
+                loan_place.owner_local_id = local.unique_id;
+                state.temporary_loans.push_back(
+                    TemporaryLoan{std::move(loan_place), false});
+            }
         }
         return *local.borrow_origin;
     }

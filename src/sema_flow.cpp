@@ -218,8 +218,7 @@ auto SemanticAnalyzer::activeNamedLoans(const FunctionState& state) const
             local_type->kind != TypeKind::Slice) {
             continue;
         }
-        if (is_direct_shared_view_slice(types, local.type) &&
-            !local.element_origins.empty()) {
+        if (!local.element_origins.empty()) {
             for (const auto& source_place : local.element_origins) {
                 auto place = source_place;
                 place.owner_local_id = local.unique_id;
