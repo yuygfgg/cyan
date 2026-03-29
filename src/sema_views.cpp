@@ -4,6 +4,19 @@ namespace sc {
 
 using namespace detail;
 
+namespace {
+
+auto append_projected_path(std::vector<ast::ResolvedPlace> sources,
+                           const std::vector<std::uint32_t>& suffix)
+    -> std::vector<ast::ResolvedPlace> {
+    for (auto& source : sources) {
+        source.fields.insert(source.fields.end(), suffix.begin(), suffix.end());
+    }
+    return sources;
+}
+
+} // namespace
+
 auto SemanticAnalyzer::typeContainsViews(const Type* type) const -> bool {
     if (type == nullptr) {
         return false;
@@ -256,6 +269,107 @@ auto SemanticAnalyzer::collectSlotBindings(FunctionState& state,
     return bindings;
 }
 
+auto SemanticAnalyzer::projectedPlaceSources(FunctionState& state,
+                                             ast::Expr& expr)
+    -> std::expected<std::vector<ast::ResolvedPlace>, Diagnostic> {
+    const Type* expr_type = expr.resolved_type;
+    if (expr_type == nullptr) {
+        auto analyzed = analyzeExpr(state, expr);
+        if (!analyzed) {
+            return std::unexpected(analyzed.error());
+        }
+        expr_type = *analyzed;
+    }
+
+    if (is_borrow_like_type(expr_type) &&
+        expr.cached_view_bindings.has_value()) {
+        const auto it = std::ranges::find_if(
+            *expr.cached_view_bindings,
+            [](const ast::CachedViewBinding& binding) {
+                return binding.path.empty() && !binding.element_sources.empty();
+            });
+        if (it != expr.cached_view_bindings->end()) {
+            return it->element_sources;
+        }
+    }
+
+    if (const auto* name = std::get_if<ast::NameExpr>(&expr.node);
+        name != nullptr) {
+        auto local_id = name->local_id;
+        if (local_id == 0) {
+            const auto local_index = lookupLocal(state, name->name);
+            if (local_index.has_value()) {
+                local_id = state.locals[*local_index].unique_id;
+            }
+        }
+        if (local_id != 0) {
+            const auto local_index = findLocalById(state, local_id);
+            if (local_index.has_value()) {
+                const auto& local = state.locals[*local_index];
+                if (is_borrow_like_type(local.type) &&
+                    !local.element_origins.empty()) {
+                    return local.element_origins;
+                }
+            }
+        }
+        return std::vector<ast::ResolvedPlace>{};
+    }
+
+    if (expr.resolved_place.has_value() && is_borrow_like_type(expr_type)) {
+        if (const auto slot_index = findViewSlotLocal(
+                state, expr.resolved_place->is_external,
+                expr.resolved_place->root_id, expr.resolved_place->fields);
+            slot_index.has_value()) {
+            const auto& slot = state.locals[*slot_index];
+            if (!slot.element_origins.empty()) {
+                return slot.element_origins;
+            }
+        }
+    }
+
+    if (auto* unary = std::get_if<ast::UnaryExpr>(&expr.node);
+        unary != nullptr) {
+        switch (unary->op) {
+        case ast::UnaryOp::Move:
+        case ast::UnaryOp::Borrow:
+        case ast::UnaryOp::BorrowMut:
+        case ast::UnaryOp::Dereference:
+            return projectedPlaceSources(state, *unary->operand);
+        default:
+            break;
+        }
+        return std::vector<ast::ResolvedPlace>{};
+    }
+
+    if (auto* member = std::get_if<ast::MemberExpr>(&expr.node);
+        member != nullptr) {
+        auto base_sources = projectedPlaceSources(state, *member->base);
+        if (!base_sources) {
+            return std::unexpected(base_sources.error());
+        }
+        if (base_sources->empty()) {
+            return std::vector<ast::ResolvedPlace>{};
+        }
+        std::vector<std::uint32_t> suffix = {member->field_index};
+        return append_projected_path(std::move(*base_sources), suffix);
+    }
+
+    if (auto* index = std::get_if<ast::IndexExpr>(&expr.node);
+        index != nullptr) {
+        auto base_sources = projectedPlaceSources(state, *index->base);
+        if (!base_sources) {
+            return std::unexpected(base_sources.error());
+        }
+        if (base_sources->empty()) {
+            return std::vector<ast::ResolvedPlace>{};
+        }
+        std::vector<std::uint32_t> suffix = {INDEX_FIELD_SENTINEL};
+        return append_projected_path(std::move(*base_sources), suffix);
+    }
+
+    return std::vector<ast::ResolvedPlace>{};
+}
+
 auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                                                ast::Expr& expr)
     -> std::expected<std::vector<ViewLeafBinding>, Diagnostic> {
@@ -313,6 +427,13 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                     binding.element_sources =
                         state.locals[*slot_index].element_origins;
                 }
+            }
+            if (binding.element_sources.empty()) {
+                auto projected_sources = projectedPlaceSources(state, expr);
+                if (!projected_sources) {
+                    return std::unexpected(projected_sources.error());
+                }
+                binding.element_sources = std::move(*projected_sources);
             }
         } else {
             auto place = sliceSourcePlace(state, expr);

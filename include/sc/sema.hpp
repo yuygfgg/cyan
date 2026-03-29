@@ -363,6 +363,8 @@ class SemanticAnalyzer {
         -> std::expected<ast::ResolvedPlace, Diagnostic>;
     auto sliceSourcePlace(FunctionState& state, ast::Expr& expr)
         -> std::expected<std::optional<ast::ResolvedPlace>, Diagnostic>;
+    auto projectedPlaceSources(FunctionState& state, ast::Expr& expr)
+        -> std::expected<std::vector<ast::ResolvedPlace>, Diagnostic>;
     auto borrowSourceLocalId(FunctionState& state, ast::Expr& expr)
         -> std::expected<std::optional<std::size_t>, Diagnostic>;
     auto analyzeEnum(ast::EnumDecl& decl) -> std::expected<void, Diagnostic>;

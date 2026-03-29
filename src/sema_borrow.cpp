@@ -483,10 +483,11 @@ auto SemanticAnalyzer::createNamedBorrow(FunctionState& state,
     if (!source_bindings) {
         return std::unexpected(source_bindings.error());
     }
-    if (const auto binding_it = std::ranges::find_if(
-            *source_bindings, [](const ViewLeafBinding& binding) {
-                return binding.path.empty();
-            });
+    if (const auto binding_it =
+            std::ranges::find_if(*source_bindings,
+                                 [](const ViewLeafBinding& binding) {
+                                     return binding.path.empty();
+                                 });
         binding_it != source_bindings->end()) {
         element_origins = binding_it->element_sources;
     }
@@ -550,10 +551,11 @@ auto SemanticAnalyzer::assignNamedBorrow(FunctionState& state,
     if (!source_bindings) {
         return std::unexpected(source_bindings.error());
     }
-    if (const auto binding_it = std::ranges::find_if(
-            *source_bindings, [](const ViewLeafBinding& binding) {
-                return binding.path.empty();
-            });
+    if (const auto binding_it =
+            std::ranges::find_if(*source_bindings,
+                                 [](const ViewLeafBinding& binding) {
+                                     return binding.path.empty();
+                                 });
         binding_it != source_bindings->end()) {
         element_origins = binding_it->element_sources;
     }
@@ -705,13 +707,34 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
 
         auto borrow = ensureCanBorrow(state, *place, want_mut, expr.range,
                                       place->owner_local_id);
-        if (!borrow) {
+        auto projected_sources = projectedPlaceSources(state, *unary->operand);
+        if (!projected_sources) {
+            return std::unexpected(projected_sources.error());
+        }
+        if (!projected_sources->empty()) {
+            for (const auto& source_place : *projected_sources) {
+                auto projected_borrow =
+                    ensureCanBorrow(state, source_place, want_mut, expr.range);
+                if (!projected_borrow) {
+                    return std::unexpected(projected_borrow.error());
+                }
+            }
+        } else if (!borrow) {
             return std::unexpected(borrow.error());
         }
 
         if (temporary_only) {
-            state.temporary_loans.push_back(TemporaryLoan{*place, want_mut});
-            if (want_mut && place->owner_local_id.has_value()) {
+            if (!projected_sources->empty()) {
+                for (auto source_place : *projected_sources) {
+                    state.temporary_loans.push_back(
+                        TemporaryLoan{std::move(source_place), want_mut});
+                }
+            } else {
+                state.temporary_loans.push_back(
+                    TemporaryLoan{*place, want_mut});
+            }
+            if (projected_sources->empty() && want_mut &&
+                place->owner_local_id.has_value()) {
                 const auto parent_index =
                     findLocalById(state, *place->owner_local_id);
                 if (parent_index.has_value()) {
@@ -742,16 +765,37 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
             return unexpected_result<ast::ResolvedPlace>(
                 "cannot mutably borrow a const place", expr.range);
         }
+        auto projected_sources = projectedPlaceSources(state, expr);
+        if (!projected_sources) {
+            return std::unexpected(projected_sources.error());
+        }
+        if (!projected_sources->empty()) {
+            for (const auto& source_place : *projected_sources) {
+                auto projected_borrow =
+                    ensureCanBorrow(state, source_place, want_mut, expr.range);
+                if (!projected_borrow) {
+                    return std::unexpected(projected_borrow.error());
+                }
+            }
+        }
         auto borrow =
             ensureCanBorrow(state, *expr.resolved_place, want_mut, expr.range,
                             expr.resolved_place->owner_local_id);
-        if (!borrow) {
+        if (projected_sources->empty() && !borrow) {
             return std::unexpected(borrow.error());
         }
         if (temporary_only) {
-            state.temporary_loans.push_back(
-                TemporaryLoan{*expr.resolved_place, want_mut});
-            if (want_mut && expr.resolved_place->owner_local_id.has_value()) {
+            if (!projected_sources->empty()) {
+                for (auto source_place : *projected_sources) {
+                    state.temporary_loans.push_back(
+                        TemporaryLoan{std::move(source_place), want_mut});
+                }
+            } else {
+                state.temporary_loans.push_back(
+                    TemporaryLoan{*expr.resolved_place, want_mut});
+            }
+            if (projected_sources->empty() && want_mut &&
+                expr.resolved_place->owner_local_id.has_value()) {
                 const auto parent_index =
                     findLocalById(state, *expr.resolved_place->owner_local_id);
                 if (parent_index.has_value()) {
@@ -765,16 +809,16 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
         return *expr.resolved_place;
     }
 
-    auto top_level_binding =
-        [&](ast::Expr& source_expr)
+    auto top_level_binding = [&](ast::Expr& source_expr)
         -> std::expected<std::optional<ViewLeafBinding>, Diagnostic> {
         auto bindings = collectExprViewBindings(state, source_expr);
         if (!bindings) {
             return std::unexpected(bindings.error());
         }
-        const auto it = std::ranges::find_if(
-            *bindings,
-            [](const ViewLeafBinding& binding) { return binding.path.empty(); });
+        const auto it =
+            std::ranges::find_if(*bindings, [](const ViewLeafBinding& binding) {
+                return binding.path.empty();
+            });
         if (it == bindings->end()) {
             return std::optional<ViewLeafBinding>{};
         }
