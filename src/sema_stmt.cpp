@@ -340,6 +340,14 @@ auto SemanticAnalyzer::analyzeAssign(FunctionState& state,
         auto& root = state.locals[*local_index];
         root_was_live_before_assign =
             place->fields.empty() && root.status == LocalState::Status::Live;
+        if (root_was_live_before_assign && types.needsDrop(target_type) &&
+            typeContainsViews(target_type)) {
+            auto live = ensureViewSubtreeLive(state, *place, target_type,
+                                             stmt.target->range);
+            if (!live) {
+                return std::unexpected(live.error());
+            }
+        }
         if (root.status != LocalState::Status::Live) {
             if (place->fields.empty()) {
                 root.status = LocalState::Status::Live;

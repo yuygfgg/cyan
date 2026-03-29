@@ -75,6 +75,14 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                     local_index.has_value()) {
                     auto& local = state.locals[*local_index];
                     if (local.status != LocalState::Status::Live) {
+                        if (local.status == LocalState::Status::Moved &&
+                            expr.resolved_type != nullptr &&
+                            expr.resolved_place.has_value() &&
+                            expr.resolved_place->root_id == local.unique_id &&
+                            !expr.resolved_place->is_external &&
+                            name.local_id == local.unique_id) {
+                            return expr.resolved_type;
+                        }
                         if (local.status == LocalState::Status::Uninitialized &&
                             state.relaxed_place_resolution_depth > 0) {
                             name.local_id = local.unique_id;
