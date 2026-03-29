@@ -1,0 +1,75 @@
+struct SliceValue {
+    []const char text;
+};
+
+SliceValue slice_value([]const char text) depends(return.text on text) {
+    return {text};
+}
+
+struct IntValue {
+    int value;
+};
+
+struct HttpHeader {
+    []const char name;
+    []const char value;
+};
+
+struct RequestTarget {
+    []const char raw;
+    []const char path;
+    []const char query;
+};
+
+struct RequestLine {
+    []const char method;
+    RequestTarget target;
+    []const char version;
+};
+
+struct HeaderBag {
+    HttpHeader host;
+    HttpHeader user_agent;
+    HttpHeader content_type;
+    HttpHeader content_length;
+    int parsed_count;
+};
+
+struct HttpRequest {
+    RequestLine line;
+    HeaderBag headers;
+    []const char body;
+    int content_length_value;
+};
+
+void touch(&HttpRequest request) {
+    SliceValue method = slice_value(request.line.method);
+    SliceValue raw_target = slice_value(request.line.target.raw);
+    SliceValue path = slice_value(request.line.target.path);
+    SliceValue query = slice_value(request.line.target.query);
+    SliceValue version = slice_value(request.line.version);
+    SliceValue host = slice_value(request.headers.host.value);
+    SliceValue user_agent = slice_value(request.headers.user_agent.value);
+    SliceValue content_type = slice_value(request.headers.content_type.value);
+    SliceValue content_length = slice_value(request.headers.content_length.value);
+    SliceValue body = slice_value(request.body);
+    IntValue parsed_count = {request.headers.parsed_count};
+    IntValue content_length_value = {request.content_length_value};
+
+    if (parsed_count.value == content_length_value.value) {
+        if (len(method.text) == len(body.text)) {
+        }
+        if (len(raw_target.text) == len(path.text)) {
+        }
+        if (len(query.text) == len(version.text)) {
+        }
+        if (len(host.text) == len(user_agent.text)) {
+        }
+        if (len(content_type.text) == len(content_length.text)) {
+        }
+    }
+}
+
+int main() {
+    return 0;
+}

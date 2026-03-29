@@ -1,0 +1,1 @@
+drop implementations must be declared as 'impl drop(...)' at top level

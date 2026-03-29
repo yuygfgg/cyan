@@ -1,0 +1,28 @@
+struct Trace {
+    int value;
+};
+
+enum Item {
+    Empty,
+    TraceValue(Trace),
+};
+
+void bump(&mut Item item) {
+    switch (&mut *item) {
+        case Empty:
+            return;
+        case TraceValue(trace):
+            trace.value = trace.value + 5;
+    }
+}
+
+int main() {
+    Item item = TraceValue({1});
+    bump(&mut item);
+    switch (&item) {
+        case Empty:
+            return 1;
+        case TraceValue(trace):
+            return trace.value - 6;
+    }
+}

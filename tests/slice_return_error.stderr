@@ -1,0 +1,1 @@
+view-returning function must depend on a borrow or slice parameter

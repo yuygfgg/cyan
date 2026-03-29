@@ -1,0 +1,1 @@
+view-returning functions with multiple borrow or slice parameters require depends(return on <param>)

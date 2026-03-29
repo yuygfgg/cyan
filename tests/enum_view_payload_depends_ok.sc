@@ -1,0 +1,45 @@
+struct Token {
+    int value;
+};
+
+enum Selection {
+    Head(&Token),
+    Tail([]Token),
+};
+
+int read(&Token token) {
+    return token.value;
+}
+
+Selection choose([]Token values, bool want_head)
+    depends(return.Head on values, return.Tail on values) {
+    if (want_head) {
+        return Head(&values[0]);
+    }
+    return Tail(values);
+}
+
+int main() {
+    Token[2] items = [{4}, {9}];
+    Selection head = choose(&items, true);
+    switch (move head) {
+        case Head(token):
+            if (read(token) != 4) {
+                return 1;
+            }
+        case Tail(_):
+            return 2;
+    }
+
+    Selection tail = choose(&items, false);
+    switch (move tail) {
+        case Head(_):
+            return 3;
+        case Tail(view):
+            if (read(view[1]) != 9) {
+                return 4;
+            }
+    }
+
+    return 0;
+}

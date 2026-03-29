@@ -1,0 +1,316 @@
+extern {
+    int mock_http_read(char* out, int capacity);
+}
+
+struct HttpHeader {
+    []const char name;
+    []const char value;
+};
+
+struct RequestTarget {
+    []const char raw;
+    []const char path;
+    []const char query;
+};
+
+struct RequestLine {
+    []const char method;
+    RequestTarget target;
+    []const char version;
+};
+
+struct HeaderBag {
+    HttpHeader host;
+    HttpHeader user_agent;
+    HttpHeader content_type;
+    HttpHeader content_length;
+    int parsed_count;
+};
+
+struct HttpRequest {
+    RequestLine line;
+    HeaderBag headers;
+    []const char body;
+    int content_length_value;
+};
+
+[]const char empty_span([]const char bytes) depends(return on bytes) {
+    return subslice(bytes, 0, 0);
+}
+
+HttpHeader empty_header([]const char bytes)
+    depends(return.name on bytes, return.value on bytes) {
+    []const char empty = empty_span(bytes);
+    return {empty, empty};
+}
+
+RequestTarget empty_target([]const char bytes)
+    depends(return.raw on bytes, return.path on bytes, return.query on bytes) {
+    []const char empty = empty_span(bytes);
+    return {empty, empty, empty};
+}
+
+RequestLine empty_line([]const char bytes)
+    depends(return.method on bytes,
+            return.target.raw on bytes,
+            return.target.path on bytes,
+            return.target.query on bytes,
+            return.version on bytes) {
+    []const char empty = empty_span(bytes);
+    RequestTarget target = empty_target(bytes);
+    return {empty, target, empty};
+}
+
+HttpRequest blank_request([]const char bytes)
+    depends(return.line.method on bytes,
+            return.line.target.raw on bytes,
+            return.line.target.path on bytes,
+            return.line.target.query on bytes,
+            return.line.version on bytes,
+            return.headers.host.name on bytes,
+            return.headers.host.value on bytes,
+            return.headers.user_agent.name on bytes,
+            return.headers.user_agent.value on bytes,
+            return.headers.content_type.name on bytes,
+            return.headers.content_type.value on bytes,
+            return.headers.content_length.name on bytes,
+            return.headers.content_length.value on bytes,
+            return.body on bytes) {
+    HttpHeader empty = empty_header(bytes);
+    RequestLine line = empty_line(bytes);
+    HeaderBag headers = {empty, empty, empty, empty, 0};
+    return {line, headers, empty_span(bytes), 0};
+}
+
+bool span_eq([]const char left, []const char right) {
+    if (len(left) != len(right)) {
+        return false;
+    }
+
+    int i = 0;
+    while (i < len(left)) {
+        if (left[i] != right[i]) {
+            return false;
+        }
+        i++;
+    }
+    return true;
+}
+
+int find_byte_in_range([]const char bytes, int start, int end, char needle) {
+    int i = start;
+    while (i < end) {
+        if (bytes[i] == needle) {
+            return i;
+        }
+        i++;
+    }
+    return -1;
+}
+
+int find_crlf([]const char bytes, int start) {
+    int i = start;
+    while (i + 1 < len(bytes)) {
+        if (bytes[i] == '\r' && bytes[i + 1] == '\n') {
+            return i;
+        }
+        i++;
+    }
+    return -1;
+}
+
+RequestTarget parse_target([]const char bytes, int start, int end)
+    depends(return.raw on bytes, return.path on bytes, return.query on bytes) {
+    []const char raw = subslice(bytes, start, end - start);
+    int query_mark = find_byte_in_range(bytes, start, end, '?');
+    if (query_mark < 0) {
+        return {raw, raw, empty_span(bytes)};
+    }
+    []const char path = subslice(bytes, start, query_mark - start);
+    []const char query =
+        subslice(bytes, query_mark + 1, end - (query_mark + 1));
+    return {raw, path, query};
+}
+
+RequestLine build_request_line([]const char bytes,
+                               int method_end,
+                               int target_end,
+                               int line_end)
+    depends(return.method on bytes,
+            return.target.raw on bytes,
+            return.target.path on bytes,
+            return.target.query on bytes,
+            return.version on bytes) {
+    []const char method = subslice(bytes, 0, method_end);
+    RequestTarget target = parse_target(bytes, method_end + 1, target_end);
+    []const char version =
+        subslice(bytes, target_end + 1, line_end - (target_end + 1));
+    return {method, target, version};
+}
+
+HttpHeader parse_header_line([]const char bytes, int line_start, int line_end)
+    depends(return.name on bytes, return.value on bytes) {
+    int colon = find_byte_in_range(bytes, line_start, line_end, ':');
+    []const char name = subslice(bytes, line_start, colon - line_start);
+    int value_start = colon + 1;
+    if (value_start < line_end && bytes[value_start] == ' ') {
+        value_start++;
+    }
+    []const char value = subslice(bytes, value_start, line_end - value_start);
+    return {name, value};
+}
+
+int parse_decimal([]const char digits) {
+    int i = 0;
+    int value = 0;
+    while (i < len(digits)) {
+        value = value * 10 + ((digits[i] as int) - ('0' as int));
+        i++;
+    }
+    return value;
+}
+
+bool is_host_header([]const char name) {
+    return span_eq(name, subslice("Host", 0, 4));
+}
+
+bool is_user_agent_header([]const char name) {
+    return span_eq(name, subslice("User-Agent", 0, 10));
+}
+
+bool is_content_type_header([]const char name) {
+    return span_eq(name, subslice("Content-Type", 0, 12));
+}
+
+bool is_content_length_header([]const char name) {
+    return span_eq(name, subslice("Content-Length", 0, 14));
+}
+
+bool parse_http_request([]const char bytes, &mut HttpRequest out) {
+    if (len(bytes) == 0) {
+        return false;
+    }
+
+    int line_end = find_crlf(bytes, 0);
+    if (line_end < 0) {
+        return false;
+    }
+
+    int method_end = find_byte_in_range(bytes, 0, line_end, ' ');
+    if (method_end < 0) {
+        return false;
+    }
+
+    int target_end = find_byte_in_range(bytes, method_end + 1, line_end, ' ');
+    if (target_end < 0) {
+        return false;
+    }
+
+    RequestLine line = build_request_line(bytes, method_end, target_end,
+                                          line_end);
+
+    HttpHeader host = empty_header(bytes);
+    HttpHeader user_agent = empty_header(bytes);
+    HttpHeader content_type = empty_header(bytes);
+    HttpHeader content_length = empty_header(bytes);
+    int parsed_count = 0;
+    int content_length_value = 0;
+
+    int cursor = line_end + 2;
+    while (cursor < len(bytes)) {
+        int header_end = find_crlf(bytes, cursor);
+        if (header_end < 0) {
+            return false;
+        }
+        if (header_end == cursor) {
+            cursor = cursor + 2;
+            []const char body = subslice(bytes, cursor, len(bytes) - cursor);
+            HeaderBag headers = {host, user_agent, content_type,
+                                 content_length, parsed_count};
+            *out = {line, headers, body, content_length_value};
+            return true;
+        }
+
+        HttpHeader header = parse_header_line(bytes, cursor, header_end);
+        parsed_count++;
+        if (is_host_header(header.name)) {
+            host = header;
+        } else {
+            if (is_user_agent_header(header.name)) {
+                user_agent = header;
+            } else {
+                if (is_content_type_header(header.name)) {
+                    content_type = header;
+                } else {
+                    if (is_content_length_header(header.name)) {
+                        content_length = header;
+                        content_length_value = parse_decimal(header.value);
+                    }
+                }
+            }
+        }
+        cursor = header_end + 2;
+    }
+
+    return false;
+}
+
+int main() {
+    char[256] buffer;
+    int byte_count;
+    unchecked {
+        byte_count = mock_http_read(&mut buffer[0], len(buffer));
+    }
+    if (byte_count <= 0) {
+        return 1;
+    }
+
+    []const char bytes = subslice(buffer, 0, byte_count);
+    HttpRequest parsed = blank_request(bytes);
+    if (!parse_http_request(bytes, &mut parsed)) {
+        return 2;
+    }
+
+    if (!span_eq(parsed.line.method, subslice("POST", 0, 4))) {
+        return 3;
+    }
+    if (!span_eq(parsed.line.target.raw,
+                 subslice("/submit?lang=safe&mode=zero", 0, 27))) {
+        return 4;
+    }
+    if (!span_eq(parsed.line.target.path, subslice("/submit", 0, 7))) {
+        return 5;
+    }
+    if (!span_eq(parsed.line.target.query,
+                 subslice("lang=safe&mode=zero", 0, 19))) {
+        return 6;
+    }
+    if (!span_eq(parsed.line.version, subslice("HTTP/1.1", 0, 8))) {
+        return 7;
+    }
+    if (!span_eq(parsed.headers.host.value,
+                 subslice("example.test", 0, 12))) {
+        return 8;
+    }
+    if (!span_eq(parsed.headers.user_agent.value,
+                 subslice("safe-c/0", 0, 8))) {
+        return 9;
+    }
+    if (!span_eq(parsed.headers.content_type.value,
+                 subslice("text/plain", 0, 10))) {
+        return 10;
+    }
+    if (!span_eq(parsed.headers.content_length.value, subslice("5", 0, 1))) {
+        return 11;
+    }
+    if (parsed.headers.parsed_count != 4) {
+        return 12;
+    }
+    if (parsed.content_length_value != 5) {
+        return 13;
+    }
+    if (!span_eq(parsed.body, subslice("hello", 0, 5))) {
+        return 14;
+    }
+    return 0;
+}

@@ -1,0 +1,54 @@
+CompileFlags:
+  Add:
+    - -std=c++23
+    - -Wall
+    - -Wextra
+    - -Wpedantic
+
+Index:
+  Background: Build
+
+Completion:
+  AllScopes: true
+
+---
+If:
+  PathMatch: gfs/.*
+CompileFlags:
+  CompilationDatabase: build/gfs
+
+---
+If:
+  PathMatch: std/.*
+CompileFlags:
+  CompilationDatabase: build/std
+
+---
+If:
+  PathMatch: expr/.*
+CompileFlags:
+  CompilationDatabase: build/expr
+
+---
+If:
+  PathMatch: resize/.*
+CompileFlags:
+  CompilationDatabase: build/resize
+
+---
+If:
+  PathMatch: resize-gpu/.*
+CompileFlags:
+  CompilationDatabase: build/resize-gpu
+
+---
+If:
+  PathMatch: placebo/.*
+CompileFlags:
+  CompilationDatabase: build/placebo
+
+---
+If:
+  PathMatch: bestsource/.*
+CompileFlags:
+  CompilationDatabase: build/bestsource

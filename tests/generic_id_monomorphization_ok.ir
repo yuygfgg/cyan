@@ -1,0 +1,2 @@
+define i64 @"id$LT$int$GT$"
+call i64 @"id$LT$int$GT$"
