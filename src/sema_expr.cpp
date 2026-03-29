@@ -505,8 +505,7 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                         return std::unexpected(source_bindings.error());
                     }
                     const auto binding_it = std::ranges::find_if(
-                        *source_bindings,
-                        [](const ViewLeafBinding& binding) {
+                        *source_bindings, [](const ViewLeafBinding& binding) {
                             return binding.path.empty();
                         });
                     if (binding_it != source_bindings->end() &&
@@ -848,7 +847,6 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                         return std::unexpected(borrow.error());
                     }
                     auto loan_place = *local.borrow_origin;
-                    loan_place.owner_local_id = local.unique_id;
                     state.temporary_loans.push_back(
                         TemporaryLoan{loan_place, false});
                 } else if (local.type->kind != TypeKind::Borrow ||
@@ -975,13 +973,14 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                 continue;
             }
             auto loan_place = *binding.source_place;
-            if (binding.source_local_id.has_value()) {
+            const auto binding_is_mut =
+                is_borrow_like_type(binding.type) && binding.type->is_mut;
+            if (binding_is_mut && binding.source_local_id.has_value()) {
                 loan_place.owner_local_id = *binding.source_local_id;
             }
             state.temporary_loans.push_back(TemporaryLoan{
                 .place = std::move(loan_place),
-                .is_mut =
-                    is_borrow_like_type(binding.type) && binding.type->is_mut,
+                .is_mut = binding_is_mut,
             });
         }
         return {};
@@ -1101,16 +1100,15 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                 });
             if (binding_it != source_bindings->end() &&
                 !binding_it->element_sources.empty()) {
-                expr.cached_view_bindings =
-                    std::vector<ast::CachedViewBinding>{
-                        ast::CachedViewBinding{
-                            .path = {},
-                            .source_place = expr.slice_source_place,
-                            .source_local_id = binding_it->source_local_id,
-                            .element_sources = binding_it->element_sources,
-                            .type = result_type,
-                        },
-                    };
+                expr.cached_view_bindings = std::vector<ast::CachedViewBinding>{
+                    ast::CachedViewBinding{
+                        .path = {},
+                        .source_place = expr.slice_source_place,
+                        .source_local_id = binding_it->source_local_id,
+                        .element_sources = binding_it->element_sources,
+                        .type = result_type,
+                    },
+                };
             }
         }
         return expr.resolved_type;

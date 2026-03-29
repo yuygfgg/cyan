@@ -671,6 +671,15 @@ auto SemanticAnalyzer::ensureViewSourceOutlivesLocal(
 auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
                                       bool want_mut, bool temporary_only)
     -> std::expected<ast::ResolvedPlace, Diagnostic> {
+    auto push_temporary_loan = [&](ast::ResolvedPlace loan_place,
+                                   bool loan_is_mut) {
+        if (!loan_is_mut) {
+            loan_place.owner_local_id.reset();
+        }
+        state.temporary_loans.push_back(TemporaryLoan{
+            .place = std::move(loan_place), .is_mut = loan_is_mut});
+    };
+
     if (const auto* unary = std::get_if<ast::UnaryExpr>(&expr.node);
         unary != nullptr && (unary->op == ast::UnaryOp::Borrow ||
                              unary->op == ast::UnaryOp::BorrowMut)) {
@@ -726,12 +735,10 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
         if (temporary_only) {
             if (!projected_sources->empty()) {
                 for (auto source_place : *projected_sources) {
-                    state.temporary_loans.push_back(
-                        TemporaryLoan{std::move(source_place), want_mut});
+                    push_temporary_loan(std::move(source_place), want_mut);
                 }
             } else {
-                state.temporary_loans.push_back(
-                    TemporaryLoan{*place, want_mut});
+                push_temporary_loan(*place, want_mut);
             }
             if (projected_sources->empty() && want_mut &&
                 place->owner_local_id.has_value()) {
@@ -787,12 +794,10 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
         if (temporary_only) {
             if (!projected_sources->empty()) {
                 for (auto source_place : *projected_sources) {
-                    state.temporary_loans.push_back(
-                        TemporaryLoan{std::move(source_place), want_mut});
+                    push_temporary_loan(std::move(source_place), want_mut);
                 }
             } else {
-                state.temporary_loans.push_back(
-                    TemporaryLoan{*expr.resolved_place, want_mut});
+                push_temporary_loan(*expr.resolved_place, want_mut);
             }
             if (projected_sources->empty() && want_mut &&
                 expr.resolved_place->owner_local_id.has_value()) {
@@ -850,8 +855,7 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
                             loan_place.owner_local_id =
                                 *(*binding)->source_local_id;
                         }
-                        state.temporary_loans.push_back(
-                            TemporaryLoan{std::move(loan_place), false});
+                        push_temporary_loan(std::move(loan_place), false);
                     }
                 }
                 if ((*binding)->source_place.has_value()) {
@@ -868,8 +872,7 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
                 return std::unexpected(borrow.error());
             }
             if (temporary_only) {
-                state.temporary_loans.push_back(
-                    TemporaryLoan{*expr.resolved_place, want_mut});
+                push_temporary_loan(*expr.resolved_place, want_mut);
                 if (want_mut &&
                     expr.resolved_place->owner_local_id.has_value()) {
                     const auto parent_index = findLocalById(
@@ -931,8 +934,7 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
         if (temporary_only) {
             for (auto loan_place : local.element_origins) {
                 loan_place.owner_local_id = local.unique_id;
-                state.temporary_loans.push_back(
-                    TemporaryLoan{std::move(loan_place), false});
+                push_temporary_loan(std::move(loan_place), false);
             }
         }
         return *local.borrow_origin;
@@ -947,7 +949,7 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
         if (temporary_only) {
             auto loan_place = *local.borrow_origin;
             loan_place.owner_local_id = local.unique_id;
-            state.temporary_loans.push_back(TemporaryLoan{loan_place, false});
+            push_temporary_loan(std::move(loan_place), false);
         }
         return *local.borrow_origin;
     }

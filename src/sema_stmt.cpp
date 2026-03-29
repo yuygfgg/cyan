@@ -1008,6 +1008,7 @@ auto SemanticAnalyzer::analyzeSwitch(FunctionState& state,
         }
         enum_place = *borrowed;
         switch_loan = TemporaryLoan{.place = *borrowed, .is_mut = false};
+        switch_loan->place.owner_local_id.reset();
         enum_type = unary->operand->resolved_type;
         break;
     }
@@ -1191,8 +1192,12 @@ auto SemanticAnalyzer::analyzeSwitch(FunctionState& state,
                     static_cast<std::uint32_t>(variant_index));
                 binding_local.borrow_origin = payload_place;
                 if (case_switch_loan.has_value()) {
-                    case_switch_loan->place.owner_local_id =
-                        binding_local.unique_id;
+                    if (stmt.match_kind == ast::MatchKind::BorrowMut) {
+                        case_switch_loan->place.owner_local_id =
+                            binding_local.unique_id;
+                    } else {
+                        case_switch_loan->place.owner_local_id.reset();
+                    }
                     case_state.temporary_loans.clear();
                     case_state.temporary_loans.push_back(*case_switch_loan);
                 }
