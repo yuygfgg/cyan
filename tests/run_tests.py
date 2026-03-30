@@ -165,7 +165,7 @@ def run_case(binary: pathlib.Path, path: pathlib.Path) -> tuple[bool, str]:
 def main() -> int:
     binary = pathlib.Path(sys.argv[1])
     tests_dir = pathlib.Path(sys.argv[2])
-    cases = sorted(tests_dir.glob("*.sc"))
+    cases = sorted(tests_dir.glob("*.cyan"))
     failures: list[str] = []
     for case in cases:
         passed, detail = run_case(binary, case)

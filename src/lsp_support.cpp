@@ -1,7 +1,7 @@
-#include "sc/lsp_support.hpp"
+#include "cyan/lsp_support.hpp"
 
-#include "sc/lexer.hpp"
-#include "sc/parser.hpp"
+#include "cyan/lexer.hpp"
+#include "cyan/parser.hpp"
 
 #include <glaze/core/common.hpp>
 #include <glaze/json/write.hpp>
@@ -25,7 +25,7 @@
 #include <variant>
 #include <vector>
 
-namespace sc {
+namespace cyan {
 
 namespace {
 
@@ -1144,7 +1144,7 @@ struct LSPRange {
 struct LSPDiagnostic {
     LSPRange range;
     int severity = DIAGNOSTIC_SEVERITY_ERROR;
-    std::string source = "safe-c";
+    std::string source = "cyan";
     std::string message;
 };
 
@@ -1256,7 +1256,7 @@ struct ServerCapabilities {
 };
 
 struct ServerInfo {
-    std::string name = "safe-c";
+    std::string name = "Cyan";
     std::string version = "dev";
 };
 
@@ -1430,7 +1430,7 @@ auto module_path_from_name(const std::filesystem::path& root_dir,
     if (!current_part.empty()) {
         path /= current_part;
     }
-    path.replace_extension(".sc");
+    path.replace_extension(".cyan");
     return path;
 }
 
@@ -1859,7 +1859,7 @@ auto format_function_signature(const ast::FunctionDecl& function)
 }
 
 auto markdown_code_block(std::string text) -> std::string {
-    return "```safe-c\n" + std::move(text) + "\n```";
+    return "```cyan\n" + std::move(text) + "\n```";
 }
 
 auto find_module_for_source(const ast::Package& package,
@@ -3042,7 +3042,7 @@ class LanguageServerState {
                 auto converted = LSPDiagnostic{
                     .range = diagnostic_range(diagnostic, *source),
                     .severity = DIAGNOSTIC_SEVERITY_ERROR,
-                    .source = "safe-c",
+                    .source = "cyan",
                     .message = diagnostic.message(),
                 };
 
@@ -3206,4 +3206,4 @@ auto LanguageServer::run(std::istream& input, std::ostream& output) -> int {
     return server.exitCode();
 }
 
-} // namespace sc
+} // namespace cyan

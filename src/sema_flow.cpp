@@ -1,6 +1,6 @@
 #include "sema_detail.hpp"
 
-namespace sc {
+namespace cyan {
 
 using namespace detail;
 
@@ -278,4 +278,4 @@ auto SemanticAnalyzer::collectDropLocalIds(
     return drop_local_ids;
 }
 
-} // namespace sc
+} // namespace cyan

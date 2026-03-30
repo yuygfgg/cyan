@@ -1,11 +1,11 @@
-#include "sc/codegen.hpp"
-#include "sc/diagnostic.hpp"
-#include "sc/lexer.hpp"
-#include "sc/lsp_support.hpp"
-#include "sc/parser.hpp"
-#include "sc/sema.hpp"
-#include "sc/source.hpp"
-#include "sc/type.hpp"
+#include "cyan/codegen.hpp"
+#include "cyan/diagnostic.hpp"
+#include "cyan/lexer.hpp"
+#include "cyan/lsp_support.hpp"
+#include "cyan/parser.hpp"
+#include "cyan/sema.hpp"
+#include "cyan/source.hpp"
+#include "cyan/type.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -17,7 +17,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace sc {
+namespace cyan {
 
 struct CommandLine {
     std::filesystem::path input_path;
@@ -103,9 +103,9 @@ auto parse_command_line(int argc, char** argv) -> std::optional<CommandLine> {
 
     if (options.input_path.empty()) {
         std::cerr
-            << "usage: sc <input.sc> [--check] [--emit-llvm] "
+            << "usage: cyan <input.cyan> [--check] [--emit-llvm] "
                "[-O0|-O1|-O2|-O3|-Ofast] [-g] [-o output]\n"
-            << "       sc --lsp\n";
+            << "       cyan --lsp\n";
         return std::nullopt;
     }
 
@@ -153,7 +153,7 @@ auto module_path_from_name(const std::filesystem::path& root_dir,
     if (!current_part.empty()) {
         path /= current_part;
     }
-    path.replace_extension(".sc");
+    path.replace_extension(".cyan");
     return path;
 }
 
@@ -263,37 +263,37 @@ auto load_package(ast::Package& package,
     return {};
 }
 
-} // namespace sc
+} // namespace cyan
 
 auto main(int argc, char** argv) -> int {
-    const auto options = sc::parse_command_line(argc, argv);
+    const auto options = cyan::parse_command_line(argc, argv);
     if (!options.has_value()) {
         return EXIT_FAILURE;
     }
 
     if (options->lsp_mode) {
-        sc::LanguageServer server;
+        cyan::LanguageServer server;
         return server.run(std::cin, std::cout);
     }
 
-    sc::ast::Package package;
-    auto loaded = sc::load_package(package, options->input_path);
+    cyan::ast::Package package;
+    auto loaded = cyan::load_package(package, options->input_path);
     if (!loaded) {
-        auto diagnostics = sc::collect_package_diagnostics(package);
+        auto diagnostics = cyan::collect_package_diagnostics(package);
         diagnostics.insert(diagnostics.end(), loaded.error().begin(),
                            loaded.error().end());
-        sc::print_diagnostics(std::cerr, diagnostics);
+        cyan::print_diagnostics(std::cerr, diagnostics);
         return EXIT_FAILURE;
     }
 
-    auto diagnostics = sc::collect_package_diagnostics(package);
-    sc::TypeContext types;
-    sc::SemanticAnalyzer sema(types);
+    auto diagnostics = cyan::collect_package_diagnostics(package);
+    cyan::TypeContext types;
+    cyan::SemanticAnalyzer sema(types);
     auto analysis = sema.analyze(package);
     diagnostics.insert(diagnostics.end(), analysis.diagnostics.begin(),
                        analysis.diagnostics.end());
     if (!diagnostics.empty()) {
-        sc::print_diagnostics(std::cerr, diagnostics);
+        cyan::print_diagnostics(std::cerr, diagnostics);
         return EXIT_FAILURE;
     }
 
@@ -301,12 +301,12 @@ auto main(int argc, char** argv) -> int {
         return EXIT_SUCCESS;
     }
 
-    sc::CodeGenerator codegen(types);
+    cyan::CodeGenerator codegen(types);
     auto emitted = codegen.emit(package, options->output_path,
                                 options->output_kind,
                                 options->codegen_options);
     if (!emitted) {
-        sc::print_diagnostic(std::cerr, emitted.error());
+        cyan::print_diagnostic(std::cerr, emitted.error());
         return EXIT_FAILURE;
     }
 

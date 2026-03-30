@@ -1,11 +1,11 @@
-#include "sc/type.hpp"
+#include "cyan/type.hpp"
 
-#include "sc/ast.hpp"
+#include "cyan/ast.hpp"
 
 #include <algorithm>
 #include <sstream>
 
-namespace sc {
+namespace cyan {
 
 TypeContext::TypeContext() {
     void_builtin_type = makeType(Type{.kind = TypeKind::Void,
@@ -430,4 +430,4 @@ auto TypeContext::describe(const Type* type) const -> std::string {
     return "<invalid>";
 }
 
-} // namespace sc
+} // namespace cyan

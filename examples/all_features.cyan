@@ -127,7 +127,7 @@ int sum_slice([]int values) {
 export int main() {
     // `subslice(...)` creates a zero-copy slice view over an array or string
     // literal without copying the underlying bytes.
-    []const char greeting = subslice("safe-c demo", 0, 11);
+    []const char greeting = subslice("cyan demo", 0, 9);
     Split pieces = split_at(greeting, 6);
     HighlightedSplit highlighted =
         highlight_split(greeting, subslice("demo", 0, 4), 5);
@@ -170,7 +170,7 @@ export int main() {
     }
 
     // `println(..., [..])` passes a slice of interface values; each argument is
-    // coerced to the exported `fmt` interface implemented by `println.sc`.
+    // coerced to the exported `fmt` interface implemented by `println.cyan`.
     println("head={} focus={} view={} total={} sum={} adjusted={}",
             [pieces.head, highlighted.parts.tail, view.bytes, total, combined,
              adjusted]);

@@ -1,6 +1,6 @@
 #include "sema_detail.hpp"
 
-namespace sc {
+namespace cyan {
 
 using namespace detail;
 
@@ -1778,4 +1778,4 @@ auto SemanticAnalyzer::analyzeMember(FunctionState& state, ast::Expr& expr,
     return expr.resolved_type;
 }
 
-} // namespace sc
+} // namespace cyan

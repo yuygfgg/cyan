@@ -1,4 +1,4 @@
-#include "sc/codegen.hpp"
+#include "cyan/codegen.hpp"
 
 #include <llvm/ADT/APInt.h>
 #include <llvm/BinaryFormat/Dwarf.h>
@@ -35,7 +35,7 @@
 #include <utility>
 #include <variant>
 
-namespace sc {
+namespace cyan {
 
 namespace {
 
@@ -96,7 +96,7 @@ auto optimization_flag_string(OptimizationLevel level) -> std::string_view {
 class LLVMCodegen {
   public:
     LLVMCodegen(TypeContext& types, CodegenOptions options)
-        : types(types), options(options), module("safe_c_module", context),
+        : types(types), options(options), module("cyan_module", context),
           builder(context) {}
 
     auto emit(ast::Package& package, const std::filesystem::path& output_path,
@@ -310,7 +310,7 @@ class LLVMCodegen {
         di_builder = std::make_unique<llvm::DIBuilder>(module);
         auto* file = getOrCreateDebugFile(*package.entry_module->source);
         compile_unit = di_builder->createCompileUnit(
-            llvm::DISourceLanguageName(llvm::dwarf::DW_LANG_C), file, "safe-c",
+            llvm::DISourceLanguageName(llvm::dwarf::DW_LANG_C), file, "Cyan",
             optimizationEnabled(), debugFlagsString(), 0);
     }
 
@@ -2635,4 +2635,4 @@ auto CodeGenerator::emit(ast::Package& package,
     return codegen.emit(package, output_path, output_kind);
 }
 
-} // namespace sc
+} // namespace cyan

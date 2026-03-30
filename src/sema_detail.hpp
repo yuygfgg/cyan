@@ -1,6 +1,6 @@
 #pragma once
 
-#include "sc/sema.hpp"
+#include "cyan/sema.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -16,7 +16,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace sc::detail {
+namespace cyan::detail {
 
 inline auto make_error(std::string message, SourceRange range)
     -> std::expected<void, Diagnostic> {
@@ -110,4 +110,4 @@ auto clone_block(
     const std::unordered_map<std::string, const Type*>& type_bindings)
     -> ast::BlockPtr;
 
-} // namespace sc::detail
+} // namespace cyan::detail

@@ -1,8 +1,8 @@
 #pragma once
 
-#include "sc/diagnostic.hpp"
-#include "sc/source.hpp"
-#include "sc/type.hpp"
+#include "cyan/diagnostic.hpp"
+#include "cyan/source.hpp"
+#include "cyan/type.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -12,7 +12,7 @@
 #include <variant>
 #include <vector>
 
-namespace sc::ast {
+namespace cyan::ast {
 
 enum class UnaryOp : std::uint8_t {
     Negate,
@@ -454,11 +454,11 @@ struct Package {
     std::vector<std::unique_ptr<Decl>> instantiated_declarations;
 };
 
-} // namespace sc::ast
+} // namespace cyan::ast
 
-namespace sc {
+namespace cyan {
 
 using StructDecl = ast::StructDecl;
 using FunctionDecl = ast::FunctionDecl;
 
-} // namespace sc
+} // namespace cyan

@@ -1,14 +1,14 @@
 #pragma once
 
-#include "sc/diagnostic.hpp"
-#include "sc/source.hpp"
+#include "cyan/diagnostic.hpp"
+#include "cyan/source.hpp"
 
 #include <cstdint>
 #include <expected>
 #include <string>
 #include <vector>
 
-namespace sc {
+namespace cyan {
 
 enum class TokenKind : std::uint8_t {
     EndOfFile,
@@ -109,4 +109,4 @@ class Lexer {
     std::size_t cursor = 0;
 };
 
-} // namespace sc
+} // namespace cyan

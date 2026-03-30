@@ -1,9 +1,9 @@
-#include "sc/lexer.hpp"
+#include "cyan/lexer.hpp"
 
 #include <cctype>
 #include <unordered_map>
 
-namespace sc {
+namespace cyan {
 
 namespace {
 
@@ -379,4 +379,4 @@ auto Lexer::lexPunctuation() -> std::expected<Token, Diagnostic> {
         Diagnostic("unexpected character", source_file.range(begin, cursor)));
 }
 
-} // namespace sc
+} // namespace cyan

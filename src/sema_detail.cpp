@@ -1,6 +1,6 @@
 #include "sema_detail.hpp"
 
-namespace sc::detail {
+namespace cyan::detail {
 
 auto is_path_prefix(const std::vector<std::uint32_t>& prefix,
                     const std::vector<std::uint32_t>& path) -> bool {
@@ -766,4 +766,4 @@ auto clone_stmt(
     return clone;
 }
 
-} // namespace sc::detail
+} // namespace cyan::detail

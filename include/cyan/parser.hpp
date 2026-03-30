@@ -1,13 +1,13 @@
 #pragma once
 
-#include "sc/ast.hpp"
-#include "sc/diagnostic.hpp"
-#include "sc/lexer.hpp"
+#include "cyan/ast.hpp"
+#include "cyan/diagnostic.hpp"
+#include "cyan/lexer.hpp"
 
 #include <expected>
 #include <vector>
 
-namespace sc {
+namespace cyan {
 
 class Parser {
   public:
@@ -110,4 +110,4 @@ class Parser {
     DiagnosticList diagnostics;
 };
 
-} // namespace sc
+} // namespace cyan

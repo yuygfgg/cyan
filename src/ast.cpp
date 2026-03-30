@@ -1,3 +1,3 @@
-#include "sc/ast.hpp"
+#include "cyan/ast.hpp"
 
-namespace sc::ast {} // namespace sc::ast
+namespace cyan::ast {} // namespace cyan::ast

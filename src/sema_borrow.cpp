@@ -1,6 +1,6 @@
 #include "sema_detail.hpp"
 
-namespace sc {
+namespace cyan {
 
 using namespace detail;
 
@@ -1577,4 +1577,4 @@ auto SemanticAnalyzer::localPlace(std::size_t local_id) const
                               .fields = {}};
 }
 
-} // namespace sc
+} // namespace cyan

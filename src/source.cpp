@@ -1,10 +1,10 @@
-#include "sc/source.hpp"
+#include "cyan/source.hpp"
 
 #include <algorithm>
 #include <fstream>
 #include <sstream>
 
-namespace sc {
+namespace cyan {
 
 SourceFile::SourceFile(std::filesystem::path path, std::string text)
     : source_path(std::move(path)), source_text(std::move(text)) {
@@ -63,4 +63,4 @@ auto SourceFile::range(std::size_t begin, std::size_t end) const
     return SourceRange{.begin = begin, .end = end, .source = this};
 }
 
-} // namespace sc
+} // namespace cyan

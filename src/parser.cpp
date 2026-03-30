@@ -1,10 +1,10 @@
-#include "sc/parser.hpp"
+#include "cyan/parser.hpp"
 
 #include <cstdlib>
 #include <optional>
 #include <string>
 
-namespace sc {
+namespace cyan {
 
 namespace {
 
@@ -2044,4 +2044,4 @@ auto Parser::binaryExprTail(
     return expr;
 }
 
-} // namespace sc
+} // namespace cyan

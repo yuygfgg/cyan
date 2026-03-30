@@ -1,6 +1,6 @@
 #include "sema_detail.hpp"
 
-namespace sc {
+namespace cyan {
 
 using namespace detail;
 
@@ -1187,4 +1187,4 @@ auto SemanticAnalyzer::report(Diagnostic diagnostic) -> void {
     diagnostics.push_back(std::move(diagnostic));
 }
 
-} // namespace sc
+} // namespace cyan

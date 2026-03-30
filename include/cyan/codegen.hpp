@@ -1,8 +1,8 @@
 #pragma once
 
-#include "sc/ast.hpp"
-#include "sc/diagnostic.hpp"
-#include "sc/type.hpp"
+#include "cyan/ast.hpp"
+#include "cyan/diagnostic.hpp"
+#include "cyan/type.hpp"
 
 #include <cstdint>
 #include <expected>
@@ -13,7 +13,7 @@ class LLVMContext;
 class Module;
 } // namespace llvm
 
-namespace sc {
+namespace cyan {
 
 enum class OutputKind : std::uint8_t {
     Object,
@@ -45,4 +45,4 @@ class CodeGenerator {
     TypeContext& types;
 };
 
-} // namespace sc
+} // namespace cyan

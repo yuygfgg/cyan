@@ -11,7 +11,7 @@ if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
     cmake -S "$ROOT_DIR" -B "$BUILD_DIR"
 fi
 
-cmake --build "$BUILD_DIR" --target sc
+cmake --build "$BUILD_DIR" --target cyan
 
 cd "$VSCODE_DIR"
 npm run compile

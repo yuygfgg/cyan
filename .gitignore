@@ -1,10 +1,12 @@
 build*/*
-vscode/
+.vscode/
 checks.json
 grammar.md
 .cache/
 .DS_Store
 *.pyc
+node_modules/
+*/out/*.js*
 
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md

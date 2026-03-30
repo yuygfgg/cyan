@@ -1,6 +1,6 @@
 #include "sema_detail.hpp"
 
-namespace sc {
+namespace cyan {
 
 using namespace detail;
 
@@ -1071,4 +1071,4 @@ auto SemanticAnalyzer::inferTypeBindings(
     return type_bindings;
 }
 
-} // namespace sc
+} // namespace cyan

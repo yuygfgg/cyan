@@ -1,7 +1,7 @@
 #pragma once
 
-#include "sc/ast.hpp"
-#include "sc/diagnostic.hpp"
+#include "cyan/ast.hpp"
+#include "cyan/diagnostic.hpp"
 
 #include <cstddef>
 #include <expected>
@@ -12,7 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace sc {
+namespace cyan {
 
 struct SemanticScope {
     std::unordered_map<std::string, const ast::StructDecl*> structs;
@@ -508,4 +508,4 @@ class SemanticAnalyzer {
     std::size_t next_local_id = 1;
 };
 
-} // namespace sc
+} // namespace cyan

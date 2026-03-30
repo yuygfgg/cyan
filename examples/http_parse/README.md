@@ -1,13 +1,13 @@
 # HTTP Parse Example
 
-This example starts a tiny loopback HTTP server in Safe C, receives one real
+This example starts a tiny loopback HTTP server in Cyan, receives one real
 socket request, parses it into zero-copy slice-backed views, prints the parsed
 structure with `println`, sends a `200 OK`, then exits.
 
 ## Build
 
 ```sh
-./build/sc examples/http_parse/main.sc -o /tmp/http_parse.o
+./build/cyan examples/http_parse/main.cyan -o /tmp/http_parse.o
 cc /tmp/http_parse.o \
   examples/http_parse/println.c \
   examples/http_parse/socket_ffi.c \

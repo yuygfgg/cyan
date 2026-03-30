@@ -1,9 +1,9 @@
-#include "sc/diagnostic.hpp"
+#include "cyan/diagnostic.hpp"
 
 #include <algorithm>
 #include <ostream>
 
-namespace sc {
+namespace cyan {
 
 Diagnostic::Diagnostic(std::string message, SourceRange range)
     : message_text(std::move(message)), source_range(range) {}
@@ -79,4 +79,4 @@ auto print_diagnostics(std::ostream& stream, const DiagnosticList& diagnostics)
     }
 }
 
-} // namespace sc
+} // namespace cyan

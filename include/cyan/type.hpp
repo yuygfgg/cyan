@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace sc {
+namespace cyan {
 
 namespace ast {
 struct StructDecl;
@@ -104,4 +104,4 @@ class TypeContext {
     const Type* bool_builtin_type = nullptr;
 };
 
-} // namespace sc
+} // namespace cyan

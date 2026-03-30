@@ -274,7 +274,7 @@ int main() {
         return 8;
     }
     if (!span_eq(parsed.headers.user_agent.value,
-                 subslice("safe-c/0", 0, 8))) {
+                 subslice("cyan/0", 0, 6))) {
         return 9;
     }
     if (!span_eq(parsed.headers.content_type.value,

@@ -1,0 +1,62 @@
+{
+  "name": "cyan-vscode",
+  "displayName": "Cyan",
+  "description": "VSCode client for the Cyan language server.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:cyan"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "cyan",
+        "aliases": [
+          "Cyan",
+          "cyan"
+        ],
+        "extensions": [
+          ".cyan"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "cyan",
+        "scopeName": "source.cyan",
+        "path": "./syntaxes/cyan.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Cyan",
+      "properties": {
+        "cyan.languageServer.path": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the Cyan language server executable, or a directory containing it. This is used only when `cyan` is not available in PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -w -p ./"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.8.3"
+  }
+}

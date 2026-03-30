@@ -1,8 +1,8 @@
 #pragma once
 
-#include "sc/ast.hpp"
-#include "sc/sema.hpp"
-#include "sc/source.hpp"
+#include "cyan/ast.hpp"
+#include "cyan/sema.hpp"
+#include "cyan/source.hpp"
 
 #include <cstdint>
 #include <iosfwd>
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace sc {
+namespace cyan {
 
 enum class LSPSymbolKind : std::uint8_t {
     BuiltinType,
@@ -78,4 +78,4 @@ class LanguageServer {
     auto run(std::istream& input, std::ostream& output) -> int;
 };
 
-} // namespace sc
+} // namespace cyan

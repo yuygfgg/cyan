@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(safe_c LANGUAGES C CXX)
+project(cyan LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,7 +29,7 @@ llvm_map_components_to_libnames(
 )
 
 add_executable(
-    sc
+    cyan
     src/ast.cpp
     src/codegen.cpp
     src/diagnostic.cpp
@@ -49,12 +49,12 @@ add_executable(
     src/type.cpp
 )
 
-target_include_directories(sc PRIVATE include)
-target_include_directories(sc SYSTEM PRIVATE third_party/glaze/include)
-target_link_libraries(sc PRIVATE ${LLVM_LIBS})
+target_include_directories(cyan PRIVATE include)
+target_include_directories(cyan SYSTEM PRIVATE third_party/glaze/include)
+target_link_libraries(cyan PRIVATE ${LLVM_LIBS})
 
 add_executable(
-    lsp_support_tests
+    cyan_lsp_support_tests
     src/ast.cpp
     src/diagnostic.cpp
     src/lexer.cpp
@@ -70,19 +70,19 @@ add_executable(
     src/sema_views.cpp
     src/source.cpp
     src/type.cpp
-    tests/lsp_support_tests.cpp
+    tests/cyan_lsp_support_tests.cpp
 )
 
-target_include_directories(lsp_support_tests PRIVATE include)
+target_include_directories(cyan_lsp_support_tests PRIVATE include)
 target_include_directories(
-    lsp_support_tests
+    cyan_lsp_support_tests
     SYSTEM PRIVATE
     third_party/glaze/include
 )
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
     target_compile_options(
-        sc
+        cyan
         PRIVATE
         -Wall
         -Wextra
@@ -93,7 +93,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
         -Wimplicit-fallthrough
     )
     target_compile_options(
-        lsp_support_tests
+        cyan_lsp_support_tests
         PRIVATE
         -Wall
         -Wextra
@@ -108,14 +108,14 @@ endif()
 enable_testing()
 
 add_test(
-    NAME safe_c_core_tests
+    NAME cyan_core_tests
     COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}
             python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_tests.py
-            $<TARGET_FILE:sc>
+            $<TARGET_FILE:cyan>
             ${CMAKE_CURRENT_SOURCE_DIR}/tests
 )
 
 add_test(
-    NAME lsp_support_tests
-    COMMAND $<TARGET_FILE:lsp_support_tests>
+    NAME cyan_lsp_support_tests
+    COMMAND $<TARGET_FILE:cyan_lsp_support_tests>
 )

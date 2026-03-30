@@ -7,7 +7,7 @@
 #include <string_view>
 #include <vector>
 
-namespace sc {
+namespace cyan {
 
 class SourceFile;
 
@@ -52,4 +52,4 @@ class SourceFile {
                            begin.source != nullptr ? begin.source : end.source};
 }
 
-} // namespace sc
+} // namespace cyan

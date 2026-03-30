@@ -1,12 +1,12 @@
 #pragma once
 
-#include "sc/source.hpp"
+#include "cyan/source.hpp"
 
 #include <iosfwd>
 #include <string>
 #include <vector>
 
-namespace sc {
+namespace cyan {
 
 class Diagnostic {
   public:
@@ -31,4 +31,4 @@ auto print_diagnostic(std::ostream& stream, const SourceFile& source,
 auto print_diagnostics(std::ostream& stream, const DiagnosticList& diagnostics)
     -> void;
 
-} // namespace sc
+} // namespace cyan

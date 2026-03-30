@@ -1,0 +1,162 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Cyan",
+  "scopeName": "source.cyan",
+  "fileTypes": ["cyan"],
+  "patterns": [
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#characters"
+    },
+    {
+      "include": "#typeDeclarations"
+    },
+    {
+      "include": "#functionNames"
+    },
+    {
+      "include": "#memberAccess"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#builtinTypes"
+    },
+    {
+      "include": "#booleans"
+    },
+    {
+      "include": "#numbers"
+    }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.cyan",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.cyan",
+          "begin": "\"",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.begin.cyan"
+            }
+          },
+          "end": "\"",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.string.end.cyan"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.cyan",
+              "match": "\\\\(?:['\"\\\\nrt0])"
+            }
+          ]
+        }
+      ]
+    },
+    "characters": {
+      "patterns": [
+        {
+          "name": "string.quoted.single.cyan",
+          "begin": "'",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.character.begin.cyan"
+            }
+          },
+          "end": "'",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.character.end.cyan"
+            }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.cyan",
+              "match": "\\\\(?:['\"\\\\nrt0])"
+            }
+          ]
+        }
+      ]
+    },
+    "typeDeclarations": {
+      "patterns": [
+        {
+          "name": "meta.declaration.type.cyan",
+          "match": "\\b(struct|enum|interface)\\b\\s*(?:<[^>]+>\\s*)?([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.type.cyan"
+            },
+            "2": {
+              "name": "entity.name.type.cyan"
+            }
+          }
+        }
+      ]
+    },
+    "functionNames": {
+      "patterns": [
+        {
+          "name": "entity.name.function.cyan",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*\\()"
+        }
+      ]
+    },
+    "memberAccess": {
+      "patterns": [
+        {
+          "name": "variable.other.member.cyan",
+          "match": "(?<=\\.)\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.cyan",
+          "match": "\\b(?:as|break|case|const|continue|default|depends|drop|else|export|extern|for|if|impl|import|move|mut|on|return|sizeof|switch|unchecked|while)\\b"
+        }
+      ]
+    },
+    "builtinTypes": {
+      "patterns": [
+        {
+          "name": "storage.type.primitive.cyan",
+          "match": "\\b(?:bool|char|float|int|void)\\b"
+        }
+      ]
+    },
+    "booleans": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.cyan",
+          "match": "\\b(?:true|false)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.cyan",
+          "match": "\\b\\d+(?:\\.\\d+)?\\b"
+        }
+      ]
+    }
+  }
+}

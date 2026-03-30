@@ -1,10 +1,10 @@
-#include "sc/diagnostic.hpp"
-#include "sc/lexer.hpp"
-#include "sc/lsp_support.hpp"
-#include "sc/parser.hpp"
-#include "sc/sema.hpp"
-#include "sc/source.hpp"
-#include "sc/type.hpp"
+#include "cyan/diagnostic.hpp"
+#include "cyan/lexer.hpp"
+#include "cyan/lsp_support.hpp"
+#include "cyan/parser.hpp"
+#include "cyan/sema.hpp"
+#include "cyan/source.hpp"
+#include "cyan/type.hpp"
 
 #include "glaze/glaze.hpp"
 
@@ -164,16 +164,16 @@ Pair pair([]const char text) depends(return on text) {
 )";
 
 struct FixtureContext {
-    sc::ast::Package package;
-    sc::TypeContext types;
-    sc::SemanticAnalysis analysis;
-    const sc::SourceFile* source = nullptr;
+    cyan::ast::Package package;
+    cyan::TypeContext types;
+    cyan::SemanticAnalysis analysis;
+    const cyan::SourceFile* source = nullptr;
 };
 
-auto diagnostics_to_string(const sc::DiagnosticList& diagnostics)
+auto diagnostics_to_string(const cyan::DiagnosticList& diagnostics)
     -> std::string {
     std::ostringstream stream;
-    sc::print_diagnostics(stream, diagnostics);
+    cyan::print_diagnostics(stream, diagnostics);
     return stream.str();
 }
 
@@ -192,7 +192,7 @@ auto load_fixture_from_source(std::string_view filename,
     FixtureContext context;
 
     const auto path = write_fixture_file(filename, source_text);
-    auto source = sc::SourceFile::load(path);
+    auto source = cyan::SourceFile::load(path);
     std::filesystem::remove(path);
     if (!source) {
         std::cerr << "failed to load fixture: " << source.error() << '\n';
@@ -200,17 +200,17 @@ auto load_fixture_from_source(std::string_view filename,
     }
 
     context.package.sources.push_back(
-        std::make_unique<sc::SourceFile>(std::move(*source)));
+        std::make_unique<cyan::SourceFile>(std::move(*source)));
     context.source = context.package.sources.back().get();
 
-    sc::Lexer lexer(*context.source);
+    cyan::Lexer lexer(*context.source);
     auto tokens = lexer.lexAll();
     if (!tokens) {
-        std::cerr << diagnostics_to_string(sc::DiagnosticList{tokens.error()});
+        std::cerr << diagnostics_to_string(cyan::DiagnosticList{tokens.error()});
         return std::nullopt;
     }
 
-    sc::Parser parser(*context.source, std::move(*tokens));
+    cyan::Parser parser(*context.source, std::move(*tokens));
     auto module = parser.parseModule();
     if (!module.diagnostics.empty()) {
         std::cerr << diagnostics_to_string(module.diagnostics);
@@ -221,10 +221,10 @@ auto load_fixture_from_source(std::string_view filename,
     module.path = context.source->path();
     module.module_name = std::string(module_name);
     context.package.modules.push_back(
-        std::make_unique<sc::ast::Module>(std::move(module)));
+        std::make_unique<cyan::ast::Module>(std::move(module)));
     context.package.entry_module = context.package.modules.back().get();
 
-    sc::SemanticAnalyzer sema(context.types);
+    cyan::SemanticAnalyzer sema(context.types);
     context.analysis = sema.analyze(context.package);
     if (!context.analysis.diagnostics.empty()) {
         std::cerr << diagnostics_to_string(context.analysis.diagnostics);
@@ -235,7 +235,7 @@ auto load_fixture_from_source(std::string_view filename,
 }
 
 auto load_fixture() -> std::optional<FixtureContext> {
-    return load_fixture_from_source("safe_c_lsp_support.sc",
+    return load_fixture_from_source("cyan_lsp_support.cyan",
                                     "lsp_support_fixture", FIXTURE_SOURCE);
 }
 
@@ -276,20 +276,20 @@ template <typename T> auto to_json(const T& value) -> std::string {
     return json.value_or("");
 }
 
-auto same_range(sc::SourceRange lhs, sc::SourceRange rhs) -> bool {
+auto same_range(cyan::SourceRange lhs, cyan::SourceRange rhs) -> bool {
     return lhs.begin == rhs.begin && lhs.end == rhs.end &&
            lhs.source == rhs.source;
 }
 
-auto same_optional_range(const std::optional<sc::SourceRange>& lhs,
-                         sc::SourceRange rhs) -> bool {
+auto same_optional_range(const std::optional<cyan::SourceRange>& lhs,
+                         cyan::SourceRange rhs) -> bool {
     return lhs.has_value() && same_range(*lhs, rhs);
 }
 
-auto find_occurrence(const std::vector<sc::LSPSymbolOccurrence>& occurrences,
-                     sc::LSPSymbolKind kind, sc::LSPSymbolRole role,
+auto find_occurrence(const std::vector<cyan::LSPSymbolOccurrence>& occurrences,
+                     cyan::LSPSymbolKind kind, cyan::LSPSymbolRole role,
                      std::string_view name, std::size_t nth = 0)
-    -> const sc::LSPSymbolOccurrence* {
+    -> const cyan::LSPSymbolOccurrence* {
     std::size_t seen = 0;
     for (const auto& occurrence : occurrences) {
         if (occurrence.kind == kind && occurrence.role == role &&
@@ -382,19 +382,19 @@ auto find_publish_diagnostics(
     return nullptr;
 }
 
-auto test_document_symbols(const sc::LSPSupport& lsp,
-                           const sc::SourceFile& source,
+auto test_document_symbols(const cyan::LSPSupport& lsp,
+                           const cyan::SourceFile& source,
                            std::vector<std::string>& failures) -> void {
     const auto occurrences = lsp.documentSymbols(source);
 
     const auto* pair_decl =
-        find_occurrence(occurrences, sc::LSPSymbolKind::Struct,
-                        sc::LSPSymbolRole::Declaration, "Pair");
+        find_occurrence(occurrences, cyan::LSPSymbolKind::Struct,
+                        cyan::LSPSymbolRole::Declaration, "Pair");
     expect(pair_decl != nullptr, "missing Pair declaration symbol", failures);
 
     const auto* pair_ref =
-        find_occurrence(occurrences, sc::LSPSymbolKind::Struct,
-                        sc::LSPSymbolRole::Reference, "Pair");
+        find_occurrence(occurrences, cyan::LSPSymbolKind::Struct,
+                        cyan::LSPSymbolRole::Reference, "Pair");
     expect(pair_ref != nullptr, "missing Pair type reference symbol", failures);
     if (pair_decl != nullptr && pair_ref != nullptr) {
         expect(
@@ -403,11 +403,11 @@ auto test_document_symbols(const sc::LSPSupport& lsp,
     }
 
     const auto* some_decl =
-        find_occurrence(occurrences, sc::LSPSymbolKind::Variant,
-                        sc::LSPSymbolRole::Declaration, "Some");
+        find_occurrence(occurrences, cyan::LSPSymbolKind::Variant,
+                        cyan::LSPSymbolRole::Declaration, "Some");
     const auto* some_ref =
-        find_occurrence(occurrences, sc::LSPSymbolKind::Variant,
-                        sc::LSPSymbolRole::Reference, "Some");
+        find_occurrence(occurrences, cyan::LSPSymbolKind::Variant,
+                        cyan::LSPSymbolRole::Reference, "Some");
     expect(some_decl != nullptr, "missing Some declaration symbol", failures);
     expect(some_ref != nullptr, "missing Some reference symbol", failures);
     if (some_decl != nullptr && some_ref != nullptr) {
@@ -417,11 +417,11 @@ auto test_document_symbols(const sc::LSPSupport& lsp,
     }
 
     const auto* payload_decl =
-        find_occurrence(occurrences, sc::LSPSymbolKind::SwitchBinding,
-                        sc::LSPSymbolRole::Declaration, "payload");
+        find_occurrence(occurrences, cyan::LSPSymbolKind::SwitchBinding,
+                        cyan::LSPSymbolRole::Declaration, "payload");
     const auto* payload_ref =
-        find_occurrence(occurrences, sc::LSPSymbolKind::SwitchBinding,
-                        sc::LSPSymbolRole::Reference, "payload");
+        find_occurrence(occurrences, cyan::LSPSymbolKind::SwitchBinding,
+                        cyan::LSPSymbolRole::Reference, "payload");
     expect(payload_decl != nullptr, "missing payload declaration symbol",
            failures);
     expect(payload_ref != nullptr, "missing payload reference symbol",
@@ -434,11 +434,11 @@ auto test_document_symbols(const sc::LSPSupport& lsp,
     }
 
     const auto* field_decl =
-        find_occurrence(occurrences, sc::LSPSymbolKind::Field,
-                        sc::LSPSymbolRole::Declaration, "value");
+        find_occurrence(occurrences, cyan::LSPSymbolKind::Field,
+                        cyan::LSPSymbolRole::Declaration, "value");
     const auto* field_ref =
-        find_occurrence(occurrences, sc::LSPSymbolKind::Field,
-                        sc::LSPSymbolRole::Reference, "value");
+        find_occurrence(occurrences, cyan::LSPSymbolKind::Field,
+                        cyan::LSPSymbolRole::Reference, "value");
     expect(field_decl != nullptr, "missing field declaration symbol", failures);
     expect(field_ref != nullptr, "missing field reference symbol", failures);
     if (field_decl != nullptr && field_ref != nullptr) {
@@ -448,7 +448,7 @@ auto test_document_symbols(const sc::LSPSupport& lsp,
     }
 }
 
-auto test_query(const sc::LSPSupport& lsp, const sc::SourceFile& source,
+auto test_query(const cyan::LSPSupport& lsp, const cyan::SourceFile& source,
                 std::vector<std::string>& failures) -> void {
     const auto text = source.text();
 
@@ -475,9 +475,9 @@ auto test_query(const sc::LSPSupport& lsp, const sc::SourceFile& source,
     expect(payload_result->symbol.has_value(),
            "payload query should resolve a symbol occurrence", failures);
     if (payload_result->symbol.has_value()) {
-        expect(payload_result->symbol->kind == sc::LSPSymbolKind::SwitchBinding,
+        expect(payload_result->symbol->kind == cyan::LSPSymbolKind::SwitchBinding,
                "payload query should resolve switch binding symbol", failures);
-        expect(payload_result->symbol->role == sc::LSPSymbolRole::Reference,
+        expect(payload_result->symbol->role == cyan::LSPSymbolRole::Reference,
                "payload query should resolve reference role", failures);
     }
 
@@ -496,7 +496,7 @@ auto test_query(const sc::LSPSupport& lsp, const sc::SourceFile& source,
                    "Pair type query should resolve a symbol occurrence",
                    failures);
             if (pair_result->symbol.has_value()) {
-                expect(pair_result->symbol->kind == sc::LSPSymbolKind::Struct,
+                expect(pair_result->symbol->kind == cyan::LSPSymbolKind::Struct,
                        "Pair type query should resolve struct symbol",
                        failures);
             }
@@ -514,7 +514,7 @@ auto test_query(const sc::LSPSupport& lsp, const sc::SourceFile& source,
             expect(some_result->symbol.has_value(),
                    "Some query should resolve a symbol occurrence", failures);
             if (some_result->symbol.has_value()) {
-                expect(some_result->symbol->kind == sc::LSPSymbolKind::Variant,
+                expect(some_result->symbol->kind == cyan::LSPSymbolKind::Variant,
                        "Some query should resolve variant symbol", failures);
             }
         }
@@ -528,7 +528,7 @@ auto test_query(const sc::LSPSupport& lsp, const sc::SourceFile& source,
 
 auto test_depends_shorthand_document_symbols(std::vector<std::string>& failures)
     -> void {
-    auto context = load_fixture_from_source("safe_c_lsp_depends_fixture.sc",
+    auto context = load_fixture_from_source("cyan_lsp_depends_fixture.cyan",
                                             "lsp_depends_fixture",
                                             DEPENDS_SHORTHAND_FIXTURE_SOURCE);
     expect(context.has_value(),
@@ -537,7 +537,7 @@ auto test_depends_shorthand_document_symbols(std::vector<std::string>& failures)
         return;
     }
 
-    sc::LSPSupport lsp(context->package, context->analysis);
+    cyan::LSPSupport lsp(context->package, context->analysis);
     const auto occurrences = lsp.documentSymbols(*context->source);
 
     const auto depends_text_offset =
@@ -553,10 +553,10 @@ auto test_depends_shorthand_document_symbols(std::vector<std::string>& failures)
         *depends_text_offset,
         *depends_text_offset + std::string_view("text").size());
     std::size_t depends_reference_count = 0;
-    const sc::LSPSymbolOccurrence* depends_reference = nullptr;
+    const cyan::LSPSymbolOccurrence* depends_reference = nullptr;
     for (const auto& occurrence : occurrences) {
-        if (occurrence.kind != sc::LSPSymbolKind::Parameter ||
-            occurrence.role != sc::LSPSymbolRole::Reference ||
+        if (occurrence.kind != cyan::LSPSymbolKind::Parameter ||
+            occurrence.role != cyan::LSPSymbolRole::Reference ||
             occurrence.name != "text" ||
             !same_range(occurrence.range, depends_text_range)) {
             continue;
@@ -576,8 +576,8 @@ auto test_depends_shorthand_document_symbols(std::vector<std::string>& failures)
            failures);
 
     const auto* parameter_decl =
-        find_occurrence(occurrences, sc::LSPSymbolKind::Parameter,
-                        sc::LSPSymbolRole::Declaration, "text");
+        find_occurrence(occurrences, cyan::LSPSymbolKind::Parameter,
+                        cyan::LSPSymbolRole::Declaration, "text");
     expect(parameter_decl != nullptr,
            "missing parameter declaration for shorthand depends fixture",
            failures);
@@ -592,7 +592,7 @@ auto test_depends_shorthand_document_symbols(std::vector<std::string>& failures)
 
 auto test_language_server(std::vector<std::string>& failures) -> void {
     const auto temp_path =
-        std::filesystem::temp_directory_path() / "safe_c_lsp_server_fixture.sc";
+        std::filesystem::temp_directory_path() / "cyan_lsp_server_fixture.cyan";
     const auto uri = "file://" + temp_path.generic_string();
 
     const auto payload_ref_offset = nth_offset(FIXTURE_SOURCE, "payload", 1);
@@ -619,7 +619,7 @@ auto test_language_server(std::vector<std::string>& failures) -> void {
         R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}})";
     const std::string did_open_notification =
         R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
-        uri + R"(","languageId":"safe-c","version":1,"text":)" +
+        uri + R"(","languageId":"cyan","version":1,"text":)" +
         to_json(std::string(FIXTURE_SOURCE)) + "}}}";
     const std::string hover_request =
         R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":")" +
@@ -652,7 +652,7 @@ auto test_language_server(std::vector<std::string>& failures) -> void {
     input_stream += frame_message(shutdown_request);
     input_stream += frame_message(exit_notification);
 
-    sc::LanguageServer server;
+    cyan::LanguageServer server;
     std::istringstream input(input_stream);
     std::ostringstream output;
     const auto exit_code = server.run(input, output);
@@ -820,7 +820,7 @@ auto test_language_server(std::vector<std::string>& failures) -> void {
 
 auto test_language_server_impl_definition_and_rename(
     std::vector<std::string>& failures) -> void {
-    const auto path = write_fixture_file("safe_c_lsp_interface_fixture.sc",
+    const auto path = write_fixture_file("cyan_lsp_interface_fixture.cyan",
                                          INTERFACE_FIXTURE_SOURCE);
     const auto uri = "file://" + path.generic_string();
 
@@ -852,7 +852,7 @@ auto test_language_server_impl_definition_and_rename(
         R"({"jsonrpc":"2.0","id":11,"method":"initialize","params":{}})";
     const std::string did_open_notification =
         R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
-        uri + R"(","languageId":"safe-c","version":1,"text":)" +
+        uri + R"(","languageId":"cyan","version":1,"text":)" +
         to_json(std::string(INTERFACE_FIXTURE_SOURCE)) + "}}}";
     const std::string definition_request =
         R"({"jsonrpc":"2.0","id":12,"method":"textDocument/definition","params":{"textDocument":{"uri":")" +
@@ -878,7 +878,7 @@ auto test_language_server_impl_definition_and_rename(
     input_stream += frame_message(shutdown_request);
     input_stream += frame_message(exit_notification);
 
-    sc::LanguageServer server;
+    cyan::LanguageServer server;
     std::istringstream input(input_stream);
     std::ostringstream output;
     const auto exit_code = server.run(input, output);
@@ -982,7 +982,7 @@ auto main() -> int {
         return 1;
     }
 
-    sc::LSPSupport lsp(context->package, context->analysis);
+    cyan::LSPSupport lsp(context->package, context->analysis);
     std::vector<std::string> failures;
 
     test_document_symbols(lsp, *context->source, failures);
