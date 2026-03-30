@@ -732,6 +732,24 @@ auto SemanticAnalyzer::coerceExprToSlice(FunctionState& state, ast::Expr& expr,
     if (source_base->kind == TypeKind::Array &&
         can_add_const_in_object_graph(types, source_base->element_type,
                                       target_base->element_type)) {
+        if (expr.resolved_place.has_value()) {
+            auto ignored_local = expr.resolved_place->owner_local_id;
+            auto borrow_targets = projectedPlaceTargets(state, expr);
+            if (!borrow_targets) {
+                return std::unexpected(borrow_targets.error());
+            }
+            if (borrow_targets->empty()) {
+                *borrow_targets =
+                    std::vector<ast::ResolvedPlace>{*expr.resolved_place};
+            }
+            for (const auto& borrow_target : *borrow_targets) {
+                auto borrow = ensureCanBorrow(state, borrow_target, false,
+                                              expr.range, ignored_local);
+                if (!borrow) {
+                    return std::unexpected(borrow.error());
+                }
+            }
+        }
         expr.slice_source_type = *source_type;
         if (expr.resolved_place.has_value()) {
             expr.slice_source_place = *expr.resolved_place;
@@ -750,8 +768,23 @@ auto SemanticAnalyzer::coerceExprToSlice(FunctionState& state, ast::Expr& expr,
         if (!source_place) {
             return std::unexpected(source_place.error());
         }
+        auto source_local_id = borrowSourceLocalId(state, expr);
+        if (!source_local_id) {
+            return std::unexpected(source_local_id.error());
+        }
+        auto ignored_local = source_local_id->has_value()
+                                 ? std::optional<std::size_t>(*source_local_id)
+                                 : std::nullopt;
+        auto borrow = ensureCanBorrow(state, *source_place, false, expr.range,
+                                      ignored_local);
+        if (!borrow) {
+            return std::unexpected(borrow.error());
+        }
         expr.slice_source_type = *source_type;
         expr.slice_source_place = *source_place;
+        if (source_local_id->has_value()) {
+            expr.slice_source_place->owner_local_id = *source_local_id;
+        }
         expr.resolved_type = slice_type;
         return {};
     }
@@ -771,7 +804,15 @@ auto SemanticAnalyzer::sliceSourcePlace(FunctionState& state, ast::Expr& expr)
                                      return binding.path.empty();
                                  });
         if (it != expr.cached_view_bindings->end()) {
-            return it->source_place;
+            if (!it->source_places.empty()) {
+                auto source_place = placeSetRepresentative(it->source_places);
+                if (source_place.has_value() &&
+                    it->source_local_id.has_value()) {
+                    source_place->owner_local_id = *it->source_local_id;
+                }
+                return source_place;
+            }
+            return std::optional<ast::ResolvedPlace>{};
         }
     }
 
@@ -802,7 +843,13 @@ auto SemanticAnalyzer::sliceSourcePlace(FunctionState& state, ast::Expr& expr)
     if (auto* name = std::get_if<ast::NameExpr>(&expr.node); name != nullptr) {
         const auto local_index = findLocalById(state, name->local_id);
         if (local_index.has_value()) {
-            return state.locals[*local_index].borrow_origin;
+            auto source_place = placeSetRepresentative(
+                topLevelOrigins(state.locals[*local_index]));
+            if (source_place.has_value()) {
+                source_place->owner_local_id =
+                    state.locals[*local_index].unique_id;
+            }
+            return source_place;
         }
     }
 
@@ -811,7 +858,13 @@ auto SemanticAnalyzer::sliceSourcePlace(FunctionState& state, ast::Expr& expr)
                 state, expr.resolved_place->is_external,
                 expr.resolved_place->root_id, expr.resolved_place->fields);
             slot_index.has_value()) {
-            return state.locals[*slot_index].borrow_origin;
+            auto source_place = placeSetRepresentative(
+                topLevelOrigins(state.locals[*slot_index]));
+            if (source_place.has_value()) {
+                source_place->owner_local_id =
+                    state.locals[*slot_index].unique_id;
+            }
+            return source_place;
         }
     }
 

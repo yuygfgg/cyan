@@ -1,0 +1,6 @@
+int main() {
+    char[4] text = "abc";
+    &mut char[4] whole = &text;
+    []const char head = subslice(text, 0, 1);
+    return 0;
+}

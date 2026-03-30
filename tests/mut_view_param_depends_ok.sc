@@ -1,0 +1,22 @@
+struct View {
+    []const char data;
+};
+
+void overwrite(&mut View v, []const char next)
+    depends(v.data on next) {
+    v.data = next;
+}
+
+int main() {
+    char[4] initial = ['o', 'l', 'd', '!'];
+    char[4] next = ['n', 'e', 'w', '!'];
+    View v = { subslice(initial, 0, 4) };
+    overwrite(&mut v, subslice(next, 0, 4));
+    if (v.data[0] != 'n') {
+        return 1;
+    }
+    if (v.data[1] != 'e') {
+        return 2;
+    }
+    return 0;
+}

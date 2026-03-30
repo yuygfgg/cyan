@@ -5,8 +5,10 @@ int take(&mut int value) {
 
 int main() {
     int value = 0;
-    &mut int borrow = &value;
-    take(&mut *borrow);
-    *borrow = 2;
+    {
+        &mut int borrow = &value;
+        take(&mut *borrow);
+        *borrow = 2;
+    }
     return value;
 }

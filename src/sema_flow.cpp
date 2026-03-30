@@ -7,7 +7,7 @@ using namespace detail;
 auto SemanticAnalyzer::branchMerge(FunctionState& into,
                                    const FunctionState& then_state,
                                    const FunctionState& else_state,
-                                   SourceRange range)
+                                   SourceRange range, MergePolicy policy)
     -> std::expected<void, Diagnostic> {
     for (const auto& local : into.locals) {
         const auto then_index = findLocalById(then_state, local.unique_id);
@@ -18,19 +18,22 @@ auto SemanticAnalyzer::branchMerge(FunctionState& into,
 
         const auto& then_local = then_state.locals[*then_index];
         const auto& else_local = else_state.locals[*else_index];
-        if (then_local.status != else_local.status) {
+        if (then_local.status != else_local.status &&
+            (policy == MergePolicy::Exact || !canJoinLocalStatus(local))) {
             return make_error(
                 "control-flow merge requires identical local state for '" +
                     local.name + "'",
                 range);
         }
-        if (then_local.borrow_origin != else_local.borrow_origin) {
+        if (policy == MergePolicy::Exact &&
+            topLevelOrigins(then_local) != topLevelOrigins(else_local)) {
             return make_error(
                 "control-flow merge requires identical borrow origins for '" +
                     local.name + "'",
                 range);
         }
-        if (then_local.element_origins != else_local.element_origins) {
+        if (policy == MergePolicy::Exact &&
+            then_local.element_origins != else_local.element_origins) {
             return make_error(
                 "control-flow merge requires identical view element origins "
                 "for '" +
@@ -48,15 +51,27 @@ auto SemanticAnalyzer::branchMerge(FunctionState& into,
 
     for (auto& local : into.locals) {
         const auto then_index = findLocalById(then_state, local.unique_id);
-        if (!then_index.has_value()) {
+        const auto else_index = findLocalById(else_state, local.unique_id);
+        if (!then_index.has_value() || !else_index.has_value()) {
             continue;
         }
-        local.status = then_state.locals[*then_index].status;
-        local.borrow_origin = then_state.locals[*then_index].borrow_origin;
-        local.element_origins = then_state.locals[*then_index].element_origins;
-        local.reborrow_parent_local_id =
-            then_state.locals[*then_index].reborrow_parent_local_id;
-        local.in_scope = then_state.locals[*then_index].in_scope;
+        const auto& then_local = then_state.locals[*then_index];
+        const auto& else_local = else_state.locals[*else_index];
+        local.status =
+            policy == MergePolicy::Exact
+                ? then_local.status
+                : joinLocalStatus(then_local.status, else_local.status);
+        if (policy == MergePolicy::Exact) {
+            setTopLevelOrigins(local, topLevelOrigins(then_local));
+            local.element_origins = then_local.element_origins;
+        } else {
+            setTopLevelOrigins(local, joinPlaces(topLevelOrigins(then_local),
+                                                 topLevelOrigins(else_local)));
+            local.element_origins = joinPlaces(then_local.element_origins,
+                                               else_local.element_origins);
+        }
+        local.reborrow_parent_local_id = then_local.reborrow_parent_local_id;
+        local.in_scope = then_local.in_scope;
     }
     return {};
 }
@@ -71,8 +86,8 @@ auto SemanticAnalyzer::mergeReachableStates(
 
     auto merged_state = states.front();
     for (std::size_t index = 1; index < states.size(); ++index) {
-        auto merged =
-            branchMerge(merged_state, merged_state, states[index], range);
+        auto merged = branchMerge(merged_state, merged_state, states[index],
+                                  range, MergePolicy::Join);
         if (!merged) {
             return std::unexpected(merged.error());
         }
@@ -113,7 +128,7 @@ auto SemanticAnalyzer::requireLoopBreakState(const FunctionState& state,
         }
         const auto& current_local = state.locals[*current_index];
         if (current_local.status != entry_local.status ||
-            current_local.borrow_origin != entry_local.borrow_origin ||
+            topLevelOrigins(current_local) != topLevelOrigins(entry_local) ||
             current_local.element_origins != entry_local.element_origins ||
             current_local.reborrow_parent_local_id !=
                 entry_local.reborrow_parent_local_id) {
@@ -128,7 +143,7 @@ auto SemanticAnalyzer::requireLoopBreakState(const FunctionState& state,
 auto SemanticAnalyzer::clearStatementTemporaries(FunctionState& state) -> void {
     auto has_live_reborrow_child = [&](std::size_t local_id) -> bool {
         return std::ranges::any_of(state.locals, [&](const LocalState& local) {
-            return local.in_scope && local.status == LocalState::Status::Live &&
+            return local.in_scope && isDefinitelyLive(local.status) &&
                    local.reborrow_parent_local_id == local_id;
         });
     };
@@ -166,8 +181,7 @@ auto SemanticAnalyzer::attachReborrowParent(FunctionState& state,
                                             ast::Expr& source_expr)
     -> std::expected<void, Diagnostic> {
     releaseReborrowParent(state, local);
-    if (local.type == nullptr || !is_borrow_like_type(local.type) ||
-        !local.type->is_mut) {
+    if (local.type == nullptr || !is_borrow_like_type(local.type)) {
         return {};
     }
 
@@ -186,6 +200,10 @@ auto SemanticAnalyzer::attachReborrowParent(FunctionState& state,
 
     auto& parent = state.locals[*parent_index];
     if (!is_borrow_like_type(parent.type) || !parent.type->is_mut) {
+        return {};
+    }
+
+    if (!local.type->is_mut) {
         return {};
     }
 
@@ -209,8 +227,8 @@ auto SemanticAnalyzer::activeNamedLoans(const FunctionState& state) const
     -> std::vector<TemporaryLoan> {
     std::vector<TemporaryLoan> loans;
     for (const auto& local : state.locals) {
-        if (!local.in_scope || local.status != LocalState::Status::Live ||
-            !local.borrow_origin.has_value()) {
+        if (!local.in_scope || !mayBeLive(local.status) ||
+            (topLevelOrigins(local).empty() && local.element_origins.empty())) {
             continue;
         }
         const auto* local_type = types.unqualify(local.type);
@@ -229,12 +247,13 @@ auto SemanticAnalyzer::activeNamedLoans(const FunctionState& state) const
             }
             continue;
         }
-        auto place = *local.borrow_origin;
-        place.owner_local_id = local.unique_id;
-        loans.push_back(TemporaryLoan{
-            .place = place,
-            .is_mut = is_borrow_like_type(local.type) && local.type->is_mut,
-        });
+        for (auto place : topLevelOrigins(local)) {
+            place.owner_local_id = local.unique_id;
+            loans.push_back(TemporaryLoan{
+                .place = std::move(place),
+                .is_mut = is_borrow_like_type(local.type) && local.type->is_mut,
+            });
+        }
     }
     return loans;
 }
@@ -246,7 +265,7 @@ auto SemanticAnalyzer::collectDropLocalIds(
     std::vector<std::size_t> drop_local_ids;
     auto collect_matching = [&](bool include_hidden) {
         for (const auto& local : std::views::reverse(state.locals)) {
-            if (local.status != LocalState::Status::Live ||
+            if (!isDefinitelyLive(local.status) ||
                 !types.needsDrop(local.type) || !predicate(local) ||
                 local.is_hidden != include_hidden) {
                 continue;

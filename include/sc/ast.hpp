@@ -9,7 +9,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -120,7 +119,7 @@ struct ResolvedPlace {
 
 struct CachedViewBinding {
     std::vector<std::uint32_t> path;
-    std::optional<ResolvedPlace> source_place;
+    std::vector<ResolvedPlace> source_places;
     std::optional<std::size_t> source_local_id;
     std::vector<ResolvedPlace> element_sources;
     const Type* type = nullptr;

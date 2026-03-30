@@ -155,12 +155,12 @@ auto SemanticAnalyzer::declareAggregateViewSlots(
         local.slot_root_id = base_place_copy.root_id;
         local.slot_path = std::move(full_path);
         if (abstract_sources && status == LocalState::Status::Live) {
-            local.borrow_origin = ast::ResolvedPlace{
-                .root_id = next_external_root++,
-                .is_external = true,
-                .owner_local_id = std::nullopt,
-                .fields = {},
-            };
+            setTopLevelOrigins(local, {ast::ResolvedPlace{
+                                          .root_id = next_external_root++,
+                                          .is_external = true,
+                                          .owner_local_id = std::nullopt,
+                                          .fields = {},
+                                      }});
         }
         registerViewSlot(state, local_index);
     }
@@ -224,9 +224,8 @@ auto SemanticAnalyzer::ensureViewSubtreeLive(
             return make_error("aggregate view slot is missing", range);
         }
         const auto& slot = state.locals[*slot_index];
-        if (!slot.in_scope || slot.status != LocalState::Status::Live) {
-            return make_error("cannot use a moved or uninitialized view value",
-                              range);
+        if (!slot.in_scope || !isDefinitelyLive(slot.status)) {
+            return make_error(viewStatusMessage(slot.status), range);
         }
         auto source_live = ensureViewSourceLive(state, slot, range);
         if (!source_live) {
@@ -234,6 +233,24 @@ auto SemanticAnalyzer::ensureViewSubtreeLive(
         }
     }
     return {};
+}
+
+auto SemanticAnalyzer::viewStatusMessage(LocalState::Status status) const
+    -> std::string {
+    switch (status) {
+    case LocalState::Status::Moved:
+        return "cannot use a moved view value";
+    case LocalState::Status::Uninitialized:
+        return "cannot use an uninitialized view value";
+    case LocalState::Status::MaybeLive:
+        return "view value may be moved or uninitialized due to control flow";
+    case LocalState::Status::Unavailable:
+        return "cannot use a view value whose source is unknown after this "
+               "call or control-flow path";
+    case LocalState::Status::Live:
+        break;
+    }
+    return "cannot use an invalid view value";
 }
 
 auto SemanticAnalyzer::collectSlotBindings(FunctionState& state,
@@ -256,9 +273,10 @@ auto SemanticAnalyzer::collectSlotBindings(FunctionState& state,
                 "aggregate view slot is missing", SourceRange{});
         }
         const auto& slot = state.locals[*slot_index];
+        const auto source_places = topLevelOrigins(slot);
         bindings.push_back(ViewLeafBinding{
             .path = leaf.path,
-            .source_place = slot.borrow_origin,
+            .source_places = source_places,
             .source_local_id = is_borrow_like_type(slot.type)
                                    ? std::optional<std::size_t>(slot.unique_id)
                                    : std::nullopt,
@@ -379,7 +397,7 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
         for (const auto& binding : *expr.cached_view_bindings) {
             bindings.push_back(ViewLeafBinding{
                 .path = binding.path,
-                .source_place = binding.source_place,
+                .source_places = binding.source_places,
                 .source_local_id = binding.source_local_id,
                 .element_sources = binding.element_sources,
                 .type = binding.type,
@@ -403,30 +421,62 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
     if (is_view_like_type(types, expr_type)) {
         ViewLeafBinding binding{
             .path = {},
-            .source_place = std::nullopt,
+            .source_places = {},
             .source_local_id = std::nullopt,
             .element_sources = {},
             .type = expr_type,
         };
         if (is_borrow_like_type(expr_type)) {
-            auto place = borrowSourcePlace(state, expr);
-            if (!place) {
-                return std::unexpected(place.error());
-            }
             auto local_id = borrowSourceLocalId(state, expr);
             if (!local_id) {
                 return std::unexpected(local_id.error());
             }
-            binding.source_place = *place;
             binding.source_local_id = *local_id;
-            if (expr.resolved_place.has_value()) {
+            if (!binding.source_local_id.has_value() &&
+                expr.resolved_place.has_value()) {
                 const auto slot_index = findViewSlotLocal(
                     state, expr.resolved_place->is_external,
                     expr.resolved_place->root_id, expr.resolved_place->fields);
                 if (slot_index.has_value()) {
+                    binding.source_local_id =
+                        state.locals[*slot_index].unique_id;
+                }
+            }
+            if (expr.cached_view_bindings.has_value()) {
+                const auto it = std::ranges::find_if(
+                    *expr.cached_view_bindings,
+                    [](const ast::CachedViewBinding& cached) {
+                        return cached.path.empty();
+                    });
+                if (it != expr.cached_view_bindings->end() &&
+                    !it->element_sources.empty()) {
+                    binding.source_places = it->element_sources;
+                } else if (it != expr.cached_view_bindings->end()) {
+                    binding.source_places = it->source_places;
+                }
+            }
+            if (binding.source_places.empty() &&
+                expr.resolved_place.has_value()) {
+                const auto slot_index = findViewSlotLocal(
+                    state, expr.resolved_place->is_external,
+                    expr.resolved_place->root_id, expr.resolved_place->fields);
+                if (slot_index.has_value()) {
+                    binding.source_places =
+                        topLevelOrigins(state.locals[*slot_index]);
                     binding.element_sources =
                         state.locals[*slot_index].element_origins;
+                    if (!binding.source_local_id.has_value()) {
+                        binding.source_local_id =
+                            state.locals[*slot_index].unique_id;
+                    }
                 }
+            }
+            if (binding.source_places.empty()) {
+                auto source_places = projectedPlaceTargets(state, expr);
+                if (!source_places) {
+                    return std::unexpected(source_places.error());
+                }
+                binding.source_places = std::move(*source_places);
             }
             if (binding.element_sources.empty()) {
                 auto projected_sources = projectedPlaceSources(state, expr);
@@ -435,12 +485,48 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                 }
                 binding.element_sources = std::move(*projected_sources);
             }
-        } else {
-            auto place = sliceSourcePlace(state, expr);
-            if (!place) {
-                return std::unexpected(place.error());
+            if (binding.source_places.empty()) {
+                auto place = borrowSourcePlace(state, expr);
+                if (!place) {
+                    return std::unexpected(place.error());
+                }
+                binding.source_places = {*place};
             }
-            binding.source_place = *place;
+        } else {
+            if (expr.resolved_place.has_value()) {
+                const auto slot_index = findViewSlotLocal(
+                    state, expr.resolved_place->is_external,
+                    expr.resolved_place->root_id, expr.resolved_place->fields);
+                if (slot_index.has_value()) {
+                    binding.source_local_id =
+                        state.locals[*slot_index].unique_id;
+                }
+            }
+            if (expr.resolved_place.has_value()) {
+                const auto slot_index = findViewSlotLocal(
+                    state, expr.resolved_place->is_external,
+                    expr.resolved_place->root_id, expr.resolved_place->fields);
+                if (slot_index.has_value()) {
+                    binding.source_places =
+                        topLevelOrigins(state.locals[*slot_index]);
+                }
+            }
+            if (binding.source_places.empty()) {
+                auto source_places = projectedPlaceTargets(state, expr);
+                if (!source_places) {
+                    return std::unexpected(source_places.error());
+                }
+                binding.source_places = std::move(*source_places);
+            }
+            if (binding.source_places.empty()) {
+                auto place = sliceSourcePlace(state, expr);
+                if (!place) {
+                    return std::unexpected(place.error());
+                }
+                if (place->has_value()) {
+                    binding.source_places = {**place};
+                }
+            }
         }
         if (is_direct_shared_view_slice(types, expr_type) &&
             expr.resolved_place.has_value()) {
@@ -511,6 +597,16 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
 
         if (call->function != nullptr &&
             !call->function->return_dependencies.empty()) {
+            const auto has_return_dependencies = std::ranges::any_of(
+                call->function->return_dependencies,
+                [](const ast::ReturnDependency& dependency) {
+                    return dependency.target.is_return;
+                });
+            if (!has_return_dependencies) {
+                return unexpected_result<std::vector<ViewLeafBinding>>(
+                    "could not determine aggregate borrow or slice sources",
+                    expr.range);
+            }
             std::vector<ViewLeafBinding> bindings;
             std::vector<std::vector<ViewLeafBinding>> cached_arguments(
                 call->arguments.size());
@@ -526,6 +622,9 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
             };
 
             for (const auto& dependency : call->function->return_dependencies) {
+                if (!dependency.target.is_return) {
+                    continue;
+                }
                 if (!dependency.source.parameter_index.has_value()) {
                     continue;
                 }
@@ -566,7 +665,7 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                                        target_leaves[index].path.end());
                     bindings.push_back(ViewLeafBinding{
                         .path = std::move(target_path),
-                        .source_place = source_binding->source_place,
+                        .source_places = source_binding->source_places,
                         .source_local_id = source_binding->source_local_id,
                         .element_sources = source_binding->element_sources,
                         .type = target_leaves[index].type,
@@ -626,10 +725,9 @@ auto SemanticAnalyzer::setAggregateViewSlots(
 
         auto& slot = state.locals[*slot_index];
         releaseReborrowParent(state, slot);
-        slot.borrow_origin = binding->source_place;
+        setTopLevelOrigins(slot, binding->source_places);
         slot.element_origins = binding->element_sources;
-        auto outlives =
-            ensureViewSourceOutlivesLocal(state, slot, std::nullopt, range);
+        auto outlives = ensureViewSourceOutlivesLocal(state, slot, range);
         if (!outlives) {
             return std::unexpected(outlives.error());
         }
@@ -675,7 +773,7 @@ auto SemanticAnalyzer::markAggregateViewSlots(
 
 auto SemanticAnalyzer::resolveDependencyPath(
     ast::DependencyPath& path, const Type* root_type,
-    std::optional<std::size_t> parameter_index)
+    std::optional<std::size_t> parameter_index, bool allow_borrow_projection)
     -> std::expected<void, Diagnostic> {
     path.parameter_index = parameter_index;
     path.resolved_path.clear();
@@ -685,7 +783,14 @@ auto SemanticAnalyzer::resolveDependencyPath(
         if (current_type == nullptr) {
             return make_error("invalid depends path", segment.range);
         }
-        const auto* current_base = types.unqualify(current_type);
+        const Type* projected_type = current_type;
+        const Type* current_base = types.unqualify(projected_type);
+        while (allow_borrow_projection &&
+               current_base->kind == TypeKind::Borrow &&
+               current_base->element_type != nullptr) {
+            projected_type = current_base->element_type;
+            current_base = types.unqualify(projected_type);
+        }
         if (current_base->kind == TypeKind::Struct &&
             current_base->struct_decl != nullptr) {
             const auto& fields = current_base->struct_decl->fields;
@@ -750,25 +855,28 @@ auto SemanticAnalyzer::resolveDependencyPath(
 auto SemanticAnalyzer::validateReturnDependencies(ast::FunctionDecl& decl)
     -> std::expected<void, Diagnostic> {
     const auto returns_views = typeContainsViews(decl.resolved_return_type);
-    if (!decl.return_dependencies.empty() && !returns_views) {
+    const auto has_mut_view_parameter = std::ranges::any_of(
+        decl.parameters, [&](const ast::Parameter& parameter) {
+            return parameter.resolved_type != nullptr &&
+                   parameter.resolved_type->kind == TypeKind::Borrow &&
+                   parameter.resolved_type->is_mut &&
+                   parameter.resolved_type->element_type != nullptr &&
+                   typeContainsViews(parameter.resolved_type->element_type);
+        });
+    if (!decl.return_dependencies.empty() && !returns_views &&
+        !has_mut_view_parameter) {
         return make_error("depends clause is only valid on functions whose "
-                          "return type contains a borrow or slice",
+                          "return type or mutable borrow parameters contain "
+                          "a borrow or slice view",
                           decl.range);
     }
-    if (!returns_views) {
+    if (!returns_views && !has_mut_view_parameter) {
         return {};
     }
 
     const auto return_leaves = collectViewLeafInfos(decl.resolved_return_type);
-    if (std::ranges::any_of(return_leaves, [&](const ViewLeafInfo& leaf) {
-            return is_direct_shared_view_slice(types, leaf.type);
-        })) {
-        return make_error("functions cannot return slices whose elements are "
-                          "shared borrow or interface values",
-                          decl.range);
-    }
 
-    if (decl.return_dependencies.empty()) {
+    if (returns_views && decl.return_dependencies.empty()) {
         if (is_view_like_type(types, decl.resolved_return_type)) {
             std::optional<std::size_t> only_view_parameter;
             for (std::size_t index = 0; index < decl.parameters.size();
@@ -810,18 +918,57 @@ auto SemanticAnalyzer::validateReturnDependencies(ast::FunctionDecl& decl)
         }
     }
 
-    std::vector<std::vector<std::uint32_t>> covered_leaves;
-    covered_leaves.reserve(return_leaves.size());
+    struct CoveredDependencyLeaf {
+        bool is_return = false;
+        std::optional<std::size_t> parameter_index;
+        std::vector<std::uint32_t> path;
+    };
+    std::vector<CoveredDependencyLeaf> covered_leaves;
+    covered_leaves.reserve(return_leaves.size() +
+                           decl.return_dependencies.size());
 
     for (auto& dependency : decl.return_dependencies) {
-        if (!dependency.target.is_return) {
-            return make_error("depends target must start with 'return'",
-                              dependency.target.range);
-        }
-        auto resolved_target = resolveDependencyPath(
-            dependency.target, decl.resolved_return_type, std::nullopt);
-        if (!resolved_target) {
-            return std::unexpected(resolved_target.error());
+        if (dependency.target.is_return) {
+            auto resolved_target = resolveDependencyPath(
+                dependency.target, decl.resolved_return_type, std::nullopt);
+            if (!resolved_target) {
+                return std::unexpected(resolved_target.error());
+            }
+        } else {
+            std::optional<std::size_t> target_parameter_index;
+            const Type* target_root_type = nullptr;
+            for (std::size_t index = 0; index < decl.parameters.size();
+                 ++index) {
+                if (decl.parameters[index].name !=
+                    dependency.target.root_name) {
+                    continue;
+                }
+                target_parameter_index = index;
+                target_root_type = decl.parameters[index].resolved_type;
+                break;
+            }
+            if (!target_parameter_index.has_value() ||
+                target_root_type == nullptr) {
+                return make_error("depends target '" +
+                                      dependency.target.root_name +
+                                      "' is not a parameter",
+                                  dependency.target.range);
+            }
+            if (target_root_type->kind != TypeKind::Borrow ||
+                !target_root_type->is_mut ||
+                target_root_type->element_type == nullptr ||
+                !typeContainsViews(target_root_type->element_type)) {
+                return make_error("depends parameter target must be a mutable "
+                                  "borrow parameter whose pointee contains a "
+                                  "borrow or slice view",
+                                  dependency.target.range);
+            }
+            auto resolved_target = resolveDependencyPath(
+                dependency.target, target_root_type->element_type,
+                target_parameter_index);
+            if (!resolved_target) {
+                return std::unexpected(resolved_target.error());
+            }
         }
 
         std::optional<std::size_t> parameter_index;
@@ -841,7 +988,7 @@ auto SemanticAnalyzer::validateReturnDependencies(ast::FunctionDecl& decl)
         }
 
         auto resolved_source = resolveDependencyPath(
-            dependency.source, source_root_type, parameter_index);
+            dependency.source, source_root_type, parameter_index, true);
         if (!resolved_source) {
             return std::unexpected(resolved_source.error());
         }
@@ -861,23 +1008,57 @@ auto SemanticAnalyzer::validateReturnDependencies(ast::FunctionDecl& decl)
                                   "matching aggregate view structure",
                                   dependency.range);
             }
+            if (is_direct_shared_view_slice(types,
+                                            target_suffixes[index].type)) {
+                const auto* source_leaf_type = source_suffixes[index].type;
+                const auto* source_leaf_base =
+                    source_leaf_type == nullptr
+                        ? nullptr
+                        : types.unqualify(source_leaf_type);
+                const auto source_is_slice =
+                    source_leaf_base != nullptr &&
+                    (source_leaf_base->kind == TypeKind::Slice ||
+                     (source_leaf_base->kind == TypeKind::Borrow &&
+                      source_leaf_base->element_type != nullptr &&
+                      types.unqualify(source_leaf_base->element_type)->kind ==
+                          TypeKind::Slice));
+                if (!source_is_slice) {
+                    return make_error(
+                        "shared-borrow slice returns must depend on an "
+                        "incoming slice source",
+                        dependency.range);
+                }
+            }
             auto full_target_path = dependency.target.resolved_path;
             full_target_path.insert(full_target_path.end(),
                                     target_suffixes[index].path.begin(),
                                     target_suffixes[index].path.end());
-            if (std::ranges::find(covered_leaves, full_target_path) !=
-                covered_leaves.end()) {
+            const auto covered_it = std::ranges::find_if(
+                covered_leaves, [&](const CoveredDependencyLeaf& leaf) {
+                    return leaf.is_return == dependency.target.is_return &&
+                           leaf.parameter_index ==
+                               dependency.target.parameter_index &&
+                           leaf.path == full_target_path;
+                });
+            if (covered_it != covered_leaves.end()) {
                 return make_error(
                     "depends clause overlaps on the same return path",
                     dependency.range);
             }
-            covered_leaves.push_back(std::move(full_target_path));
+            covered_leaves.push_back(CoveredDependencyLeaf{
+                .is_return = dependency.target.is_return,
+                .parameter_index = dependency.target.parameter_index,
+                .path = std::move(full_target_path),
+            });
         }
     }
 
     for (const auto& leaf : return_leaves) {
-        if (std::ranges::find(covered_leaves, leaf.path) ==
-            covered_leaves.end()) {
+        const auto covered_it = std::ranges::find_if(
+            covered_leaves, [&](const CoveredDependencyLeaf& covered_leaf) {
+                return covered_leaf.is_return && covered_leaf.path == leaf.path;
+            });
+        if (covered_it == covered_leaves.end()) {
             return make_error("depends clause must cover every borrow and "
                               "slice path in the return type",
                               decl.range);

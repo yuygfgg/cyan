@@ -43,11 +43,12 @@ auto SemanticAnalyzer::analyzeFunction(ast::FunctionDecl& decl)
         local.status = LocalState::Status::Live;
         parameter.local_id = local.unique_id;
         if (is_view_like_type(types, local.type)) {
-            local.borrow_origin =
-                ast::ResolvedPlace{.root_id = next_external_root++,
-                                   .is_external = true,
-                                   .owner_local_id = std::nullopt,
-                                   .fields = {}};
+            setTopLevelOrigins(local, {ast::ResolvedPlace{
+                                          .root_id = next_external_root++,
+                                          .is_external = true,
+                                          .owner_local_id = std::nullopt,
+                                          .fields = {},
+                                      }});
             local.is_view_slot = true;
             local.slot_root_is_external = false;
             local.slot_root_id = local.unique_id;
@@ -55,8 +56,16 @@ auto SemanticAnalyzer::analyzeFunction(ast::FunctionDecl& decl)
             if (local.type->kind == TypeKind::Borrow &&
                 local.type->element_type != nullptr &&
                 typeContainsViews(local.type->element_type)) {
+                const auto origin =
+                    placeSetRepresentative(topLevelOrigins(local));
+                if (!origin.has_value()) {
+                    report(Diagnostic("borrow parameter is missing provenance",
+                                      parameter.range));
+                    had_error = true;
+                    continue;
+                }
                 auto slots = declareAggregateViewSlots(
-                    state, *local.borrow_origin, local.type->element_type, true,
+                    state, *origin, local.type->element_type, true,
                     LocalState::Status::Live);
                 if (!slots) {
                     report(slots.error());
@@ -111,6 +120,15 @@ auto SemanticAnalyzer::analyzeFunction(ast::FunctionDecl& decl)
 
     decl.exit_drop_local_ids = collectDropLocalIds(
         state, [](const LocalState& local) { return local.in_scope; });
+    if (state.reachable &&
+        types.unqualify(decl.resolved_return_type) == types.voidType()) {
+        auto validated_outputs =
+            validateMutableParameterDependencies(state, decl.range);
+        if (!validated_outputs) {
+            report(validated_outputs.error());
+            had_error = true;
+        }
+    }
     if (state.reachable &&
         types.unqualify(decl.resolved_return_type) != types.voidType()) {
         report(Diagnostic("missing return in non-void function", decl.range));
@@ -291,15 +309,59 @@ auto SemanticAnalyzer::analyzeAssign(FunctionState& state,
                                  : std::optional<std::size_t>{};
     const auto slot_index = findViewSlotLocal(state, place->is_external,
                                               place->root_id, place->fields);
+    auto write_targets = projectedPlaceTargets(state, *stmt.target);
+    if (!write_targets) {
+        return std::unexpected(write_targets.error());
+    }
+    if (!place->is_external && place->fields.empty() &&
+        types.unqualify(target_type)->kind == TypeKind::Slice) {
+        *write_targets = std::vector<ast::ResolvedPlace>{*place};
+    } else if (write_targets->empty()) {
+        *write_targets = std::vector<ast::ResolvedPlace>{*place};
+    }
+    auto write_ignored_local = [&](const ast::ResolvedPlace& write_target)
+        -> std::optional<std::size_t> {
+        if (place->owner_local_id.has_value()) {
+            return place->owner_local_id;
+        }
+        if (write_target.owner_local_id.has_value()) {
+            return write_target.owner_local_id;
+        }
+        if (!place->is_external && place->fields.empty()) {
+            const auto owner_index = findLocalById(state, place->root_id);
+            if (owner_index.has_value()) {
+                const auto& owner_local = state.locals[*owner_index];
+                if (owner_local.type != nullptr &&
+                    types.unqualify(owner_local.type)->kind ==
+                        TypeKind::Slice) {
+                    return owner_local.unique_id;
+                }
+            }
+        }
+        if (!place->is_external && !place->fields.empty()) {
+            const auto owner_index = findLocalById(state, place->root_id);
+            if (owner_index.has_value()) {
+                const auto& owner_local = state.locals[*owner_index];
+                if (is_borrow_like_type(owner_local.type) &&
+                    owner_local.type->is_mut) {
+                    return owner_local.unique_id;
+                }
+            }
+        }
+        return std::nullopt;
+    };
     if (slot_index.has_value() && is_borrow_like_type(target_type) &&
-        !place->is_external) {
-        auto writable = ensureCanWrite(state, *place, stmt.target->range,
-                                       place->owner_local_id);
-        if (!writable) {
-            return std::unexpected(writable.error());
+        !place->is_external && !place->fields.empty()) {
+        for (const auto& write_target : *write_targets) {
+            auto writable =
+                ensureCanWrite(state, write_target, stmt.target->range,
+                               write_ignored_local(write_target));
+            if (!writable) {
+                return std::unexpected(writable.error());
+            }
         }
         if (local_index.has_value() &&
-            state.locals[*local_index].status != LocalState::Status::Live) {
+            !isDefinitelyLive(state.locals[*local_index].status)) {
             return make_error(
                 "cannot write through a moved or uninitialized base value",
                 stmt.target->range);
@@ -329,17 +391,19 @@ auto SemanticAnalyzer::analyzeAssign(FunctionState& state,
         }
     }
 
-    auto writable = ensureCanWrite(state, *place, stmt.target->range,
-                                   place->owner_local_id);
-    if (!writable) {
-        return std::unexpected(writable.error());
+    for (const auto& write_target : *write_targets) {
+        auto writable = ensureCanWrite(state, write_target, stmt.target->range,
+                                       write_ignored_local(write_target));
+        if (!writable) {
+            return std::unexpected(writable.error());
+        }
     }
 
     auto root_was_live_before_assign = false;
     if (local_index.has_value()) {
         auto& root = state.locals[*local_index];
         root_was_live_before_assign =
-            place->fields.empty() && root.status == LocalState::Status::Live;
+            place->fields.empty() && isDefinitelyLive(root.status);
         if (root_was_live_before_assign && types.needsDrop(target_type) &&
             typeContainsViews(target_type)) {
             auto live = ensureViewSubtreeLive(state, *place, target_type,
@@ -348,10 +412,8 @@ auto SemanticAnalyzer::analyzeAssign(FunctionState& state,
                 return std::unexpected(live.error());
             }
         }
-        if (root.status != LocalState::Status::Live) {
-            if (place->fields.empty()) {
-                root.status = LocalState::Status::Live;
-            } else {
+        if (!isDefinitelyLive(root.status)) {
+            if (!place->fields.empty()) {
                 return make_error(
                     "cannot write through a moved or uninitialized base value",
                     stmt.target->range);
@@ -379,7 +441,7 @@ auto SemanticAnalyzer::analyzeAssign(FunctionState& state,
 
     if (local_index.has_value() && place->fields.empty()) {
         const auto root_still_holds_old_value =
-            state.locals[*local_index].status == LocalState::Status::Live;
+            isDefinitelyLive(state.locals[*local_index].status);
         stmt.drop_old_value = root_was_live_before_assign &&
                               root_still_holds_old_value &&
                               types.needsDrop(target_type);
@@ -405,7 +467,7 @@ auto SemanticAnalyzer::analyzeAssign(FunctionState& state,
 auto SemanticAnalyzer::analyzeUpdate(FunctionState& state,
                                      ast::UpdateStmt& stmt)
     -> std::expected<void, Diagnostic> {
-    auto target_type = analyzeExpr(state, *stmt.target);
+    auto target_type = requireReadable(state, *stmt.target);
     if (!target_type) {
         return std::unexpected(target_type.error());
     }
@@ -422,15 +484,44 @@ auto SemanticAnalyzer::analyzeUpdate(FunctionState& state,
                                  ? findLocalById(state, place->root_id)
                                  : std::optional<std::size_t>{};
 
-    auto writable = ensureCanWrite(state, *place, stmt.target->range,
-                                   place->owner_local_id);
-    if (!writable) {
-        return std::unexpected(writable.error());
+    auto write_targets = projectedPlaceTargets(state, *stmt.target);
+    if (!write_targets) {
+        return std::unexpected(write_targets.error());
+    }
+    if (write_targets->empty()) {
+        *write_targets = std::vector<ast::ResolvedPlace>{*place};
+    }
+    auto write_ignored_local = [&](const ast::ResolvedPlace& write_target)
+        -> std::optional<std::size_t> {
+        if (place->owner_local_id.has_value()) {
+            return place->owner_local_id;
+        }
+        if (write_target.owner_local_id.has_value()) {
+            return write_target.owner_local_id;
+        }
+        if (!place->is_external && !place->fields.empty()) {
+            const auto owner_index = findLocalById(state, place->root_id);
+            if (owner_index.has_value()) {
+                const auto& owner_local = state.locals[*owner_index];
+                if (is_borrow_like_type(owner_local.type) &&
+                    owner_local.type->is_mut) {
+                    return owner_local.unique_id;
+                }
+            }
+        }
+        return std::nullopt;
+    };
+    for (const auto& write_target : *write_targets) {
+        auto writable = ensureCanWrite(state, write_target, stmt.target->range,
+                                       write_ignored_local(write_target));
+        if (!writable) {
+            return std::unexpected(writable.error());
+        }
     }
 
     if (local_index.has_value()) {
         const auto& local = state.locals[*local_index];
-        if (local.status != LocalState::Status::Live) {
+        if (!isDefinitelyLive(local.status)) {
             if (place->fields.empty()) {
                 return make_error(
                     "cannot update a moved or uninitialized value",
@@ -459,6 +550,137 @@ auto SemanticAnalyzer::analyzeUpdate(FunctionState& state,
                       stmt.target->range);
 }
 
+auto SemanticAnalyzer::validateMutableParameterDependencies(
+    FunctionState& state, SourceRange range)
+    -> std::expected<void, Diagnostic> {
+    auto find_binding =
+        [](std::vector<ViewLeafBinding>& bindings,
+           const std::vector<std::uint32_t>& path) -> ViewLeafBinding* {
+        const auto it =
+            std::ranges::find_if(bindings, [&](const ViewLeafBinding& binding) {
+                return binding.path == path;
+            });
+        return it == bindings.end() ? nullptr : &(*it);
+    };
+    auto binding_places =
+        [&](const ViewLeafBinding& binding) -> std::vector<ast::ResolvedPlace> {
+        if (binding.type != nullptr &&
+            is_direct_shared_view_slice(types, binding.type) &&
+            !binding.element_sources.empty()) {
+            return binding.element_sources;
+        }
+        if (!binding.source_places.empty()) {
+            return binding.source_places;
+        }
+        return {};
+    };
+
+    std::unordered_map<std::size_t, std::vector<ViewLeafBinding>>
+        cached_parameter_bindings;
+    auto parameter_bindings = [&](std::size_t parameter_index)
+        -> std::expected<std::vector<ViewLeafBinding>*, Diagnostic> {
+        if (!cached_parameter_bindings.contains(parameter_index)) {
+            const auto& parameter = state.function->parameters[parameter_index];
+            auto bindings = collectSlotBindings(
+                state, localPlace(parameter.local_id), parameter.resolved_type);
+            if (!bindings) {
+                return std::unexpected(bindings.error());
+            }
+            cached_parameter_bindings.emplace(parameter_index,
+                                              std::move(*bindings));
+        }
+        return &cached_parameter_bindings.at(parameter_index);
+    };
+
+    for (const auto& dependency : state.function->return_dependencies) {
+        if (dependency.target.is_return ||
+            !dependency.target.parameter_index.has_value() ||
+            !dependency.source.parameter_index.has_value()) {
+            continue;
+        }
+
+        auto source_bindings =
+            parameter_bindings(*dependency.source.parameter_index);
+        if (!source_bindings) {
+            return std::unexpected(source_bindings.error());
+        }
+
+        const auto& target_parameter =
+            state.function->parameters[*dependency.target.parameter_index];
+        const auto target_local_index =
+            findLocalById(state, target_parameter.local_id);
+        if (!target_local_index.has_value()) {
+            return make_error("invalid depends target parameter", range);
+        }
+
+        auto target_origin = placeSetRepresentative(
+            topLevelOrigins(state.locals[*target_local_index]));
+        if (!target_origin.has_value()) {
+            return make_error("depends target parameter is missing provenance",
+                              range);
+        }
+        target_origin->fields.insert(target_origin->fields.end(),
+                                     dependency.target.resolved_path.begin(),
+                                     dependency.target.resolved_path.end());
+
+        auto actual_bindings = collectSlotBindings(
+            state, *target_origin, dependency.target.resolved_type);
+        if (!actual_bindings) {
+            return std::unexpected(actual_bindings.error());
+        }
+
+        const auto target_leaves =
+            collectViewLeafInfos(dependency.target.resolved_type);
+        const auto source_leaves =
+            collectViewLeafInfos(dependency.source.resolved_type);
+        for (std::size_t leaf_index = 0; leaf_index < target_leaves.size();
+             ++leaf_index) {
+            auto source_path = dependency.source.resolved_path;
+            source_path.insert(source_path.end(),
+                               source_leaves[leaf_index].path.begin(),
+                               source_leaves[leaf_index].path.end());
+            auto* source_binding = find_binding(**source_bindings, source_path);
+            if (source_binding == nullptr) {
+                return make_error("depends source path is missing a tracked "
+                                  "borrow or slice leaf",
+                                  range);
+            }
+
+            auto* actual_binding =
+                find_binding(*actual_bindings, target_leaves[leaf_index].path);
+            if (actual_binding == nullptr) {
+                return make_error("depends target path is missing a tracked "
+                                  "borrow or slice leaf",
+                                  range);
+            }
+
+            const auto actual_places = binding_places(*actual_binding);
+            const auto expected_places = binding_places(*source_binding);
+            if (actual_places.empty()) {
+                return make_error("mutable parameter borrow or slice has no "
+                                  "tracked source",
+                                  range);
+            }
+            const auto every_actual_is_covered = std::ranges::all_of(
+                actual_places, [&](const ast::ResolvedPlace& actual_place) {
+                    return std::ranges::any_of(
+                        expected_places,
+                        [&](const ast::ResolvedPlace& expected_place) {
+                            return is_same_or_subplace(actual_place,
+                                                       expected_place);
+                        });
+                });
+            if (expected_places.empty() || !every_actual_is_covered) {
+                return make_error("mutable parameter borrow or slice does not "
+                                  "match its declared depends source",
+                                  range);
+            }
+        }
+    }
+
+    return {};
+}
+
 auto SemanticAnalyzer::analyzeReturn(FunctionState& state,
                                      ast::ReturnStmt& stmt)
     -> std::expected<void, Diagnostic> {
@@ -466,6 +688,11 @@ auto SemanticAnalyzer::analyzeReturn(FunctionState& state,
         if (stmt.value != nullptr) {
             return make_error("void function cannot return a value",
                               stmt.value->range);
+        }
+        auto validated_outputs =
+            validateMutableParameterDependencies(state, state.function->range);
+        if (!validated_outputs) {
+            return std::unexpected(validated_outputs.error());
         }
         stmt.drop_local_ids = collectDropLocalIds(
             state, [](const LocalState& local) { return local.in_scope; });
@@ -522,8 +749,59 @@ auto SemanticAnalyzer::analyzeReturn(FunctionState& state,
                 });
             return it == bindings.end() ? nullptr : &(*it);
         };
+        const auto return_dependency_count =
+            std::ranges::count_if(state.function->return_dependencies,
+                                  [](const ast::ReturnDependency& dependency) {
+                                      return dependency.target.is_return;
+                                  });
+        auto resolve_shared_slice_sources =
+            [&](const ViewLeafBinding& source_binding, const Type* source_type)
+            -> std::expected<std::vector<ast::ResolvedPlace>, Diagnostic> {
+            std::vector<ast::ResolvedPlace> sources =
+                source_binding.element_sources;
+            const auto* source_base =
+                source_type == nullptr ? nullptr : types.unqualify(source_type);
+            const auto source_is_borrowed_slice =
+                source_base != nullptr &&
+                source_base->kind == TypeKind::Borrow &&
+                source_base->element_type != nullptr &&
+                types.unqualify(source_base->element_type)->kind ==
+                    TypeKind::Slice;
+            if (!source_is_borrowed_slice || !sources.empty()) {
+                return sources;
+            }
+
+            for (const auto& source_place : source_binding.source_places) {
+                auto pointee_bindings = collectSlotBindings(
+                    state, source_place, source_base->element_type);
+                if (!pointee_bindings) {
+                    return std::unexpected(pointee_bindings.error());
+                }
+                const auto pointee_it = std::ranges::find_if(
+                    *pointee_bindings, [](const ViewLeafBinding& binding) {
+                        return binding.path.empty();
+                    });
+                if (pointee_it == pointee_bindings->end()) {
+                    continue;
+                }
+                const auto& pointee_sources =
+                    !pointee_it->element_sources.empty()
+                        ? pointee_it->element_sources
+                        : pointee_it->source_places;
+                for (const auto& pointee_source : pointee_sources) {
+                    if (std::ranges::find(sources, pointee_source) ==
+                        sources.end()) {
+                        sources.push_back(pointee_source);
+                    }
+                }
+            }
+            return sources;
+        };
 
         for (const auto& dependency : state.function->return_dependencies) {
+            if (!dependency.target.is_return) {
+                continue;
+            }
             if (!dependency.source.parameter_index.has_value()) {
                 continue;
             }
@@ -558,19 +836,42 @@ auto SemanticAnalyzer::analyzeReturn(FunctionState& state,
                                       "tracked borrow or slice leaf",
                                       stmt.value->range);
                 }
+                auto source_element_sources = source_binding->element_sources;
+                if (is_direct_shared_view_slice(types,
+                                                target_leaves[index].type)) {
+                    auto shared_sources = resolve_shared_slice_sources(
+                        *source_binding, source_leaves[index].type);
+                    if (!shared_sources) {
+                        return std::unexpected(shared_sources.error());
+                    }
+                    source_element_sources = std::move(*shared_sources);
+                }
                 auto target_path = dependency.target.resolved_path;
                 target_path.insert(target_path.end(),
                                    target_leaves[index].path.begin(),
                                    target_leaves[index].path.end());
                 expected_bindings.push_back(ViewLeafBinding{
                     .path = std::move(target_path),
-                    .source_place = source_binding->source_place,
+                    .source_places = source_binding->source_places,
                     .source_local_id = source_binding->source_local_id,
-                    .element_sources = source_binding->element_sources,
+                    .element_sources = std::move(source_element_sources),
                     .type = target_leaves[index].type,
                 });
             }
         }
+
+        auto binding_places = [&](const ViewLeafBinding& binding)
+            -> std::vector<ast::ResolvedPlace> {
+            if (binding.type != nullptr &&
+                is_direct_shared_view_slice(types, binding.type) &&
+                !binding.element_sources.empty()) {
+                return binding.element_sources;
+            }
+            if (!binding.source_places.empty()) {
+                return binding.source_places;
+            }
+            return {};
+        };
 
         for (auto& actual_binding : actual_bindings) {
             auto* expected_binding =
@@ -580,32 +881,47 @@ auto SemanticAnalyzer::analyzeReturn(FunctionState& state,
                                   "covered by depends clause",
                                   stmt.value->range);
             }
-            if (!actual_binding.source_place.has_value()) {
+            const auto actual_places = binding_places(actual_binding);
+            const auto expected_places = binding_places(*expected_binding);
+            if (actual_places.empty()) {
                 return make_error(
                     "returned borrow or slice has no tracked source",
                     stmt.value->range);
             }
-            if (!expected_binding->source_place.has_value() ||
-                !is_same_or_subplace(*actual_binding.source_place,
-                                     *expected_binding->source_place)) {
+            const auto every_actual_is_covered = std::ranges::all_of(
+                actual_places, [&](const ast::ResolvedPlace& actual_place) {
+                    return std::ranges::any_of(
+                        expected_places,
+                        [&](const ast::ResolvedPlace& expected_place) {
+                            return is_same_or_subplace(actual_place,
+                                                       expected_place);
+                        });
+                });
+            if (expected_places.empty() || !every_actual_is_covered) {
                 if (actual_binding.path.empty() &&
-                    state.function->return_dependencies.size() == 1 &&
-                    state.function->return_dependencies.front()
-                        .target.resolved_path.empty()) {
-                    const auto& source =
-                        state.function->return_dependencies.front().source;
-                    if (is_borrow_like_type(state.return_type)) {
-                        return make_error("returned borrow does not match "
-                                          "depends(return on " +
-                                              source.root_name + ")",
-                                          stmt.value->range);
-                    }
-                    if (types.unqualify(state.return_type)->kind ==
-                        TypeKind::Slice) {
-                        return make_error(
-                            "returned slice does not match depends(return on " +
-                                source.root_name + ")",
-                            stmt.value->range);
+                    return_dependency_count == 1) {
+                    const auto return_dependency_it = std::ranges::find_if(
+                        state.function->return_dependencies,
+                        [](const ast::ReturnDependency& dependency) {
+                            return dependency.target.is_return &&
+                                   dependency.target.resolved_path.empty();
+                        });
+                    if (return_dependency_it !=
+                        state.function->return_dependencies.end()) {
+                        const auto& source = return_dependency_it->source;
+                        if (is_borrow_like_type(state.return_type)) {
+                            return make_error("returned borrow does not match "
+                                              "depends(return on " +
+                                                  source.root_name + ")",
+                                              stmt.value->range);
+                        }
+                        if (types.unqualify(state.return_type)->kind ==
+                            TypeKind::Slice) {
+                            return make_error("returned slice does not match "
+                                              "depends(return on " +
+                                                  source.root_name + ")",
+                                              stmt.value->range);
+                        }
                     }
                 }
                 return make_error("returned borrow or slice does not match its "
@@ -613,6 +929,11 @@ auto SemanticAnalyzer::analyzeReturn(FunctionState& state,
                                   stmt.value->range);
             }
         }
+    }
+    auto validated_outputs =
+        validateMutableParameterDependencies(state, state.function->range);
+    if (!validated_outputs) {
+        return std::unexpected(validated_outputs.error());
     }
     stmt.drop_local_ids = collectDropLocalIds(
         state, [](const LocalState& local) { return local.in_scope; });
@@ -668,10 +989,39 @@ auto SemanticAnalyzer::analyzeDrop(FunctionState& state, ast::DropStmt& stmt)
                           stmt.value->range);
     }
 
-    auto writable =
-        ensureCanWrite(state, *place, stmt.value->range, place->owner_local_id);
-    if (!writable) {
-        return std::unexpected(writable.error());
+    auto write_targets = projectedPlaceTargets(state, *stmt.value);
+    if (!write_targets) {
+        return std::unexpected(write_targets.error());
+    }
+    if (write_targets->empty()) {
+        *write_targets = std::vector<ast::ResolvedPlace>{*place};
+    }
+    auto write_ignored_local = [&](const ast::ResolvedPlace& write_target)
+        -> std::optional<std::size_t> {
+        if (place->owner_local_id.has_value()) {
+            return place->owner_local_id;
+        }
+        if (write_target.owner_local_id.has_value()) {
+            return write_target.owner_local_id;
+        }
+        if (!place->is_external && !place->fields.empty()) {
+            const auto owner_index = findLocalById(state, place->root_id);
+            if (owner_index.has_value()) {
+                const auto& owner_local = state.locals[*owner_index];
+                if (is_borrow_like_type(owner_local.type) &&
+                    owner_local.type->is_mut) {
+                    return owner_local.unique_id;
+                }
+            }
+        }
+        return std::nullopt;
+    };
+    for (const auto& write_target : *write_targets) {
+        auto writable = ensureCanWrite(state, write_target, stmt.value->range,
+                                       write_ignored_local(write_target));
+        if (!writable) {
+            return std::unexpected(writable.error());
+        }
     }
 
     if (!types.needsDrop(*expr_type)) {
@@ -704,7 +1054,7 @@ auto SemanticAnalyzer::analyzeIf(FunctionState& state, ast::IfStmt& stmt)
         }
     };
 
-    auto condition_type = analyzeExpr(state, *stmt.condition);
+    auto condition_type = requireReadable(state, *stmt.condition);
     if (!condition_type) {
         return std::unexpected(condition_type.error());
     }
@@ -734,8 +1084,8 @@ auto SemanticAnalyzer::analyzeIf(FunctionState& state, ast::IfStmt& stmt)
     appendContinueStates(state, else_state);
 
     if (then_state.reachable && else_state.reachable) {
-        auto merged =
-            branchMerge(state, then_state, else_state, stmt.condition->range);
+        auto merged = branchMerge(state, then_state, else_state,
+                                  stmt.condition->range, MergePolicy::Join);
         if (!merged) {
             return std::unexpected(merged.error());
         }
@@ -761,7 +1111,7 @@ auto SemanticAnalyzer::analyzeIf(FunctionState& state, ast::IfStmt& stmt)
 
 auto SemanticAnalyzer::analyzeWhile(FunctionState& state, ast::WhileStmt& stmt)
     -> std::expected<void, Diagnostic> {
-    auto condition_type = analyzeExpr(state, *stmt.condition);
+    auto condition_type = requireReadable(state, *stmt.condition);
     if (!condition_type) {
         return std::unexpected(condition_type.error());
     }
@@ -786,8 +1136,8 @@ auto SemanticAnalyzer::analyzeWhile(FunctionState& state, ast::WhileStmt& stmt)
     const auto loop_state = body_state.loops.back();
     body_state.loops.pop_back();
     if (body_state.reachable) {
-        auto merged =
-            branchMerge(body_state, body_state, loop_entry_state, loop_range);
+        auto merged = branchMerge(body_state, body_state, loop_entry_state,
+                                  loop_range, MergePolicy::Exact);
         if (!merged) {
             return std::unexpected(Diagnostic(
                 "loop body must preserve move/borrow state across iterations",
@@ -801,7 +1151,7 @@ auto SemanticAnalyzer::analyzeWhile(FunctionState& state, ast::WhileStmt& stmt)
         merged_state.scopes = continue_state.scopes;
         merged_state.view_slot_locals = continue_state.view_slot_locals;
         auto merged = branchMerge(merged_state, merged_state, loop_entry_state,
-                                  loop_range);
+                                  loop_range, MergePolicy::Exact);
         if (!merged) {
             return std::unexpected(Diagnostic(
                 "continue is only allowed when loop entry move/borrow state "
@@ -829,7 +1179,7 @@ auto SemanticAnalyzer::analyzeFor(FunctionState& state, ast::ForStmt& stmt)
     }
 
     if (stmt.condition != nullptr) {
-        auto condition_type = analyzeExpr(state, *stmt.condition);
+        auto condition_type = requireReadable(state, *stmt.condition);
         if (!condition_type) {
             return std::unexpected(condition_type.error());
         }
@@ -870,8 +1220,9 @@ auto SemanticAnalyzer::analyzeFor(FunctionState& state, ast::ForStmt& stmt)
             return {};
         }
 
-        auto merged = branchMerge(predecessor_state, predecessor_state,
-                                  loop_entry_state, predecessor_range);
+        auto merged =
+            branchMerge(predecessor_state, predecessor_state, loop_entry_state,
+                        predecessor_range, MergePolicy::Exact);
         if (!merged) {
             return std::unexpected(Diagnostic(
                 "loop body must preserve move/borrow state across iterations",
@@ -1190,7 +1541,7 @@ auto SemanticAnalyzer::analyzeSwitch(FunctionState& state,
                 payload_place.fields.push_back(ENUM_PAYLOAD_SENTINEL);
                 payload_place.fields.push_back(
                     static_cast<std::uint32_t>(variant_index));
-                binding_local.borrow_origin = payload_place;
+                setTopLevelOrigins(binding_local, {payload_place});
                 if (case_switch_loan.has_value()) {
                     if (stmt.match_kind == ast::MatchKind::BorrowMut) {
                         case_switch_loan->place.owner_local_id =
@@ -1294,7 +1645,7 @@ auto SemanticAnalyzer::analyzeSwitch(FunctionState& state,
 auto SemanticAnalyzer::analyzeExprStmt(FunctionState& state,
                                        ast::ExprStmt& stmt)
     -> std::expected<void, Diagnostic> {
-    auto expr_type = analyzeExpr(state, *stmt.expr);
+    auto expr_type = requireReadable(state, *stmt.expr);
     if (!expr_type) {
         return std::unexpected(expr_type.error());
     }

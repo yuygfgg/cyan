@@ -116,6 +116,8 @@ class SemanticAnalyzer {
             Uninitialized,
             Live,
             Moved,
+            MaybeLive,
+            Unavailable,
         };
 
         std::string name;
@@ -124,7 +126,7 @@ class SemanticAnalyzer {
         std::size_t scope_depth = 0;
         std::size_t unique_id = 0;
         Status status = Status::Uninitialized;
-        std::optional<ast::ResolvedPlace> borrow_origin;
+        std::vector<ast::ResolvedPlace> borrow_origins;
         std::vector<ast::ResolvedPlace> element_origins;
         std::optional<std::size_t> reborrow_parent_local_id;
         bool is_parameter = false;
@@ -177,10 +179,15 @@ class SemanticAnalyzer {
 
     struct ViewLeafBinding {
         std::vector<std::uint32_t> path;
-        std::optional<ast::ResolvedPlace> source_place;
+        std::vector<ast::ResolvedPlace> source_places;
         std::optional<std::size_t> source_local_id;
         std::vector<ast::ResolvedPlace> element_sources;
         const Type* type = nullptr;
+    };
+
+    enum class MergePolicy : std::uint8_t {
+        Join,
+        Exact,
     };
 
     using TypeBindings = std::unordered_map<std::string, const Type*>;
@@ -264,12 +271,13 @@ class SemanticAnalyzer {
                               std::vector<std::uint32_t> prefix = {}) const
         -> std::vector<ViewLeafInfo>;
     auto resolveDependencyPath(ast::DependencyPath& path, const Type* root_type,
-                               std::optional<std::size_t> parameter_index)
+                               std::optional<std::size_t> parameter_index,
+                               bool allow_borrow_projection = false)
         -> std::expected<void, Diagnostic>;
     auto validateReturnDependencies(ast::FunctionDecl& decl)
         -> std::expected<void, Diagnostic>;
-    auto viewSlotKey(bool is_external, std::size_t root_id,
-                     const std::vector<std::uint32_t>& path) const
+    [[nodiscard]] auto viewSlotKey(bool is_external, std::size_t root_id,
+                                   const std::vector<std::uint32_t>& path) const
         -> std::string;
     auto registerViewSlot(FunctionState& state, std::size_t local_index)
         -> void;
@@ -290,6 +298,8 @@ class SemanticAnalyzer {
                                const ast::ResolvedPlace& base_place,
                                const Type* type, SourceRange range)
         -> std::expected<void, Diagnostic>;
+    [[nodiscard]] auto viewStatusMessage(LocalState::Status status) const
+        -> std::string;
     auto collectSlotBindings(FunctionState& state,
                              const ast::ResolvedPlace& base_place,
                              const Type* type)
@@ -309,10 +319,13 @@ class SemanticAnalyzer {
     auto ensureViewSourceLive(FunctionState& state, const LocalState& local,
                               SourceRange range)
         -> std::expected<void, Diagnostic>;
-    auto ensureViewSourceOutlivesLocal(
-        FunctionState& state, const LocalState& local,
-        const std::optional<ast::ResolvedPlace>& source_place,
-        SourceRange range) -> std::expected<void, Diagnostic>;
+    auto ensureViewSourceOutlivesLocal(FunctionState& state,
+                                       const LocalState& local,
+                                       SourceRange range)
+        -> std::expected<void, Diagnostic>;
+    auto validateMutableParameterDependencies(FunctionState& state,
+                                              SourceRange range)
+        -> std::expected<void, Diagnostic>;
     auto resolveType(ast::TypeSyntax& type)
         -> std::expected<const Type*, Diagnostic>;
     auto
@@ -329,9 +342,12 @@ class SemanticAnalyzer {
     auto registerVisibleDecl(ModuleScope& scope, ast::Decl& decl,
                              SourceRange conflict_range)
         -> std::expected<void, Diagnostic>;
-    auto visibleScopeFor(const ast::Module& module) const -> const ModuleScope&;
-    auto localScopeFor(const ast::Module& module) const -> const ModuleScope&;
-    auto findVisibleNamedType(std::string_view name) const -> const Type*;
+    [[nodiscard]] auto visibleScopeFor(const ast::Module& module) const
+        -> const ModuleScope&;
+    [[nodiscard]] auto localScopeFor(const ast::Module& module) const
+        -> const ModuleScope&;
+    [[nodiscard]] auto findVisibleNamedType(std::string_view name) const
+        -> const Type*;
     auto inferTypeBindings(FunctionState& state, const ast::FunctionDecl& decl,
                            const std::vector<ast::Expr*>& arguments)
         -> std::expected<TypeBindings, Diagnostic>;
@@ -343,14 +359,14 @@ class SemanticAnalyzer {
     auto validateResolvedImplSignature(ast::FunctionDecl& decl,
                                        const Type* target_type)
         -> std::expected<void, Diagnostic>;
-    auto findVisibleInterface(std::string_view name) const
+    [[nodiscard]] auto findVisibleInterface(std::string_view name) const
         -> const ast::InterfaceDecl*;
     auto findImplForType(const ast::InterfaceDecl& interface_decl,
                          const Type* receiver_type)
         -> std::expected<ast::FunctionDecl*, Diagnostic>;
     auto ensureDropImplForType(const Type* type)
         -> std::expected<void, Diagnostic>;
-    auto implReceiverPattern(const ast::FunctionDecl& decl) const
+    [[nodiscard]] auto implReceiverPattern(const ast::FunctionDecl& decl) const
         -> const ast::TypeSyntax*;
     auto interfaceReceiverType(const Type* argument_type) const -> const Type*;
     auto coerceExprToInterface(FunctionState& state, ast::Expr& expr,
@@ -377,9 +393,11 @@ class SemanticAnalyzer {
         -> std::optional<std::size_t>;
     auto findLocalById(FunctionState& state, std::size_t local_id) const
         -> std::optional<std::size_t>;
-    auto findLocalById(const FunctionState& state, std::size_t local_id) const
+    [[nodiscard]] auto findLocalById(const FunctionState& state,
+                                     std::size_t local_id) const
         -> std::optional<std::size_t>;
-    auto requireReadable(FunctionState& state, ast::Expr& expr)
+    auto requireReadable(FunctionState& state, ast::Expr& expr,
+                         const Type* expected_type = nullptr)
         -> std::expected<const Type*, Diagnostic>;
     auto consumeValue(FunctionState& state, ast::Expr& expr,
                       const Type* expected_type)
@@ -392,11 +410,42 @@ class SemanticAnalyzer {
     auto ensureBorrowSourceType(FunctionState& state, ast::Expr& expr,
                                 const Type* target_type)
         -> std::expected<void, Diagnostic>;
+    [[nodiscard]] auto
+    placeSetRepresentative(const std::vector<ast::ResolvedPlace>& places) const
+        -> std::optional<ast::ResolvedPlace>;
+    [[nodiscard]] auto
+    canonicalizePlaces(std::vector<ast::ResolvedPlace> places) const
+        -> std::vector<ast::ResolvedPlace>;
+    [[nodiscard]] auto
+    joinPlaces(const std::vector<ast::ResolvedPlace>& lhs,
+               const std::vector<ast::ResolvedPlace>& rhs) const
+        -> std::vector<ast::ResolvedPlace>;
+    [[nodiscard]] auto topLevelOrigins(const LocalState& local) const
+        -> std::vector<ast::ResolvedPlace>;
+    auto setTopLevelOrigins(LocalState& local,
+                            std::vector<ast::ResolvedPlace> origins) const
+        -> void;
+    [[nodiscard]] auto isDefinitelyLive(LocalState::Status status) const
+        -> bool;
+    [[nodiscard]] auto mayBeLive(LocalState::Status status) const -> bool;
+    [[nodiscard]] auto joinLocalStatus(LocalState::Status lhs,
+                                       LocalState::Status rhs) const
+        -> LocalState::Status;
+    [[nodiscard]] auto canJoinLocalStatus(const LocalState& local) const
+        -> bool;
+    [[nodiscard]] auto localStatusMessage(const LocalState& local) const
+        -> std::string;
     auto borrowFromExpr(FunctionState& state, ast::Expr& expr, bool want_mut,
                         bool temporary_only)
         -> std::expected<ast::ResolvedPlace, Diagnostic>;
     auto resolvePlace(FunctionState& state, ast::Expr& expr)
         -> std::expected<ast::ResolvedPlace, Diagnostic>;
+    auto projectedPlaceTargets(FunctionState& state, ast::Expr& expr)
+        -> std::expected<std::vector<ast::ResolvedPlace>, Diagnostic>;
+    auto ensureCanRead(FunctionState& state, const ast::ResolvedPlace& place,
+                       SourceRange range,
+                       std::optional<std::size_t> ignored_local = std::nullopt)
+        -> std::expected<void, Diagnostic>;
     auto ensureCanWrite(FunctionState& state, const ast::ResolvedPlace& place,
                         SourceRange range,
                         std::optional<std::size_t> ignored_local = std::nullopt)
@@ -406,13 +455,20 @@ class SemanticAnalyzer {
                     bool is_mut, SourceRange range,
                     std::optional<std::size_t> ignored_local = std::nullopt)
         -> std::expected<void, Diagnostic>;
+    [[nodiscard]] auto sharedReborrowParentLocalIds(const FunctionState& state,
+                                                    std::size_t local_id) const
+        -> std::vector<std::size_t>;
+    [[nodiscard]] auto loanOwnerMatchesIgnored(
+        const FunctionState& state, std::optional<std::size_t> owner_local_id,
+        std::optional<std::size_t> ignored_local_id) const -> bool;
     [[nodiscard]] auto placesOverlap(const ast::ResolvedPlace& lhs,
                                      const ast::ResolvedPlace& rhs) const
         -> bool;
     [[nodiscard]] auto localPlace(std::size_t local_id) const
         -> ast::ResolvedPlace;
     auto branchMerge(FunctionState& into, const FunctionState& then_state,
-                     const FunctionState& else_state, SourceRange range)
+                     const FunctionState& else_state, SourceRange range,
+                     MergePolicy policy = MergePolicy::Join)
         -> std::expected<void, Diagnostic>;
     auto mergeReachableStates(FunctionState& into,
                               const std::vector<FunctionState>& states,

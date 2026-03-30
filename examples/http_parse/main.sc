@@ -245,7 +245,22 @@ int expected_request_size([]const char bytes) {
     return headers_end + 4 + content_length;
 }
 
-bool parse_http_request([]const char bytes, &mut HttpRequest out) {
+bool parse_http_request([]const char bytes, &mut HttpRequest out)
+    depends(out.line.method on bytes,
+            out.line.target.raw on bytes,
+            out.line.target.path on bytes,
+            out.line.target.query on bytes,
+            out.line.version on bytes,
+            out.headers.host.name on bytes,
+            out.headers.host.value on bytes,
+            out.headers.user_agent.name on bytes,
+            out.headers.user_agent.value on bytes,
+            out.headers.content_type.name on bytes,
+            out.headers.content_type.value on bytes,
+            out.headers.content_length.name on bytes,
+            out.headers.content_length.value on bytes,
+            out.body on bytes) {
+    *out = blank_request(bytes);
     if (len(bytes) == 0) {
         return false;
     }

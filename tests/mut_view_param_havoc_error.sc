@@ -1,0 +1,19 @@
+struct View {
+    []const char data;
+};
+
+void exploit(&mut View v, []const char malicious_data) {
+    v.data = malicious_data;
+}
+
+int main() {
+    char[10] good_buf = ['g', 'o', 'o', 'd', '0', '1', '2', '3', '4', '5'];
+    View v = { subslice(good_buf, 0, 10) };
+
+    if (true) {
+        char[10] bad_buf = ['b', 'a', 'd', '0', '1', '2', '3', '4', '5', '6'];
+        exploit(&mut v, subslice(bad_buf, 0, 10));
+    }
+
+    return v.data[0] as int;
+}

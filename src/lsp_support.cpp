@@ -369,30 +369,31 @@ class ModuleTraversal {
         -> std::vector<LSPSymbolOccurrence> {
         std::vector<LSPSymbolOccurrence> occurrences;
         for (const auto& dependency : function.return_dependencies) {
-            if (dependency.source.is_return) {
-                continue;
-            }
-            if (dependency.source.parameter_index.has_value() &&
-                *dependency.source.parameter_index <
-                    function.parameters.size()) {
-                const auto& parameter =
-                    function.parameters[*dependency.source.parameter_index];
-                occurrences.push_back(LSPSymbolOccurrence{
-                    .kind = LSPSymbolKind::Parameter,
-                    .role = LSPSymbolRole::Reference,
-                    .name = parameter.name,
-                    .range = dependency.source.root_range,
-                    .declaration_range = parameter.name_range,
-                    .type = parameter.resolved_type,
-                });
-            } else if (!dependency.source.root_name.empty()) {
-                occurrences.push_back(LSPSymbolOccurrence{
-                    .kind = LSPSymbolKind::Parameter,
-                    .role = LSPSymbolRole::Reference,
-                    .name = dependency.source.root_name,
-                    .range = dependency.source.root_range,
-                    .declaration_range = std::nullopt,
-                });
+            for (const auto* path : {&dependency.source, &dependency.target}) {
+                if (path->is_return) {
+                    continue;
+                }
+                if (path->parameter_index.has_value() &&
+                    *path->parameter_index < function.parameters.size()) {
+                    const auto& parameter =
+                        function.parameters[*path->parameter_index];
+                    occurrences.push_back(LSPSymbolOccurrence{
+                        .kind = LSPSymbolKind::Parameter,
+                        .role = LSPSymbolRole::Reference,
+                        .name = parameter.name,
+                        .range = path->root_range,
+                        .declaration_range = parameter.name_range,
+                        .type = parameter.resolved_type,
+                    });
+                } else if (!path->root_name.empty()) {
+                    occurrences.push_back(LSPSymbolOccurrence{
+                        .kind = LSPSymbolKind::Parameter,
+                        .role = LSPSymbolRole::Reference,
+                        .name = path->root_name,
+                        .range = path->root_range,
+                        .declaration_range = std::nullopt,
+                    });
+                }
             }
         }
         return occurrences;
