@@ -1257,11 +1257,11 @@ auto Parser::parseType() -> std::expected<ast::TypeSyntaxPtr, Diagnostic> {
     if (match(TokenKind::Ampersand)) {
         const auto begin = previous().range.begin;
         const auto is_mut = match(TokenKind::KwMut);
-        auto element =
-            check(TokenKind::LBracket) && index + 1 < tokens.size() &&
-                    tokens[index + 1].kind == TokenKind::RBracket
-                ? parseType()
-                : parse_postfix_type();
+        auto element = check(TokenKind::LBracket) &&
+                               index + 1 < tokens.size() &&
+                               tokens[index + 1].kind == TokenKind::RBracket
+                           ? parseType()
+                           : parse_postfix_type();
         if (!element) {
             return std::unexpected(element.error());
         }
@@ -1779,12 +1779,14 @@ auto Parser::parseDependsClause(ast::FunctionDecl& decl)
             return std::unexpected(source.error());
         }
 
-        decl.return_dependencies.push_back(ast::ReturnDependency{
+        auto dependency = ast::ReturnDependency{
             .target = std::move(*target),
             .source = std::move(*source),
             .range =
                 source_file.range((*target).range.begin, (*source).range.end),
-        });
+        };
+        decl.declared_return_dependencies.push_back(dependency);
+        decl.return_dependencies.push_back(std::move(dependency));
 
         if (!match(TokenKind::Comma)) {
             break;

@@ -1,0 +1,48 @@
+struct Pair {
+    []const char left;
+    []const char right;
+};
+
+struct Bundle {
+    Pair pair;
+    []const char tail;
+};
+
+Bundle build([]const char text, []const char special)
+    depends(return on text, return.pair.right on special) {
+    return {
+        {subslice(text, 0, 1), special},
+        subslice(text, 1, len(text) - 1)
+    };
+}
+
+bool span_eq([]const char left, []const char right) {
+    if (len(left) != len(right)) {
+        return false;
+    }
+
+    int i = 0;
+    while (i < len(left)) {
+        if (left[i] != right[i]) {
+            return false;
+        }
+        i++;
+    }
+    return true;
+}
+
+int main() {
+    []const char text = subslice("abcd", 0, 4);
+    []const char special = subslice("ZZ", 0, 2);
+    Bundle bundle = build(text, special);
+    if (!span_eq(bundle.pair.left, subslice("a", 0, 1))) {
+        return 1;
+    }
+    if (!span_eq(bundle.pair.right, special)) {
+        return 2;
+    }
+    if (!span_eq(bundle.tail, subslice("bcd", 0, 3))) {
+        return 3;
+    }
+    return 0;
+}

@@ -918,14 +918,16 @@ auto SemanticAnalyzer::validateReturnDependencies(ast::FunctionDecl& decl)
         }
     }
 
-    struct CoveredDependencyLeaf {
+    struct SelectedDependencyLeaf {
         bool is_return = false;
         std::optional<std::size_t> parameter_index;
         std::vector<std::uint32_t> path;
+        ast::ReturnDependency dependency;
+        std::size_t specificity = 0;
     };
-    std::vector<CoveredDependencyLeaf> covered_leaves;
-    covered_leaves.reserve(return_leaves.size() +
-                           decl.return_dependencies.size());
+    std::vector<SelectedDependencyLeaf> selected_leaves;
+    selected_leaves.reserve(return_leaves.size() +
+                            decl.return_dependencies.size());
 
     for (auto& dependency : decl.return_dependencies) {
         if (dependency.target.is_return) {
@@ -997,20 +999,33 @@ auto SemanticAnalyzer::validateReturnDependencies(ast::FunctionDecl& decl)
             collectViewLeafInfos(dependency.target.resolved_type);
         const auto source_suffixes =
             collectViewLeafInfos(dependency.source.resolved_type);
-        if (target_suffixes.size() != source_suffixes.size()) {
-            return make_error("depends source and target must cover the same "
-                              "number of borrow or slice leaves",
-                              dependency.range);
+        const auto source_is_broadcast = source_suffixes.size() == 1;
+        if (!source_is_broadcast &&
+            target_suffixes.size() != source_suffixes.size()) {
+            return make_error(
+                "depends source must either provide a single borrow or slice "
+                "leaf or match the target aggregate view structure",
+                dependency.range);
         }
-        for (std::size_t index = 0; index < target_suffixes.size(); ++index) {
-            if (target_suffixes[index].path != source_suffixes[index].path) {
+        if (!source_is_broadcast) {
+            for (std::size_t index = 0; index < target_suffixes.size();
+                 ++index) {
+                if (target_suffixes[index].path ==
+                    source_suffixes[index].path) {
+                    continue;
+                }
                 return make_error("depends source and target must have "
                                   "matching aggregate view structure",
                                   dependency.range);
             }
+        }
+        const auto specificity = dependency.target.resolved_path.size();
+        for (std::size_t index = 0; index < target_suffixes.size(); ++index) {
+            const auto source_index = source_is_broadcast ? 0 : index;
             if (is_direct_shared_view_slice(types,
                                             target_suffixes[index].type)) {
-                const auto* source_leaf_type = source_suffixes[index].type;
+                const auto* source_leaf_type =
+                    source_suffixes[source_index].type;
                 const auto* source_leaf_base =
                     source_leaf_type == nullptr
                         ? nullptr
@@ -1029,40 +1044,81 @@ auto SemanticAnalyzer::validateReturnDependencies(ast::FunctionDecl& decl)
                         dependency.range);
                 }
             }
+
             auto full_target_path = dependency.target.resolved_path;
             full_target_path.insert(full_target_path.end(),
                                     target_suffixes[index].path.begin(),
                                     target_suffixes[index].path.end());
-            const auto covered_it = std::ranges::find_if(
-                covered_leaves, [&](const CoveredDependencyLeaf& leaf) {
+            auto full_source_path = dependency.source.resolved_path;
+            full_source_path.insert(full_source_path.end(),
+                                    source_suffixes[source_index].path.begin(),
+                                    source_suffixes[source_index].path.end());
+
+            ast::ReturnDependency leaf_dependency = dependency;
+            leaf_dependency.target.resolved_path = full_target_path;
+            leaf_dependency.target.resolved_type = target_suffixes[index].type;
+            leaf_dependency.source.resolved_path = full_source_path;
+            leaf_dependency.source.resolved_type =
+                source_suffixes[source_index].type;
+
+            const auto selected_it = std::ranges::find_if(
+                selected_leaves, [&](const SelectedDependencyLeaf& leaf) {
                     return leaf.is_return == dependency.target.is_return &&
                            leaf.parameter_index ==
                                dependency.target.parameter_index &&
                            leaf.path == full_target_path;
                 });
-            if (covered_it != covered_leaves.end()) {
-                return make_error(
-                    "depends clause overlaps on the same return path",
-                    dependency.range);
+            if (selected_it == selected_leaves.end()) {
+                selected_leaves.push_back(SelectedDependencyLeaf{
+                    .is_return = dependency.target.is_return,
+                    .parameter_index = dependency.target.parameter_index,
+                    .path = std::move(full_target_path),
+                    .dependency = std::move(leaf_dependency),
+                    .specificity = specificity,
+                });
+                continue;
             }
-            covered_leaves.push_back(CoveredDependencyLeaf{
-                .is_return = dependency.target.is_return,
-                .parameter_index = dependency.target.parameter_index,
-                .path = std::move(full_target_path),
-            });
+
+            if (specificity < selected_it->specificity) {
+                continue;
+            }
+
+            if (specificity == selected_it->specificity) {
+                const auto same_source =
+                    selected_it->dependency.source.parameter_index ==
+                        leaf_dependency.source.parameter_index &&
+                    selected_it->dependency.source.resolved_path ==
+                        leaf_dependency.source.resolved_path;
+                if (!same_source) {
+                    return make_error(
+                        "depends clause has conflicting mappings for the same "
+                        "borrow or slice path",
+                        dependency.range);
+                }
+                continue;
+            }
+
+            selected_it->dependency = std::move(leaf_dependency);
+            selected_it->specificity = specificity;
         }
     }
 
     for (const auto& leaf : return_leaves) {
         const auto covered_it = std::ranges::find_if(
-            covered_leaves, [&](const CoveredDependencyLeaf& covered_leaf) {
+            selected_leaves, [&](const SelectedDependencyLeaf& covered_leaf) {
                 return covered_leaf.is_return && covered_leaf.path == leaf.path;
             });
-        if (covered_it == covered_leaves.end()) {
+        if (covered_it == selected_leaves.end()) {
             return make_error("depends clause must cover every borrow and "
                               "slice path in the return type",
                               decl.range);
         }
+    }
+
+    decl.return_dependencies.clear();
+    decl.return_dependencies.reserve(selected_leaves.size());
+    for (auto& selected_leaf : selected_leaves) {
+        decl.return_dependencies.push_back(std::move(selected_leaf.dependency));
     }
 
     return {};

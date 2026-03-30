@@ -21,6 +21,8 @@
 
 namespace lsp_test {
 
+// NOLINTBEGIN(readability-identifier-naming)
+
 struct MessageEnvelope {
     std::string jsonrpc;
     std::string method;
@@ -108,11 +110,13 @@ struct SemanticTokens {
     std::vector<std::uint32_t> data;
 };
 
+// NOLINTEND(readability-identifier-naming)
+
 } // namespace lsp_test
 
 namespace {
 
-constexpr std::string_view kFixtureSource = R"(enum Option<T> {
+constexpr std::string_view FIXTURE_SOURCE = R"(enum Option<T> {
     None,
     Some(T),
 };
@@ -132,7 +136,8 @@ int unwrap(Option<int> value) {
 }
 )";
 
-constexpr std::string_view kInterfaceFixtureSource = R"(interface<T> int measure(&T value);
+constexpr std::string_view INTERFACE_FIXTURE_SOURCE =
+    R"(interface<T> int measure(&T value);
 
 struct Box {
     int value;
@@ -148,6 +153,16 @@ int main() {
 }
 )";
 
+constexpr std::string_view DEPENDS_SHORTHAND_FIXTURE_SOURCE = R"(struct Pair {
+    []const char left;
+    []const char right;
+};
+
+Pair pair([]const char text) depends(return on text) {
+    return {text, text};
+}
+)";
+
 struct FixtureContext {
     sc::ast::Package package;
     sc::TypeContext types;
@@ -155,7 +170,8 @@ struct FixtureContext {
     const sc::SourceFile* source = nullptr;
 };
 
-auto diagnostics_to_string(const sc::DiagnosticList& diagnostics) -> std::string {
+auto diagnostics_to_string(const sc::DiagnosticList& diagnostics)
+    -> std::string {
     std::ostringstream stream;
     sc::print_diagnostics(stream, diagnostics);
     return stream.str();
@@ -169,11 +185,13 @@ auto write_fixture_file(std::string_view filename, std::string_view text)
     return path;
 }
 
-auto load_fixture() -> std::optional<FixtureContext> {
+auto load_fixture_from_source(std::string_view filename,
+                              std::string_view module_name,
+                              std::string_view source_text)
+    -> std::optional<FixtureContext> {
     FixtureContext context;
 
-    const auto path =
-        write_fixture_file("safe_c_lsp_support.sc", kFixtureSource);
+    const auto path = write_fixture_file(filename, source_text);
     auto source = sc::SourceFile::load(path);
     std::filesystem::remove(path);
     if (!source) {
@@ -201,7 +219,7 @@ auto load_fixture() -> std::optional<FixtureContext> {
 
     module.source = context.source;
     module.path = context.source->path();
-    module.module_name = "lsp_support_fixture";
+    module.module_name = std::string(module_name);
     context.package.modules.push_back(
         std::make_unique<sc::ast::Module>(std::move(module)));
     context.package.entry_module = context.package.modules.back().get();
@@ -214,6 +232,11 @@ auto load_fixture() -> std::optional<FixtureContext> {
     }
 
     return context;
+}
+
+auto load_fixture() -> std::optional<FixtureContext> {
+    return load_fixture_from_source("safe_c_lsp_support.sc",
+                                    "lsp_support_fixture", FIXTURE_SOURCE);
 }
 
 auto nth_offset(std::string_view text, std::string_view needle, std::size_t nth)
@@ -248,8 +271,7 @@ auto parse_json(std::string_view json) -> std::optional<T> {
     return value;
 }
 
-template <typename T>
-auto to_json(const T& value) -> std::string {
+template <typename T> auto to_json(const T& value) -> std::string {
     auto json = glz::write_json(value);
     return json.value_or("");
 }
@@ -285,7 +307,8 @@ auto offset_to_lsp_position(std::string_view text, std::size_t offset)
     -> lsp_test::Position {
     std::size_t line = 0;
     std::size_t character = 0;
-    for (std::size_t index = 0; index < offset && index < text.size(); ++index) {
+    for (std::size_t index = 0; index < offset && index < text.size();
+         ++index) {
         if (text[index] == '\n') {
             ++line;
             character = 0;
@@ -314,11 +337,13 @@ auto read_framed_bodies(std::string_view stream) -> std::vector<std::string> {
         if (prefix == std::string_view::npos) {
             break;
         }
-        const auto value_begin = prefix + std::string_view("Content-Length: ").size();
+        const auto value_begin =
+            prefix + std::string_view("Content-Length: ").size();
         const auto value_end = header.find("\r\n", value_begin);
         const auto length_text =
             header.substr(value_begin, value_end - value_begin);
-        const auto length = static_cast<std::size_t>(std::stoul(std::string(length_text)));
+        const auto length =
+            static_cast<std::size_t>(std::stoul(std::string(length_text)));
         const auto body_begin = header_end + 4;
         if (body_begin + length > stream.size()) {
             break;
@@ -340,8 +365,8 @@ auto find_message_by_id(const std::vector<lsp_test::MessageEnvelope>& messages,
     return nullptr;
 }
 
-auto find_publish_diagnostics(const std::vector<lsp_test::MessageEnvelope>& messages,
-                              int version)
+auto find_publish_diagnostics(
+    const std::vector<lsp_test::MessageEnvelope>& messages, int version)
     -> const lsp_test::MessageEnvelope* {
     for (const auto& message : messages) {
         if (message.method != "textDocument/publishDiagnostics" ||
@@ -362,42 +387,45 @@ auto test_document_symbols(const sc::LSPSupport& lsp,
                            std::vector<std::string>& failures) -> void {
     const auto occurrences = lsp.documentSymbols(source);
 
-    const auto* pair_decl = find_occurrence(
-        occurrences, sc::LSPSymbolKind::Struct, sc::LSPSymbolRole::Declaration,
-        "Pair");
+    const auto* pair_decl =
+        find_occurrence(occurrences, sc::LSPSymbolKind::Struct,
+                        sc::LSPSymbolRole::Declaration, "Pair");
     expect(pair_decl != nullptr, "missing Pair declaration symbol", failures);
 
-    const auto* pair_ref = find_occurrence(
-        occurrences, sc::LSPSymbolKind::Struct, sc::LSPSymbolRole::Reference,
-        "Pair");
+    const auto* pair_ref =
+        find_occurrence(occurrences, sc::LSPSymbolKind::Struct,
+                        sc::LSPSymbolRole::Reference, "Pair");
     expect(pair_ref != nullptr, "missing Pair type reference symbol", failures);
     if (pair_decl != nullptr && pair_ref != nullptr) {
-        expect(same_optional_range(pair_ref->declaration_range, pair_decl->range),
-               "Pair reference should point at Pair declaration", failures);
+        expect(
+            same_optional_range(pair_ref->declaration_range, pair_decl->range),
+            "Pair reference should point at Pair declaration", failures);
     }
 
-    const auto* some_decl = find_occurrence(
-        occurrences, sc::LSPSymbolKind::Variant, sc::LSPSymbolRole::Declaration,
-        "Some");
-    const auto* some_ref = find_occurrence(
-        occurrences, sc::LSPSymbolKind::Variant, sc::LSPSymbolRole::Reference,
-        "Some");
+    const auto* some_decl =
+        find_occurrence(occurrences, sc::LSPSymbolKind::Variant,
+                        sc::LSPSymbolRole::Declaration, "Some");
+    const auto* some_ref =
+        find_occurrence(occurrences, sc::LSPSymbolKind::Variant,
+                        sc::LSPSymbolRole::Reference, "Some");
     expect(some_decl != nullptr, "missing Some declaration symbol", failures);
     expect(some_ref != nullptr, "missing Some reference symbol", failures);
     if (some_decl != nullptr && some_ref != nullptr) {
-        expect(same_optional_range(some_ref->declaration_range, some_decl->range),
-               "Some reference should point at Some declaration", failures);
+        expect(
+            same_optional_range(some_ref->declaration_range, some_decl->range),
+            "Some reference should point at Some declaration", failures);
     }
 
-    const auto* payload_decl = find_occurrence(
-        occurrences, sc::LSPSymbolKind::SwitchBinding,
-        sc::LSPSymbolRole::Declaration, "payload");
-    const auto* payload_ref = find_occurrence(
-        occurrences, sc::LSPSymbolKind::SwitchBinding,
-        sc::LSPSymbolRole::Reference, "payload");
+    const auto* payload_decl =
+        find_occurrence(occurrences, sc::LSPSymbolKind::SwitchBinding,
+                        sc::LSPSymbolRole::Declaration, "payload");
+    const auto* payload_ref =
+        find_occurrence(occurrences, sc::LSPSymbolKind::SwitchBinding,
+                        sc::LSPSymbolRole::Reference, "payload");
     expect(payload_decl != nullptr, "missing payload declaration symbol",
            failures);
-    expect(payload_ref != nullptr, "missing payload reference symbol", failures);
+    expect(payload_ref != nullptr, "missing payload reference symbol",
+           failures);
     if (payload_decl != nullptr && payload_ref != nullptr) {
         expect(same_optional_range(payload_ref->declaration_range,
                                    payload_decl->range),
@@ -405,12 +433,12 @@ auto test_document_symbols(const sc::LSPSupport& lsp,
                failures);
     }
 
-    const auto* field_decl = find_occurrence(
-        occurrences, sc::LSPSymbolKind::Field, sc::LSPSymbolRole::Declaration,
-        "value");
-    const auto* field_ref = find_occurrence(
-        occurrences, sc::LSPSymbolKind::Field, sc::LSPSymbolRole::Reference,
-        "value");
+    const auto* field_decl =
+        find_occurrence(occurrences, sc::LSPSymbolKind::Field,
+                        sc::LSPSymbolRole::Declaration, "value");
+    const auto* field_ref =
+        find_occurrence(occurrences, sc::LSPSymbolKind::Field,
+                        sc::LSPSymbolRole::Reference, "value");
     expect(field_decl != nullptr, "missing field declaration symbol", failures);
     expect(field_ref != nullptr, "missing field reference symbol", failures);
     if (field_decl != nullptr && field_ref != nullptr) {
@@ -469,7 +497,8 @@ auto test_query(const sc::LSPSupport& lsp, const sc::SourceFile& source,
                    failures);
             if (pair_result->symbol.has_value()) {
                 expect(pair_result->symbol->kind == sc::LSPSymbolKind::Struct,
-                       "Pair type query should resolve struct symbol", failures);
+                       "Pair type query should resolve struct symbol",
+                       failures);
             }
         }
     }
@@ -497,13 +526,77 @@ auto test_query(const sc::LSPSupport& lsp, const sc::SourceFile& source,
            "offsetForLocation should round-trip byte locations", failures);
 }
 
+auto test_depends_shorthand_document_symbols(std::vector<std::string>& failures)
+    -> void {
+    auto context = load_fixture_from_source("safe_c_lsp_depends_fixture.sc",
+                                            "lsp_depends_fixture",
+                                            DEPENDS_SHORTHAND_FIXTURE_SOURCE);
+    expect(context.has_value(),
+           "failed to load shorthand depends fixture for lsp test", failures);
+    if (!context.has_value()) {
+        return;
+    }
+
+    sc::LSPSupport lsp(context->package, context->analysis);
+    const auto occurrences = lsp.documentSymbols(*context->source);
+
+    const auto depends_text_offset =
+        nth_offset(DEPENDS_SHORTHAND_FIXTURE_SOURCE, "text", 1);
+    expect(depends_text_offset.has_value(),
+           "failed to find depends source text offset in shorthand fixture",
+           failures);
+    if (!depends_text_offset.has_value()) {
+        return;
+    }
+
+    const auto depends_text_range = context->source->range(
+        *depends_text_offset,
+        *depends_text_offset + std::string_view("text").size());
+    std::size_t depends_reference_count = 0;
+    const sc::LSPSymbolOccurrence* depends_reference = nullptr;
+    for (const auto& occurrence : occurrences) {
+        if (occurrence.kind != sc::LSPSymbolKind::Parameter ||
+            occurrence.role != sc::LSPSymbolRole::Reference ||
+            occurrence.name != "text" ||
+            !same_range(occurrence.range, depends_text_range)) {
+            continue;
+        }
+        ++depends_reference_count;
+        if (depends_reference == nullptr) {
+            depends_reference = &occurrence;
+        }
+    }
+
+    expect(depends_reference_count == 1,
+           "depends clause should emit exactly one parameter reference "
+           "occurrence",
+           failures);
+    expect(depends_reference != nullptr,
+           "missing parameter reference occurrence for depends source",
+           failures);
+
+    const auto* parameter_decl =
+        find_occurrence(occurrences, sc::LSPSymbolKind::Parameter,
+                        sc::LSPSymbolRole::Declaration, "text");
+    expect(parameter_decl != nullptr,
+           "missing parameter declaration for shorthand depends fixture",
+           failures);
+    if (depends_reference != nullptr && parameter_decl != nullptr) {
+        expect(same_optional_range(depends_reference->declaration_range,
+                                   parameter_decl->range),
+               "depends source reference should resolve to parameter "
+               "declaration",
+               failures);
+    }
+}
+
 auto test_language_server(std::vector<std::string>& failures) -> void {
     const auto temp_path =
         std::filesystem::temp_directory_path() / "safe_c_lsp_server_fixture.sc";
     const auto uri = "file://" + temp_path.generic_string();
 
-    const auto payload_ref_offset = nth_offset(kFixtureSource, "payload", 1);
-    const auto payload_decl_offset = nth_offset(kFixtureSource, "payload", 0);
+    const auto payload_ref_offset = nth_offset(FIXTURE_SOURCE, "payload", 1);
+    const auto payload_decl_offset = nth_offset(FIXTURE_SOURCE, "payload", 0);
     expect(payload_ref_offset.has_value(),
            "failed to find payload offset for lsp server test", failures);
     expect(payload_decl_offset.has_value(),
@@ -513,13 +606,13 @@ auto test_language_server(std::vector<std::string>& failures) -> void {
         return;
     }
     const auto hover_position =
-        offset_to_lsp_position(kFixtureSource, *payload_ref_offset);
+        offset_to_lsp_position(FIXTURE_SOURCE, *payload_ref_offset);
     const auto definition_position =
-        offset_to_lsp_position(kFixtureSource, *payload_ref_offset);
+        offset_to_lsp_position(FIXTURE_SOURCE, *payload_ref_offset);
     const auto payload_decl_position =
         payload_decl_offset.has_value()
             ? std::optional<lsp_test::Position>(
-                  offset_to_lsp_position(kFixtureSource, *payload_decl_offset))
+                  offset_to_lsp_position(FIXTURE_SOURCE, *payload_decl_offset))
             : std::nullopt;
 
     const std::string initialize_request =
@@ -527,7 +620,7 @@ auto test_language_server(std::vector<std::string>& failures) -> void {
     const std::string did_open_notification =
         R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
         uri + R"(","languageId":"safe-c","version":1,"text":)" +
-        to_json(std::string(kFixtureSource)) + "}}}";
+        to_json(std::string(FIXTURE_SOURCE)) + "}}}";
     const std::string hover_request =
         R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":")" +
         uri + R"("},"position":{"line":)" +
@@ -546,7 +639,8 @@ auto test_language_server(std::vector<std::string>& failures) -> void {
         uri + R"(","version":2},"contentChanges":[{"text":"int broken( {"}]}})";
     const std::string shutdown_request =
         R"({"jsonrpc":"2.0","id":5,"method":"shutdown","params":{}})";
-    const std::string exit_notification = R"({"jsonrpc":"2.0","method":"exit"})";
+    const std::string exit_notification =
+        R"({"jsonrpc":"2.0","method":"exit"})";
 
     std::string input_stream;
     input_stream += frame_message(initialize_request);
@@ -597,7 +691,8 @@ auto test_language_server(std::vector<std::string>& failures) -> void {
                    "initialize should advertise openClose sync", failures);
             expect(result->capabilities.textDocumentSync.change == 1,
                    "initialize should advertise full text sync", failures);
-            expect(!result->capabilities.semanticTokensProvider.legend.tokenTypes.empty(),
+            expect(!result->capabilities.semanticTokensProvider.legend
+                        .tokenTypes.empty(),
                    "initialize should advertise semantic token types",
                    failures);
             semantic_token_types =
@@ -648,7 +743,7 @@ auto test_language_server(std::vector<std::string>& failures) -> void {
                    "definition should point at the opened document", failures);
             if (payload_decl_position.has_value()) {
                 expect(definition->range.start.line ==
-                           payload_decl_position->line &&
+                               payload_decl_position->line &&
                            definition->range.start.character ==
                                payload_decl_position->character,
                        "definition should jump to payload declaration",
@@ -664,8 +759,8 @@ auto test_language_server(std::vector<std::string>& failures) -> void {
         semantic_tokens_response->result.has_value()) {
         const auto tokens = parse_json<lsp_test::SemanticTokens>(
             semantic_tokens_response->result->str);
-        expect(tokens.has_value(),
-               "failed to parse semantic tokens response", failures);
+        expect(tokens.has_value(), "failed to parse semantic tokens response",
+               failures);
         if (tokens.has_value()) {
             expect(!tokens->data.empty(),
                    "semantic tokens response should not be empty", failures);
@@ -674,9 +769,8 @@ auto test_language_server(std::vector<std::string>& failures) -> void {
                    failures);
             const auto contains_token_type =
                 [&](std::string_view token_type_name) {
-                    const auto it = std::find(semantic_token_types.begin(),
-                                              semantic_token_types.end(),
-                                              token_type_name);
+                    const auto it = std::ranges::find(semantic_token_types,
+                                                      token_type_name);
                     expect(it != semantic_token_types.end(),
                            "semantic token legend should include " +
                                std::string(token_type_name),
@@ -727,14 +821,14 @@ auto test_language_server(std::vector<std::string>& failures) -> void {
 auto test_language_server_impl_definition_and_rename(
     std::vector<std::string>& failures) -> void {
     const auto path = write_fixture_file("safe_c_lsp_interface_fixture.sc",
-                                         kInterfaceFixtureSource);
+                                         INTERFACE_FIXTURE_SOURCE);
     const auto uri = "file://" + path.generic_string();
 
-    const auto interface_decl_offset = nth_offset(kInterfaceFixtureSource,
-                                                  "measure", 0);
-    const auto impl_decl_offset = nth_offset(kInterfaceFixtureSource,
-                                             "measure", 1);
-    const auto call_offset = nth_offset(kInterfaceFixtureSource, "measure", 2);
+    const auto interface_decl_offset =
+        nth_offset(INTERFACE_FIXTURE_SOURCE, "measure", 0);
+    const auto impl_decl_offset =
+        nth_offset(INTERFACE_FIXTURE_SOURCE, "measure", 1);
+    const auto call_offset = nth_offset(INTERFACE_FIXTURE_SOURCE, "measure", 2);
     expect(interface_decl_offset.has_value(),
            "failed to find interface declaration offset", failures);
     expect(impl_decl_offset.has_value(),
@@ -746,20 +840,20 @@ auto test_language_server_impl_definition_and_rename(
         return;
     }
 
-    const auto interface_position =
-        offset_to_lsp_position(kInterfaceFixtureSource, *interface_decl_offset);
+    const auto interface_position = offset_to_lsp_position(
+        INTERFACE_FIXTURE_SOURCE, *interface_decl_offset);
     const auto impl_end_position = offset_to_lsp_position(
-        kInterfaceFixtureSource,
+        INTERFACE_FIXTURE_SOURCE,
         *impl_decl_offset + std::string_view("measure").size());
     const auto call_position =
-        offset_to_lsp_position(kInterfaceFixtureSource, *call_offset);
+        offset_to_lsp_position(INTERFACE_FIXTURE_SOURCE, *call_offset);
 
     const std::string initialize_request =
         R"({"jsonrpc":"2.0","id":11,"method":"initialize","params":{}})";
     const std::string did_open_notification =
         R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
         uri + R"(","languageId":"safe-c","version":1,"text":)" +
-        to_json(std::string(kInterfaceFixtureSource)) + "}}}";
+        to_json(std::string(INTERFACE_FIXTURE_SOURCE)) + "}}}";
     const std::string definition_request =
         R"({"jsonrpc":"2.0","id":12,"method":"textDocument/definition","params":{"textDocument":{"uri":")" +
         uri + R"("},"position":{"line":)" +
@@ -773,7 +867,8 @@ auto test_language_server_impl_definition_and_rename(
         R"(},"newName":"inspect"}})";
     const std::string shutdown_request =
         R"({"jsonrpc":"2.0","id":14,"method":"shutdown","params":{}})";
-    const std::string exit_notification = R"({"jsonrpc":"2.0","method":"exit"})";
+    const std::string exit_notification =
+        R"({"jsonrpc":"2.0","method":"exit"})";
 
     std::string input_stream;
     input_stream += frame_message(initialize_request);
@@ -787,8 +882,8 @@ auto test_language_server_impl_definition_and_rename(
     std::istringstream input(input_stream);
     std::ostringstream output;
     const auto exit_code = server.run(input, output);
-    expect(exit_code == 0,
-           "impl definition/rename server should exit cleanly", failures);
+    expect(exit_code == 0, "impl definition/rename server should exit cleanly",
+           failures);
 
     const auto bodies = read_framed_bodies(output.str());
     std::vector<lsp_test::MessageEnvelope> messages;
@@ -802,8 +897,8 @@ auto test_language_server_impl_definition_and_rename(
     }
 
     const auto* definition_response = find_message_by_id(messages, "12");
-    expect(definition_response != nullptr,
-           "missing impl definition response", failures);
+    expect(definition_response != nullptr, "missing impl definition response",
+           failures);
     if (definition_response != nullptr &&
         definition_response->result.has_value()) {
         const auto definition =
@@ -831,8 +926,7 @@ auto test_language_server_impl_definition_and_rename(
         if (edit.has_value()) {
             const auto it = edit->changes.find(uri);
             expect(it != edit->changes.end(),
-                   "rename should include edits for the opened file",
-                   failures);
+                   "rename should include edits for the opened file", failures);
             if (it != edit->changes.end()) {
                 const auto& edits = it->second;
                 expect(edits.size() == 3,
@@ -893,6 +987,7 @@ auto main() -> int {
 
     test_document_symbols(lsp, *context->source, failures);
     test_query(lsp, *context->source, failures);
+    test_depends_shorthand_document_symbols(failures);
     test_language_server(failures);
     test_language_server_impl_definition_and_rename(failures);
 

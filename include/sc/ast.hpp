@@ -417,6 +417,7 @@ struct FunctionDecl {
     std::vector<std::size_t> exit_drop_local_ids;
     const Type* resolved_return_type = nullptr;
     std::vector<ReturnDependency> return_dependencies;
+    std::vector<ReturnDependency> declared_return_dependencies;
     const FunctionDecl* template_decl = nullptr;
     std::vector<const Type*> type_arguments;
     ImplTargetKind impl_target_kind = ImplTargetKind::None;

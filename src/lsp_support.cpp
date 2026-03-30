@@ -368,7 +368,7 @@ class ModuleTraversal {
     auto parameterReferenceOccurrence(const ast::FunctionDecl& function)
         -> std::vector<LSPSymbolOccurrence> {
         std::vector<LSPSymbolOccurrence> occurrences;
-        for (const auto& dependency : function.return_dependencies) {
+        for (const auto& dependency : function.declared_return_dependencies) {
             for (const auto* path : {&dependency.source, &dependency.target}) {
                 if (path->is_return) {
                     continue;
@@ -386,12 +386,23 @@ class ModuleTraversal {
                         .type = parameter.resolved_type,
                     });
                 } else if (!path->root_name.empty()) {
+                    const auto parameter_it = std::ranges::find_if(
+                        function.parameters, [&](const ast::Parameter& param) {
+                            return param.name == path->root_name;
+                        });
                     occurrences.push_back(LSPSymbolOccurrence{
                         .kind = LSPSymbolKind::Parameter,
                         .role = LSPSymbolRole::Reference,
                         .name = path->root_name,
                         .range = path->root_range,
-                        .declaration_range = std::nullopt,
+                        .declaration_range =
+                            parameter_it != function.parameters.end()
+                                ? std::optional<SourceRange>(
+                                      parameter_it->name_range)
+                                : std::nullopt,
+                        .type = parameter_it != function.parameters.end()
+                                    ? parameter_it->resolved_type
+                                    : nullptr,
                     });
                 }
             }

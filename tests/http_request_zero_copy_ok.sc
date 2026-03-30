@@ -39,43 +39,26 @@ struct HttpRequest {
 }
 
 HttpHeader empty_header([]const char bytes)
-    depends(return.name on bytes, return.value on bytes) {
+    depends(return on bytes) {
     []const char empty = empty_span(bytes);
     return {empty, empty};
 }
 
 RequestTarget empty_target([]const char bytes)
-    depends(return.raw on bytes, return.path on bytes, return.query on bytes) {
+    depends(return on bytes) {
     []const char empty = empty_span(bytes);
     return {empty, empty, empty};
 }
 
 RequestLine empty_line([]const char bytes)
-    depends(return.method on bytes,
-            return.target.raw on bytes,
-            return.target.path on bytes,
-            return.target.query on bytes,
-            return.version on bytes) {
+    depends(return on bytes) {
     []const char empty = empty_span(bytes);
     RequestTarget target = empty_target(bytes);
     return {empty, target, empty};
 }
 
 HttpRequest blank_request([]const char bytes)
-    depends(return.line.method on bytes,
-            return.line.target.raw on bytes,
-            return.line.target.path on bytes,
-            return.line.target.query on bytes,
-            return.line.version on bytes,
-            return.headers.host.name on bytes,
-            return.headers.host.value on bytes,
-            return.headers.user_agent.name on bytes,
-            return.headers.user_agent.value on bytes,
-            return.headers.content_type.name on bytes,
-            return.headers.content_type.value on bytes,
-            return.headers.content_length.name on bytes,
-            return.headers.content_length.value on bytes,
-            return.body on bytes) {
+    depends(return on bytes) {
     HttpHeader empty = empty_header(bytes);
     RequestLine line = empty_line(bytes);
     HeaderBag headers = {empty, empty, empty, empty, 0};
@@ -120,7 +103,7 @@ int find_crlf([]const char bytes, int start) {
 }
 
 RequestTarget parse_target([]const char bytes, int start, int end)
-    depends(return.raw on bytes, return.path on bytes, return.query on bytes) {
+    depends(return on bytes) {
     []const char raw = subslice(bytes, start, end - start);
     int query_mark = find_byte_in_range(bytes, start, end, '?');
     if (query_mark < 0) {
@@ -136,11 +119,7 @@ RequestLine build_request_line([]const char bytes,
                                int method_end,
                                int target_end,
                                int line_end)
-    depends(return.method on bytes,
-            return.target.raw on bytes,
-            return.target.path on bytes,
-            return.target.query on bytes,
-            return.version on bytes) {
+    depends(return on bytes) {
     []const char method = subslice(bytes, 0, method_end);
     RequestTarget target = parse_target(bytes, method_end + 1, target_end);
     []const char version =
@@ -149,7 +128,7 @@ RequestLine build_request_line([]const char bytes,
 }
 
 HttpHeader parse_header_line([]const char bytes, int line_start, int line_end)
-    depends(return.name on bytes, return.value on bytes) {
+    depends(return on bytes) {
     int colon = find_byte_in_range(bytes, line_start, line_end, ':');
     []const char name = subslice(bytes, line_start, colon - line_start);
     int value_start = colon + 1;
@@ -187,20 +166,7 @@ bool is_content_length_header([]const char name) {
 }
 
 bool parse_http_request([]const char bytes, &mut HttpRequest out)
-    depends(out.line.method on bytes,
-            out.line.target.raw on bytes,
-            out.line.target.path on bytes,
-            out.line.target.query on bytes,
-            out.line.version on bytes,
-            out.headers.host.name on bytes,
-            out.headers.host.value on bytes,
-            out.headers.user_agent.name on bytes,
-            out.headers.user_agent.value on bytes,
-            out.headers.content_type.name on bytes,
-            out.headers.content_type.value on bytes,
-            out.headers.content_length.name on bytes,
-            out.headers.content_length.value on bytes,
-            out.body on bytes) {
+    depends(out on bytes) {
     *out = blank_request(bytes);
     if (len(bytes) == 0) {
         return false;

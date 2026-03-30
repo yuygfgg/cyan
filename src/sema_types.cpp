@@ -143,7 +143,14 @@ auto SemanticAnalyzer::instantiateFunctionTemplate(
         instantiated_decl.return_type =
             clone_type_syntax(*decl.return_type, type_bindings);
     }
-    instantiated_decl.return_dependencies = decl.return_dependencies;
+    instantiated_decl.declared_return_dependencies =
+        decl.declared_return_dependencies;
+    if (!instantiated_decl.declared_return_dependencies.empty()) {
+        instantiated_decl.return_dependencies =
+            instantiated_decl.declared_return_dependencies;
+    } else {
+        instantiated_decl.return_dependencies = decl.return_dependencies;
+    }
     instantiated_decl.impl_target_kind = decl.impl_target_kind;
     instantiated_decl.impl_target_name = decl.impl_target_name;
     instantiated_decl.interface_decl = decl.interface_decl;
