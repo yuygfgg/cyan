@@ -5,7 +5,7 @@ i64 main() {
     char[5] text = "cyan";
     char[5] out = ['\0', '\0', '\0', '\0', '\0'];
 
-    void* handle = file.fopen("cyan_stdlib_file_ok.tmp", "w+b");
+    void* handle = file.fopen("tests/cyan_stdlib_file_ok.tmp", "w+b");
     if (file.fwrite(&text[0], 1, 4, handle) != 4) {
         return 1;
     }

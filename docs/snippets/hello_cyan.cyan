@@ -1,0 +1,11 @@
+i64 add(i64 lhs, i64 rhs) {
+    return lhs + rhs;
+}
+
+i64 main() {
+    i64 value = add(20, 22);
+    if (value == 42) {
+        return 0;
+    }
+    return 1;
+}

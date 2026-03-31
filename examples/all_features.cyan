@@ -1,4 +1,4 @@
-import http_parse.println;
+import /std.println;
 
 // Use extern to import C functions.
 // None is needed in this example though.
@@ -170,7 +170,7 @@ export i64 main() {
     }
 
     // `println(..., [..])` passes a slice of interface values; each argument is
-    // coerced to the exported `fmt` interface implemented by `println.cyan`.
+    // coerced to the exported `fmt` interface implemented by `/std.println`.
     println("head={} focus={} view={} total={} sum={} adjusted={}",
             [pieces.head, highlighted.parts.tail, view.bytes, total, combined,
              adjusted]);

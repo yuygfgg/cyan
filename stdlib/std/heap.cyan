@@ -1,0 +1,23 @@
+export extern {
+    void* malloc(i64 size);
+    void free(void* ptr);
+    void* realloc(void* ptr, i64 size);
+}
+
+export T* malloc_array<T>(i64 count) {
+    unchecked {
+        return malloc(count * sizeof(T)) as T*;
+    }
+}
+
+export T* realloc_array<T>(T* ptr, i64 count) {
+    unchecked {
+        return realloc(ptr as void*, count * sizeof(T)) as T*;
+    }
+}
+
+export void free_ptr<T>(T* ptr) {
+    unchecked {
+        free(ptr as void*);
+    }
+}

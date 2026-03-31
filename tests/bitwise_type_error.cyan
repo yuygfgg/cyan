@@ -1,0 +1,3 @@
+i64 main() {
+    return true | false;
+}

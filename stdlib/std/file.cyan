@@ -1,0 +1,9 @@
+export extern {
+    void* fopen(const char* path, const char* mode);
+    void* fdopen(i32 fd, const char* mode);
+    i32 fclose(void* file);
+    i64 fread(char* ptr, i64 size, i64 count, void* file);
+    i64 fwrite(const char* ptr, i64 size, i64 count, void* file);
+    i32 fseek(void* file, i64 offset, i32 whence);
+    i64 ftell(void* file);
+}

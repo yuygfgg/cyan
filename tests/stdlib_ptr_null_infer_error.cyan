@@ -1,0 +1,6 @@
+import /std.ptr as ptr;
+
+i64 main() {
+    ptr.null();
+    return 0;
+}

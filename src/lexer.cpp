@@ -33,6 +33,7 @@ auto keyword_kind(std::string_view text) -> std::optional<TokenKind> {
         {"i16", TokenKind::KwI16},
         {"i32", TokenKind::KwI32},
         {"i64", TokenKind::KwI64},
+        {"i128", TokenKind::KwI128},
         {"import", TokenKind::KwImport},
         {"interface", TokenKind::KwInterface},
         {"move", TokenKind::KwMove},
@@ -47,6 +48,7 @@ auto keyword_kind(std::string_view text) -> std::optional<TokenKind> {
         {"u16", TokenKind::KwU16},
         {"u32", TokenKind::KwU32},
         {"u64", TokenKind::KwU64},
+        {"u128", TokenKind::KwU128},
         {"unchecked", TokenKind::KwUnchecked},
         {"void", TokenKind::KwVoid},
         {"while", TokenKind::KwWhile},
@@ -349,6 +351,16 @@ auto Lexer::lexPunctuation() -> std::expected<Token, Diagnostic> {
         return make(TokenKind::Slash);
     case '%':
         return make(TokenKind::Percent);
+    case '|':
+        if (!isAtEnd() && current() == '|') {
+            advance();
+            return make(TokenKind::OrOr);
+        }
+        return make(TokenKind::Pipe);
+    case '^':
+        return make(TokenKind::Caret);
+    case '~':
+        return make(TokenKind::Tilde);
     case '=':
         if (!isAtEnd() && current() == '=') {
             advance();
@@ -373,12 +385,6 @@ auto Lexer::lexPunctuation() -> std::expected<Token, Diagnostic> {
             return make(TokenKind::GreaterEqual);
         }
         return make(TokenKind::Greater);
-    case '|':
-        if (!isAtEnd() && current() == '|') {
-            advance();
-            return make(TokenKind::OrOr);
-        }
-        break;
     default:
         break;
     }

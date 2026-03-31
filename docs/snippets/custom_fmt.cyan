@@ -1,0 +1,20 @@
+import /std.println;
+
+struct Point {
+    i64 x;
+    i64 y;
+};
+
+impl fmt(&Point value, &mut StringBuilder out) {
+    fmt_write_cstr(out, "Point(");
+    fmt_write_i64(out, value.x);
+    fmt_write_cstr(out, ", ");
+    fmt_write_i64(out, value.y);
+    fmt_write_char(out, ')');
+}
+
+i64 main() {
+    Point point = {3, 4};
+    println("point={}", [point]);
+    return 0;
+}

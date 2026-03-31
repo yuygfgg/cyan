@@ -110,6 +110,10 @@ struct SemanticTokens {
     std::vector<std::uint32_t> data;
 };
 
+struct BuiltinSourceResult {
+    std::string text;
+};
+
 // NOLINTEND(readability-identifier-naming)
 
 } // namespace lsp_test
@@ -160,6 +164,16 @@ constexpr std::string_view DEPENDS_SHORTHAND_FIXTURE_SOURCE = R"(struct Pair {
 
 Pair pair([]const char text) depends(return on text) {
     return {text, text};
+}
+)";
+
+constexpr std::string_view BUILTIN_IMPORT_FIXTURE_SOURCE =
+    R"(import /std.mem as mem;
+
+i64 main() {
+    char[4] text = "abc";
+    mem.memcpy(&mut text[0], &text[0], 4);
+    return 0;
 }
 )";
 
@@ -974,6 +988,128 @@ auto test_language_server_impl_definition_and_rename(
     std::filesystem::remove(path);
 }
 
+auto test_language_server_builtin_definition(
+    std::vector<std::string>& failures) -> void {
+    const auto path =
+        write_fixture_file("cyan_lsp_builtin_fixture.cyan",
+                           BUILTIN_IMPORT_FIXTURE_SOURCE);
+    const auto uri = "file://" + path.generic_string();
+
+    const auto call_offset =
+        nth_offset(BUILTIN_IMPORT_FIXTURE_SOURCE, "memcpy", 0);
+    expect(call_offset.has_value(),
+           "failed to find builtin definition call offset", failures);
+    if (!call_offset.has_value()) {
+        std::filesystem::remove(path);
+        return;
+    }
+    const auto call_position =
+        offset_to_lsp_position(BUILTIN_IMPORT_FIXTURE_SOURCE, *call_offset);
+
+    const auto builtin_path = std::filesystem::absolute(
+        std::filesystem::path(__FILE__))
+                                  .parent_path()
+                                  .parent_path() /
+                              "stdlib" / "std" / "mem.cyan";
+    std::ifstream builtin_stream(builtin_path, std::ios::binary);
+    std::ostringstream builtin_buffer;
+    builtin_buffer << builtin_stream.rdbuf();
+    const auto builtin_source = builtin_buffer.str();
+    const auto builtin_decl_offset = nth_offset(builtin_source, "memcpy", 1);
+    expect(builtin_decl_offset.has_value(),
+           "failed to find builtin memcpy declaration offset", failures);
+    if (!builtin_decl_offset.has_value()) {
+        std::filesystem::remove(path);
+        return;
+    }
+    const auto builtin_decl_position =
+        offset_to_lsp_position(builtin_source, *builtin_decl_offset);
+    const std::string builtin_uri = "cyan-stdlib:/std/mem.cyan";
+
+    const std::string initialize_request =
+        R"({"jsonrpc":"2.0","id":21,"method":"initialize","params":{}})";
+    const std::string did_open_notification =
+        R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
+        uri + R"(","languageId":"cyan","version":1,"text":)" +
+        to_json(std::string(BUILTIN_IMPORT_FIXTURE_SOURCE)) + "}}}";
+    const std::string definition_request =
+        R"({"jsonrpc":"2.0","id":22,"method":"textDocument/definition","params":{"textDocument":{"uri":")" +
+        uri + R"("},"position":{"line":)" +
+        std::to_string(call_position.line) + R"(,"character":)" +
+        std::to_string(call_position.character) + "}}}";
+    const std::string builtin_source_request =
+        R"({"jsonrpc":"2.0","id":24,"method":"cyan/builtinSource","params":{"uri":")" +
+        builtin_uri + R"("}})";
+    const std::string shutdown_request =
+        R"({"jsonrpc":"2.0","id":23,"method":"shutdown","params":{}})";
+    const std::string exit_notification =
+        R"({"jsonrpc":"2.0","method":"exit"})";
+
+    std::string input_stream;
+    input_stream += frame_message(initialize_request);
+    input_stream += frame_message(did_open_notification);
+    input_stream += frame_message(definition_request);
+    input_stream += frame_message(builtin_source_request);
+    input_stream += frame_message(shutdown_request);
+    input_stream += frame_message(exit_notification);
+
+    cyan::LanguageServer server;
+    std::istringstream input(input_stream);
+    std::ostringstream output;
+    const auto exit_code = server.run(input, output);
+    expect(exit_code == 0,
+           "builtin definition server should exit cleanly after shutdown",
+           failures);
+
+    const auto bodies = read_framed_bodies(output.str());
+    std::vector<lsp_test::MessageEnvelope> messages;
+    for (const auto& body : bodies) {
+        const auto parsed = parse_json<lsp_test::MessageEnvelope>(body);
+        expect(parsed.has_value(),
+               "failed to parse builtin definition response", failures);
+        if (parsed.has_value()) {
+            messages.push_back(*parsed);
+        }
+    }
+
+    const auto* builtin_source_response = find_message_by_id(messages, "24");
+    expect(builtin_source_response != nullptr,
+           "missing builtin source response", failures);
+    if (builtin_source_response != nullptr &&
+        builtin_source_response->result.has_value()) {
+        const auto builtin_result = parse_json<lsp_test::BuiltinSourceResult>(
+            builtin_source_response->result->str);
+        expect(builtin_result.has_value(),
+               "failed to parse builtin source response", failures);
+        if (builtin_result.has_value()) {
+            expect(builtin_result->text == builtin_source,
+                   "builtin source response should return the embedded stdlib text",
+                   failures);
+        }
+    }
+
+    const auto* definition_response = find_message_by_id(messages, "22");
+    expect(definition_response != nullptr,
+           "missing builtin definition response", failures);
+    if (definition_response != nullptr &&
+        definition_response->result.has_value()) {
+        const auto definition =
+            parse_json<lsp_test::Location>(definition_response->result->str);
+        expect(definition.has_value(),
+               "failed to parse builtin definition response", failures);
+        if (definition.has_value()) {
+            expect(definition->uri == builtin_uri,
+                   "builtin definition should jump into stdlib source",
+                   failures);
+            expect(definition->range.start.line == builtin_decl_position.line,
+                   "builtin definition should land on the memcpy declaration line",
+                   failures);
+        }
+    }
+
+    std::filesystem::remove(path);
+}
+
 } // namespace
 
 auto main() -> int {
@@ -990,6 +1126,7 @@ auto main() -> int {
     test_depends_shorthand_document_symbols(failures);
     test_language_server(failures);
     test_language_server_impl_definition_and_rename(failures);
+    test_language_server_builtin_definition(failures);
 
     if (!failures.empty()) {
         for (const auto& failure : failures) {

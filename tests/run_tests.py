@@ -130,9 +130,30 @@ def run_case(binary: pathlib.Path, path: pathlib.Path) -> tuple[bool, str]:
             )
 
         exe_path = temp_dir / path.stem
-        link_command = ["cc", str(object_path)]
+        runtime_lib = binary.parent / "libcyan_runtime.a"
+        support_object = None
         if support_c.exists():
-            link_command.append(str(support_c))
+            support_object = temp_dir / f"{path.stem}.support.o"
+            support_proc = subprocess.run(
+                ["cc", "-c", str(support_c), "-o", str(support_object)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if support_proc.returncode != 0:
+                output = support_proc.stderr + support_proc.stdout
+                return (
+                    False,
+                    f"{path.name}: failed to compile runtime support file\n"
+                    f"{output}",
+                )
+
+        linker = "c++" if runtime_lib.exists() else "cc"
+        link_command = [linker, str(object_path)]
+        if support_object is not None:
+            link_command.append(str(support_object))
+        if runtime_lib.exists():
+            link_command.append(str(runtime_lib))
         link_command.extend(["-o", str(exe_path)])
         link_proc = subprocess.run(
             link_command,

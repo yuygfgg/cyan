@@ -1,0 +1,91 @@
+import /std.ptr as ptr;
+
+extern {
+    i64 cyan_strconv_write_f64(char* out, i64 capacity, f64 value);
+    i64 strtoll(const char* text, void* endptr, i32 base);
+    u64 strtoull(const char* text, void* endptr, i32 base);
+    f64 strtod(const char* text, void* endptr);
+}
+
+void buffer_push_char(char* out, &mut i64 len, char value) {
+    unchecked {
+        out[*len] = value;
+        *len = *len + 1;
+        out[*len] = '\0';
+    }
+}
+
+void buffer_push_digit(char* out, &mut i64 len, i64 digit) {
+    i64 ascii = ('0' as i64) + digit;
+    buffer_push_char(out, &mut len, ascii as char);
+}
+
+void buffer_append_positive_i64(char* out, &mut i64 len, i64 value) {
+    if (value >= 10) {
+        buffer_append_positive_i64(out, &mut len, value / 10);
+    }
+    buffer_push_digit(out, &mut len, value % 10);
+}
+
+void buffer_append_negative_i64_digits(char* out, &mut i64 len, i64 value) {
+    if (value <= -10) {
+        buffer_append_negative_i64_digits(out, &mut len, value / 10);
+    }
+    buffer_push_digit(out, &mut len, 0 - (value % 10));
+}
+
+void buffer_append_u64_digits(char* out, &mut i64 len, u64 value) {
+    if (value >= (10 as u64)) {
+        buffer_append_u64_digits(out, &mut len, value / (10 as u64));
+    }
+    buffer_push_digit(out, &mut len, (value % (10 as u64)) as i64);
+}
+
+export i64 write_i64(char* out, i64 value) {
+    i64 len = 0;
+    unchecked {
+        out[0] = '\0';
+    }
+
+    if (value < 0) {
+        buffer_push_char(out, &mut len, '-');
+        buffer_append_negative_i64_digits(out, &mut len, value);
+        return len;
+    }
+
+    buffer_append_positive_i64(out, &mut len, value);
+    return len;
+}
+
+export i64 write_u64(char* out, u64 value) {
+    i64 len = 0;
+    unchecked {
+        out[0] = '\0';
+    }
+    buffer_append_u64_digits(out, &mut len, value);
+    return len;
+}
+
+export i64 write_f64(char* out, i64 capacity, f64 value) {
+    return cyan_strconv_write_f64(out, capacity, value);
+}
+
+export i64 write_f32(char* out, i64 capacity, f32 value) {
+    return write_f64(out, capacity, value as f64);
+}
+
+export i64 parse_i64(const char* text) {
+    return strtoll(text, ptr.null<void>(), 10);
+}
+
+export u64 parse_u64(const char* text) {
+    return strtoull(text, ptr.null<void>(), 10);
+}
+
+export f64 parse_f64(const char* text) {
+    return strtod(text, ptr.null<void>());
+}
+
+export f32 parse_f32(const char* text) {
+    return parse_f64(text) as f32;
+}

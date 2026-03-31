@@ -1,0 +1,59 @@
+import /std.file as file;
+import /std.heap as heap;
+import /std.mem as mem;
+import /std.println;
+
+i64 main() {
+    char[92] expected =
+        "true false Z -8 -1600 -320000 -6400000000 250 65000 4000000000 9000000000000000000 1.5 0.1\n";
+    char* out = heap.malloc_array<char>(92);
+    mem.fill<char>(out, 0, 92);
+
+    bool yes = true;
+    bool no = false;
+    char letter = 'Z';
+    i8 small_signed = -8 as i8;
+    i16 medium_signed = -1600 as i16;
+    i32 large_signed = -320000 as i32;
+    i64 huge_signed = -6400000000;
+    u8 small_unsigned = 250 as u8;
+    u16 medium_unsigned = 65000 as u16;
+    u32 large_unsigned = 4000000000 as u32;
+    u64 huge_unsigned = 9000000000000000000 as u64;
+    f32 short_float = 1.5 as f32;
+    f64 long_float = 0.1;
+
+    void* handle = file.fopen("tests/cyan_stdlib_println_scalars_ok.tmp", "w+b");
+
+    fprintln(handle, "{} {} {} {} {} {} {} {} {} {} {} {} {}", [
+        yes,
+        no,
+        letter,
+        small_signed,
+        medium_signed,
+        large_signed,
+        huge_signed,
+        small_unsigned,
+        medium_unsigned,
+        large_unsigned,
+        huge_unsigned,
+        short_float,
+        long_float
+    ]);
+
+    if (file.fseek(handle, 0, 0) != 0) {
+        return 1;
+    }
+    if (file.fread(out, 1, 91, handle) != 91) {
+        return 2;
+    }
+    if (mem.memcmp(out, &expected[0], 92) != 0) {
+        return 3;
+    }
+    if (file.fclose(handle) != 0) {
+        return 4;
+    }
+    heap.free_ptr(out);
+
+    return 0;
+}

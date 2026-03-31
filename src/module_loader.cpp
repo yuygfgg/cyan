@@ -5,8 +5,11 @@
 #include "cyan/source.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <expected>
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -17,6 +20,41 @@ namespace {
 
 constexpr std::string_view BUILTIN_ROOT_TEXT = "/__cyan_builtin__";
 
+static constexpr char k_std_heap_source[] = {
+#embed "../stdlib/std/heap.cyan"
+    , 0};
+static constexpr char k_std_mem_source[] = {
+#embed "../stdlib/std/mem.cyan"
+    , 0};
+static constexpr char k_std_cstr_source[] = {
+#embed "../stdlib/std/cstr.cyan"
+    , 0};
+static constexpr char k_std_file_source[] = {
+#embed "../stdlib/std/file.cyan"
+    , 0};
+static constexpr char k_std_println_source[] = {
+#embed "../stdlib/std/println.cyan"
+    , 0};
+static constexpr char k_std_strconv_source[] = {
+#embed "../stdlib/std/strconv.cyan"
+    , 0};
+static constexpr char k_std_ptr_source[] = {
+#embed "../stdlib/std/ptr.cyan"
+    , 0};
+static constexpr char k_std_slice_source[] = {
+#embed "../stdlib/std/slice.cyan"
+    , 0};
+
+struct PendingIntrinsicLowering {
+    SourceRange range;
+    std::size_t target_offset = 0;
+    std::string intrinsic_name;
+    ast::LoweringConstantKind constant_kind = ast::LoweringConstantKind::None;
+    std::optional<std::string> intrinsic_return_spec;
+    std::optional<std::size_t> return_argument_index;
+    std::vector<ast::IntrinsicLoweringArgument> argument_overrides;
+};
+
 auto builtin_root_path() -> const std::filesystem::path& {
     static const auto path = std::filesystem::path(BUILTIN_ROOT_TEXT);
     return path;
@@ -26,95 +64,290 @@ auto builtin_module_sources()
     -> const std::unordered_map<std::string_view, std::string_view>& {
     static const auto modules =
         std::unordered_map<std::string_view, std::string_view>{
-            {
-                "std.heap",
-                R"(export extern {
-    void* malloc(i64 size);
-    void free(void* ptr);
-    void* realloc(void* ptr, i64 size);
-}
-
-export T* malloc_array<T>(i64 count) {
-    unchecked {
-        return malloc(count * sizeof(T)) as T*;
-    }
-}
-
-export T* realloc_array<T>(T* ptr, i64 count) {
-    unchecked {
-        return realloc(ptr as void*, count * sizeof(T)) as T*;
-    }
-}
-
-export void free_ptr<T>(T* ptr) {
-    unchecked {
-        free(ptr as void*);
-    }
-}
-)",
-            },
-            {
-                "std.mem",
-                R"(export extern {
-    i32 memcmp(const char* lhs, const char* rhs, i64 size);
-}
-
-export char* memcpy(char* dst, const char* src, i64 size) {
-    return dst;
-}
-
-export char* memset(char* dst, u8 value, i64 size) {
-    return dst;
-}
-
-export T* copy<T>(T* dst, const T* src, i64 count) {
-    unchecked {
-        memcpy(dst as char*, src as const char*, count * sizeof(T));
-    }
-    return dst;
-}
-
-export T* fill<T>(T* dst, u8 value, i64 count) {
-    unchecked {
-        memset(dst as char*, value, count * sizeof(T));
-    }
-    return dst;
-}
-)",
-            },
-            {
-                "std.cstr",
-                R"(export extern {
-    i64 strlen(const char* text);
-    i32 strcmp(const char* lhs, const char* rhs);
-}
-)",
-            },
-            {
-                "std.file",
-                R"(export extern {
-    void* fopen(const char* path, const char* mode);
-    i32 fclose(void* file);
-    i64 fread(char* ptr, i64 size, i64 count, void* file);
-    i64 fwrite(const char* ptr, i64 size, i64 count, void* file);
-    i32 fseek(void* file, i64 offset, i32 whence);
-    i64 ftell(void* file);
-}
-)",
-            },
-            {
-                "std.slice",
-                R"(export i64 span_len<T>([]T values) {
-    return len(values);
-}
-
-export []T span_slice<T>([]T values, i64 start, i64 count) {
-    return subslice(values, start, count);
-}
-)",
-            },
+            {"std.heap", std::string_view(k_std_heap_source,
+                                          sizeof(k_std_heap_source) - 1)},
+            {"std.mem",
+             std::string_view(k_std_mem_source, sizeof(k_std_mem_source) - 1)},
+            {"std.cstr", std::string_view(k_std_cstr_source,
+                                          sizeof(k_std_cstr_source) - 1)},
+            {"std.file", std::string_view(k_std_file_source,
+                                          sizeof(k_std_file_source) - 1)},
+            {"std.println", std::string_view(k_std_println_source,
+                                             sizeof(k_std_println_source) - 1)},
+            {"std.strconv", std::string_view(k_std_strconv_source,
+                                             sizeof(k_std_strconv_source) - 1)},
+            {"std.ptr",
+             std::string_view(k_std_ptr_source, sizeof(k_std_ptr_source) - 1)},
+            {"std.slice", std::string_view(k_std_slice_source,
+                                           sizeof(k_std_slice_source) - 1)},
         };
     return modules;
+}
+
+auto trim_ascii(std::string_view text) -> std::string_view {
+    while (!text.empty() &&
+           std::isspace(static_cast<unsigned char>(text.front())) != 0) {
+        text.remove_prefix(1);
+    }
+    while (!text.empty() &&
+           std::isspace(static_cast<unsigned char>(text.back())) != 0) {
+        text.remove_suffix(1);
+    }
+    return text;
+}
+
+auto skip_trivia(std::string_view text, std::size_t offset) -> std::size_t {
+    while (offset < text.size()) {
+        const auto ch = text[offset];
+        if (std::isspace(static_cast<unsigned char>(ch)) != 0) {
+            ++offset;
+            continue;
+        }
+        if (offset + 1 < text.size() && text[offset] == '/' &&
+            text[offset + 1] == '/') {
+            offset += 2;
+            while (offset < text.size() && text[offset] != '\n') {
+                ++offset;
+            }
+            continue;
+        }
+        break;
+    }
+    return offset;
+}
+
+auto starts_with_keyword(std::string_view text, std::size_t offset,
+                         std::string_view keyword) -> bool {
+    if (offset + keyword.size() > text.size() ||
+        text.substr(offset, keyword.size()) != keyword) {
+        return false;
+    }
+    const auto next = offset + keyword.size();
+    return next >= text.size() ||
+           (!std::isalnum(static_cast<unsigned char>(text[next])) &&
+            text[next] != '_');
+}
+
+auto skip_decl_prefix(std::string_view text, std::size_t offset)
+    -> std::size_t {
+    offset = skip_trivia(text, offset);
+    if (starts_with_keyword(text, offset, "export")) {
+        offset = skip_trivia(text, offset + std::string_view("export").size());
+    }
+    return offset;
+}
+
+auto parse_argument_index(std::string_view text)
+    -> std::expected<std::size_t, std::string> {
+    if (!text.starts_with("arg") || text.size() <= 3) {
+        return std::unexpected("expected 'argN'");
+    }
+    std::size_t value = 0;
+    for (std::size_t index = 3; index < text.size(); ++index) {
+        const auto ch = text[index];
+        if (std::isdigit(static_cast<unsigned char>(ch)) == 0) {
+            return std::unexpected("expected decimal argument index");
+        }
+        value = value * 10 +
+                static_cast<std::size_t>(ch - static_cast<unsigned char>('0'));
+    }
+    return value;
+}
+
+auto parse_return_argument_index(std::string_view text)
+    -> std::expected<std::optional<std::size_t>, std::string> {
+    if (text == "void") {
+        return std::nullopt;
+    }
+    auto value = parse_argument_index(text);
+    if (!value) {
+        return std::unexpected("expected 'void' or 'argN'");
+    }
+    return *value;
+}
+
+auto parse_intrinsic_lowering(const SourceFile& source, SourceRange range,
+                              std::string_view body)
+    -> std::expected<PendingIntrinsicLowering, Diagnostic> {
+    PendingIntrinsicLowering lowering;
+    lowering.range = range;
+    lowering.target_offset = skip_decl_prefix(source.text(), range.end);
+
+    body = trim_ascii(body);
+    if (!body.starts_with("@lower")) {
+        return std::unexpected(Diagnostic("unknown source directive", range));
+    }
+    body.remove_prefix(std::string_view("@lower").size());
+    body = trim_ascii(body);
+
+    while (!body.empty()) {
+        const auto separator = body.find_first_of(" \t\r\n");
+        const auto token = body.substr(0, separator);
+        body = separator == std::string_view::npos
+                   ? std::string_view()
+                   : trim_ascii(body.substr(separator + 1));
+        if (token.empty()) {
+            continue;
+        }
+
+        const auto equals = token.find('=');
+        if (equals == std::string_view::npos || equals == 0 ||
+            equals + 1 >= token.size()) {
+            return std::unexpected(Diagnostic(
+                "expected source directive option in the form key=value",
+                range));
+        }
+
+        const auto key = token.substr(0, equals);
+        const auto value = token.substr(equals + 1);
+        if (key == "intrinsic") {
+            lowering.intrinsic_name = std::string(value);
+            continue;
+        }
+        if (key == "constant") {
+            if (value == "null") {
+                lowering.constant_kind = ast::LoweringConstantKind::NullValue;
+                continue;
+            }
+            return std::unexpected(Diagnostic("unknown lowering constant '" +
+                                                  std::string(value) + "'",
+                                              range));
+        }
+        if (key == "llvm_return") {
+            lowering.intrinsic_return_spec = std::string(value);
+            continue;
+        }
+        if (key == "return") {
+            auto parsed = parse_return_argument_index(value);
+            if (!parsed) {
+                return std::unexpected(Diagnostic(
+                    "invalid lowering return policy: " + parsed.error(),
+                    range));
+            }
+            lowering.return_argument_index = *parsed;
+            continue;
+        }
+        if (key.starts_with("arg")) {
+            auto parsed = parse_argument_index(key);
+            if (!parsed) {
+                return std::unexpected(Diagnostic(
+                    "invalid lowering argument slot: " + parsed.error(),
+                    range));
+            }
+            lowering.argument_overrides.push_back(
+                ast::IntrinsicLoweringArgument{
+                    .index = *parsed, .value_spec = std::string(value)});
+            continue;
+        }
+        return std::unexpected(Diagnostic("unknown source directive option '" +
+                                              std::string(key) + "'",
+                                          range));
+    }
+
+    const auto has_intrinsic = !lowering.intrinsic_name.empty();
+    const auto has_constant =
+        lowering.constant_kind != ast::LoweringConstantKind::None;
+    if (has_intrinsic == has_constant) {
+        return std::unexpected(Diagnostic(
+            "lowering directive requires exactly one of intrinsic=... or "
+            "constant=...",
+            range));
+    }
+    if (has_constant && (lowering.intrinsic_return_spec.has_value() ||
+                         lowering.return_argument_index.has_value() ||
+                         !lowering.argument_overrides.empty())) {
+        return std::unexpected(Diagnostic(
+            "constant lowerings do not support llvm_return=..., return=..., "
+            "or argN=...",
+            range));
+    }
+    if (lowering.target_offset >= source.text().size()) {
+        return std::unexpected(Diagnostic(
+            "lowering directive must be followed by a declaration", range));
+    }
+    return lowering;
+}
+
+auto collect_intrinsic_lowerings(const SourceFile& source)
+    -> std::pair<std::vector<PendingIntrinsicLowering>, DiagnosticList> {
+    std::vector<PendingIntrinsicLowering> lowerings;
+    DiagnosticList diagnostics;
+
+    const auto text = source.text();
+    std::size_t line_begin = 0;
+    while (line_begin < text.size()) {
+        auto line_end = text.find('\n', line_begin);
+        if (line_end == std::string_view::npos) {
+            line_end = text.size();
+        }
+
+        const auto line = text.substr(line_begin, line_end - line_begin);
+        const auto trimmed = trim_ascii(line);
+        if (trimmed.starts_with("//")) {
+            const auto body = trim_ascii(trimmed.substr(2));
+            if (body.starts_with("@lower")) {
+                auto parsed = parse_intrinsic_lowering(
+                    source, source.range(line_begin, line_end), body);
+                if (!parsed) {
+                    diagnostics.push_back(parsed.error());
+                } else {
+                    lowerings.push_back(std::move(*parsed));
+                }
+            }
+        }
+
+        line_begin = line_end < text.size() ? line_end + 1 : text.size();
+    }
+
+    return {std::move(lowerings), std::move(diagnostics)};
+}
+
+auto apply_intrinsic_lowerings(
+    ast::Module& module, const std::vector<PendingIntrinsicLowering>& lowerings)
+    -> DiagnosticList {
+    DiagnosticList diagnostics;
+    std::unordered_map<std::size_t, ast::Decl*> decls_by_begin;
+    decls_by_begin.reserve(module.declarations.size());
+    for (auto& decl : module.declarations) {
+        decls_by_begin.emplace(
+            std::visit([](auto& value) { return value.range.begin; }, decl),
+            &decl);
+    }
+
+    for (const auto& lowering : lowerings) {
+        const auto decl_it = decls_by_begin.find(lowering.target_offset);
+        if (decl_it == decls_by_begin.end()) {
+            diagnostics.push_back(Diagnostic(
+                "lowering directive must immediately precede a declaration",
+                lowering.range));
+            continue;
+        }
+
+        auto* function = std::get_if<ast::FunctionDecl>(decl_it->second);
+        if (function == nullptr) {
+            diagnostics.push_back(Diagnostic(
+                "lowering directives may only be attached to functions",
+                lowering.range));
+            continue;
+        }
+        if (function->intrinsic_lowering.has_value()) {
+            diagnostics.push_back(
+                Diagnostic("duplicate lowering directive for function '" +
+                               function->name + "'",
+                           lowering.range));
+            continue;
+        }
+
+        function->intrinsic_lowering = ast::IntrinsicLowering{
+            .range = lowering.range,
+            .intrinsic_name = lowering.intrinsic_name,
+            .constant_kind = lowering.constant_kind,
+            .intrinsic_return_spec = lowering.intrinsic_return_spec,
+            .return_argument_index = lowering.return_argument_index,
+            .argument_overrides = lowering.argument_overrides,
+        };
+    }
+    return diagnostics;
 }
 
 auto is_within_root(const std::filesystem::path& path,
@@ -192,7 +425,17 @@ auto parse_source(const SourceFile& source)
     }
 
     Parser parser(source, std::move(*tokens));
-    return parser.parseModule();
+    auto module = parser.parseModule();
+    auto [lowerings, lowering_diagnostics] =
+        collect_intrinsic_lowerings(source);
+    module.diagnostics.insert(module.diagnostics.end(),
+                              lowering_diagnostics.begin(),
+                              lowering_diagnostics.end());
+    auto apply_diagnostics = apply_intrinsic_lowerings(module, lowerings);
+    module.diagnostics.insert(module.diagnostics.end(),
+                              apply_diagnostics.begin(),
+                              apply_diagnostics.end());
+    return module;
 }
 
 auto resolve_module_name(const ast::Package& package,
@@ -215,6 +458,13 @@ auto resolve_module_name(const ast::Package& package,
 auto load_source(const std::filesystem::path& canonical_path,
                  const ModuleLoadOptions& options)
     -> std::expected<SourceFile, std::string> {
+    if (options.overrides != nullptr) {
+        if (const auto it = options.overrides->find(path_key(canonical_path));
+            it != options.overrides->end()) {
+            return SourceFile::fromText(canonical_path, it->second);
+        }
+    }
+
     if (is_within_root(canonical_path, builtin_root_path())) {
         const auto relative =
             canonical_path.lexically_relative(builtin_root_path());
@@ -225,13 +475,6 @@ auto load_source(const std::filesystem::path& canonical_path,
                                         std::string(it->second));
         }
         return std::unexpected("unknown builtin module");
-    }
-
-    if (options.overrides != nullptr) {
-        if (const auto it = options.overrides->find(path_key(canonical_path));
-            it != options.overrides->end()) {
-            return SourceFile::fromText(canonical_path, it->second);
-        }
     }
     return SourceFile::load(canonical_path);
 }
@@ -352,6 +595,27 @@ auto normalized_path(const std::filesystem::path& path)
 
 auto path_key(const std::filesystem::path& path) -> std::string {
     return normalized_path(path).string();
+}
+
+auto builtin_virtual_root_path() -> const std::filesystem::path& {
+    return builtin_root_path();
+}
+
+auto builtin_source_text(const std::filesystem::path& path)
+    -> std::optional<std::string> {
+    const auto canonical_path = normalized_path(path);
+    if (!is_within_root(canonical_path, builtin_root_path())) {
+        return std::nullopt;
+    }
+    const auto relative =
+        canonical_path.lexically_relative(builtin_root_path());
+    const auto module_name = module_name_from_relative_path(relative);
+    const auto& builtins = builtin_module_sources();
+    const auto it = builtins.find(module_name);
+    if (it == builtins.end()) {
+        return std::nullopt;
+    }
+    return std::string(it->second);
 }
 
 auto load_package(ast::Package& package,

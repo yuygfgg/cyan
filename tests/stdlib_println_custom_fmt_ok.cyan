@@ -1,0 +1,42 @@
+import /std.file as file;
+import /std.mem as mem;
+import /std.println;
+
+struct Point {
+    i64 x;
+    i64 y;
+};
+
+impl fmt(&Point value, &mut StringBuilder out) {
+    fmt_write_cstr(out, "Point(");
+    fmt_write_i64(out, value.x);
+    fmt_write_cstr(out, ", ");
+    fmt_write_i64(out, value.y);
+    fmt_write_char(out, ')');
+}
+
+i64 main() {
+    char[13] expected = "Point(3, 4)\n";
+    char[13] out = ['\0', '\0', '\0', '\0', '\0', '\0', '\0',
+                    '\0', '\0', '\0', '\0', '\0', '\0'];
+    Point point = {3, 4};
+    void* handle = file.fopen("tests/cyan_stdlib_println_custom_fmt_ok.tmp",
+                              "w+b");
+
+    fprintln(handle, "{}", [point]);
+
+    if (file.fseek(handle, 0, 0) != 0) {
+        return 1;
+    }
+    if (file.fread(&mut out[0], 1, 12, handle) != 12) {
+        return 2;
+    }
+    if (mem.memcmp(&out[0], &expected[0], 13) != 0) {
+        return 3;
+    }
+    if (file.fclose(handle) != 0) {
+        return 4;
+    }
+
+    return 0;
+}

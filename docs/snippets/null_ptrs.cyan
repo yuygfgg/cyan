@@ -1,0 +1,10 @@
+import /std.ptr as ptr;
+
+i64 main() {
+    i64* counter = ptr.null<i64>();
+    void* raw = ptr.null<void>();
+    if (counter == ptr.null<i64>() && raw == ptr.null<void>()) {
+        return 0;
+    }
+    return 1;
+}

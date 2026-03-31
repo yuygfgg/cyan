@@ -1,6 +1,7 @@
 #include "sema_detail.hpp"
 
-#include <limits>
+#include <llvm/ADT/APInt.h>
+#include <llvm/ADT/StringRef.h>
 
 namespace cyan {
 
@@ -33,51 +34,52 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
 
     const auto* const literal_expected_type =
         expected_type == nullptr ? nullptr : types.unqualify(expected_type);
+    const auto parse_integer_literal_value =
+        [](std::string_view text) -> llvm::APInt {
+        const auto bit_width = static_cast<unsigned>(
+            std::max<std::size_t>(64, text.size() * 4 + 1));
+        return llvm::APInt(bit_width, llvm::StringRef(text.data(), text.size()),
+                           10);
+    };
+    const auto integer_literal_fits_positive =
+        [&](const llvm::APInt& value, const Type* target_type) -> bool {
+        target_type =
+            target_type == nullptr ? nullptr : types.unqualify(target_type);
+        if (target_type == nullptr || target_type->kind != TypeKind::Integer) {
+            return false;
+        }
+        const auto compare_width = std::max<unsigned>(
+            value.getBitWidth(),
+            static_cast<unsigned>(target_type->bit_width) + 1U);
+        const auto widened = value.zextOrTrunc(compare_width);
+        llvm::APInt upper_bound(compare_width, 1);
+        upper_bound <<=
+            target_type->bit_width - (target_type->is_signed ? 1U : 0U);
+        return widened.ult(upper_bound);
+    };
+    const auto integer_literal_fits_negative_magnitude =
+        [&](const llvm::APInt& value, const Type* target_type) -> bool {
+        target_type =
+            target_type == nullptr ? nullptr : types.unqualify(target_type);
+        if (target_type == nullptr || target_type->kind != TypeKind::Integer ||
+            !target_type->is_signed) {
+            return false;
+        }
+        const auto compare_width = std::max<unsigned>(
+            value.getBitWidth(),
+            static_cast<unsigned>(target_type->bit_width) + 1U);
+        const auto widened = value.zextOrTrunc(compare_width);
+        llvm::APInt upper_bound(compare_width, 1);
+        upper_bound <<= target_type->bit_width - 1U;
+        return widened.ule(upper_bound);
+    };
     const auto resolve_integer_literal_type =
-        [&](std::int64_t value) -> std::expected<const Type*, Diagnostic> {
+        [&](const ast::IntegerLiteralExpr& literal)
+        -> std::expected<const Type*, Diagnostic> {
+        const auto value = parse_integer_literal_value(literal.text);
         if (literal_expected_type != nullptr &&
             literal_expected_type->kind == TypeKind::Integer) {
-            const auto fits = [&]() -> bool {
-                if (literal_expected_type->is_signed) {
-                    switch (literal_expected_type->bit_width) {
-                    case 8:
-                        return value >=
-                                   std::numeric_limits<std::int8_t>::min() &&
-                               value <= std::numeric_limits<std::int8_t>::max();
-                    case 16:
-                        return value >=
-                                   std::numeric_limits<std::int16_t>::min() &&
-                               value <=
-                                   std::numeric_limits<std::int16_t>::max();
-                    case 32:
-                        return value >=
-                                   std::numeric_limits<std::int32_t>::min() &&
-                               value <=
-                                   std::numeric_limits<std::int32_t>::max();
-                    case 64:
-                        return true;
-                    default:
-                        return false;
-                    }
-                }
-
-                if (value < 0) {
-                    return false;
-                }
-                switch (literal_expected_type->bit_width) {
-                case 8:
-                    return value <= std::numeric_limits<std::uint8_t>::max();
-                case 16:
-                    return value <= std::numeric_limits<std::uint16_t>::max();
-                case 32:
-                    return value <= std::numeric_limits<std::uint32_t>::max();
-                case 64:
-                    return true;
-                default:
-                    return false;
-                }
-            }();
-            if (!fits) {
+            if (!integer_literal_fits_positive(value, literal_expected_type)) {
                 return unexpected_result<const Type*>(
                     "integer literal does not fit in expected type '" +
                         types.describe(literal_expected_type) + "'",
@@ -86,15 +88,21 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
             return literal_expected_type;
         }
 
-        static_cast<void>(value);
-        return types.defaultIntegerType();
+        const auto* default_type = types.defaultIntegerType();
+        if (!integer_literal_fits_positive(value, default_type)) {
+            return unexpected_result<const Type*>(
+                "integer literal does not fit in default type '" +
+                    types.describe(default_type) + "'",
+                expr.range);
+        }
+        return default_type;
     };
 
     return std::visit(
         Overloaded{
             [&](ast::IntegerLiteralExpr& literal)
                 -> std::expected<const Type*, Diagnostic> {
-                auto literal_type = resolve_integer_literal_type(literal.value);
+                auto literal_type = resolve_integer_literal_type(literal);
                 if (!literal_type) {
                     return std::unexpected(literal_type.error());
                 }
@@ -235,8 +243,19 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                                  types.isFloat(literal_expected_type))
                             ? literal_expected_type
                             : nullptr;
-                    auto operand_type = requireReadable(state, *unary.operand,
-                                                        negate_expected_type);
+                    const auto* literal = std::get_if<ast::IntegerLiteralExpr>(
+                        &unary.operand->node);
+                    const auto* magnitude_type =
+                        literal != nullptr && negate_expected_type != nullptr &&
+                                types.isSignedInteger(negate_expected_type) &&
+                                integer_literal_fits_negative_magnitude(
+                                    parse_integer_literal_value(literal->text),
+                                    negate_expected_type)
+                            ? types.integerType(negate_expected_type->bit_width,
+                                                false)
+                            : negate_expected_type;
+                    auto operand_type =
+                        requireReadable(state, *unary.operand, magnitude_type);
                     if (!operand_type) {
                         return std::unexpected(operand_type.error());
                     }
@@ -248,7 +267,14 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                             "operand",
                             unary.operand->range);
                     }
-                    expr.resolved_type = value_type;
+                    expr.resolved_type =
+                        literal != nullptr && negate_expected_type != nullptr &&
+                                types.isSignedInteger(negate_expected_type) &&
+                                integer_literal_fits_negative_magnitude(
+                                    parse_integer_literal_value(literal->text),
+                                    negate_expected_type)
+                            ? negate_expected_type
+                            : value_type;
                     expr.resolved_place.reset();
                     return expr.resolved_type;
                 }
@@ -263,6 +289,25 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                             unary.operand->range);
                     }
                     expr.resolved_type = types.boolType();
+                    expr.resolved_place.reset();
+                    return expr.resolved_type;
+                }
+                case ast::UnaryOp::BitwiseNot: {
+                    auto operand_type = requireReadable(
+                        state, *unary.operand,
+                        literal_expected_type != nullptr &&
+                                types.isInteger(literal_expected_type)
+                            ? literal_expected_type
+                            : nullptr);
+                    if (!operand_type) {
+                        return std::unexpected(operand_type.error());
+                    }
+                    if (!types.isInteger(*operand_type)) {
+                        return unexpected_result<const Type*>(
+                            "unary '~' requires an integer operand",
+                            unary.operand->range);
+                    }
+                    expr.resolved_type = types.unqualify(*operand_type);
                     expr.resolved_place.reset();
                     return expr.resolved_type;
                 }
@@ -389,6 +434,24 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
             },
             [&](ast::BinaryExpr& binary)
                 -> std::expected<const Type*, Diagnostic> {
+                const auto is_numeric_literal_like =
+                    [](const ast::Expr& candidate) -> bool {
+                    if (std::holds_alternative<ast::IntegerLiteralExpr>(
+                            candidate.node) ||
+                        std::holds_alternative<ast::FloatLiteralExpr>(
+                            candidate.node)) {
+                        return true;
+                    }
+                    const auto* unary =
+                        std::get_if<ast::UnaryExpr>(&candidate.node);
+                    if (unary == nullptr || unary->op != ast::UnaryOp::Negate) {
+                        return false;
+                    }
+                    return std::holds_alternative<ast::IntegerLiteralExpr>(
+                               unary->operand->node) ||
+                           std::holds_alternative<ast::FloatLiteralExpr>(
+                               unary->operand->node);
+                };
                 const auto expected_literal_type =
                     [&](const ast::Expr& candidate,
                         const Type* other_type) -> const Type* {
@@ -398,13 +461,20 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                     if (other_type == nullptr) {
                         return nullptr;
                     }
-                    if (std::holds_alternative<ast::IntegerLiteralExpr>(
-                            candidate.node) &&
-                        types.isInteger(other_type)) {
+                    if (is_numeric_literal_like(candidate) &&
+                        types.isInteger(other_type) &&
+                        (std::holds_alternative<ast::IntegerLiteralExpr>(
+                             candidate.node) ||
+                         (std::get_if<ast::UnaryExpr>(&candidate.node) !=
+                              nullptr &&
+                          std::get_if<ast::UnaryExpr>(&candidate.node)->op ==
+                              ast::UnaryOp::Negate &&
+                          std::holds_alternative<ast::IntegerLiteralExpr>(
+                              std::get_if<ast::UnaryExpr>(&candidate.node)
+                                  ->operand->node)))) {
                         return other_type;
                     }
-                    if (std::holds_alternative<ast::FloatLiteralExpr>(
-                            candidate.node) &&
+                    if (is_numeric_literal_like(candidate) &&
                         types.isFloat(other_type)) {
                         return other_type;
                     }
@@ -417,17 +487,29 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                     unexpected_result<const Type*>("unreachable", expr.range);
 
                 const auto lhs_is_literal =
-                    std::holds_alternative<ast::IntegerLiteralExpr>(
-                        binary.lhs->node) ||
-                    std::holds_alternative<ast::FloatLiteralExpr>(
-                        binary.lhs->node);
+                    is_numeric_literal_like(*binary.lhs);
                 const auto rhs_is_literal =
-                    std::holds_alternative<ast::IntegerLiteralExpr>(
-                        binary.rhs->node) ||
-                    std::holds_alternative<ast::FloatLiteralExpr>(
-                        binary.rhs->node);
+                    is_numeric_literal_like(*binary.rhs);
 
-                if (lhs_is_literal && !rhs_is_literal) {
+                if (binary.op == ast::BinaryOp::ShiftLeft ||
+                    binary.op == ast::BinaryOp::ShiftRight) {
+                    const auto* lhs_expected_type =
+                        std::holds_alternative<ast::IntegerLiteralExpr>(
+                            binary.lhs->node) &&
+                                literal_expected_type != nullptr &&
+                                types.isInteger(literal_expected_type)
+                            ? literal_expected_type
+                            : nullptr;
+                    lhs_type =
+                        requireReadable(state, *binary.lhs, lhs_expected_type);
+                    if (!lhs_type) {
+                        return std::unexpected(lhs_type.error());
+                    }
+                    rhs_type = requireReadable(state, *binary.rhs);
+                    if (!rhs_type) {
+                        return std::unexpected(rhs_type.error());
+                    }
+                } else if (lhs_is_literal && !rhs_is_literal) {
                     rhs_type = requireReadable(state, *binary.rhs);
                     if (!rhs_type) {
                         return std::unexpected(rhs_type.error());
@@ -493,6 +575,28 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                         "operands, matching floating-point operands, or "
                         "unchecked pointer arithmetic",
                         expr.range);
+                case ast::BinaryOp::ShiftLeft:
+                case ast::BinaryOp::ShiftRight:
+                    if (!types.isInteger(lhs_value_type) ||
+                        !types.isInteger(rhs_value_type)) {
+                        return unexpected_result<const Type*>(
+                            "shift operators require integer operands",
+                            expr.range);
+                    }
+                    expr.resolved_type = lhs_value_type;
+                    break;
+                case ast::BinaryOp::BitwiseAnd:
+                case ast::BinaryOp::BitwiseXor:
+                case ast::BinaryOp::BitwiseOr:
+                    if (!(types.isInteger(lhs_value_type) &&
+                          lhs_value_type == rhs_value_type)) {
+                        return unexpected_result<const Type*>(
+                            "bitwise operators require matching integer "
+                            "operands",
+                            expr.range);
+                    }
+                    expr.resolved_type = lhs_value_type;
+                    break;
                 case ast::BinaryOp::Less:
                 case ast::BinaryOp::LessEqual:
                 case ast::BinaryOp::Greater:
@@ -924,7 +1028,21 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                 if (!target_type) {
                     return std::unexpected(target_type.error());
                 }
-                auto operand_type = requireReadable(state, *cast_expr.operand);
+                const auto literal_cast_target =
+                    (std::holds_alternative<ast::IntegerLiteralExpr>(
+                         cast_expr.operand->node) ||
+                     std::holds_alternative<ast::FloatLiteralExpr>(
+                         cast_expr.operand->node) ||
+                     (std::get_if<ast::UnaryExpr>(&cast_expr.operand->node) !=
+                          nullptr &&
+                      std::get_if<ast::UnaryExpr>(&cast_expr.operand->node)
+                              ->op == ast::UnaryOp::Negate)) &&
+                            (types.isInteger(*target_type) ||
+                             types.isFloat(*target_type))
+                        ? *target_type
+                        : nullptr;
+                auto operand_type = requireReadable(state, *cast_expr.operand,
+                                                    literal_cast_target);
                 if (!operand_type) {
                     return std::unexpected(operand_type.error());
                 }

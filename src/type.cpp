@@ -33,10 +33,12 @@ TypeContext::TypeContext() {
     i16_builtin_type = register_builtin(TypeKind::Integer, "i16", 16, true);
     i32_builtin_type = register_builtin(TypeKind::Integer, "i32", 32, true);
     i64_builtin_type = register_builtin(TypeKind::Integer, "i64", 64, true);
+    i128_builtin_type = register_builtin(TypeKind::Integer, "i128", 128, true);
     u8_builtin_type = register_builtin(TypeKind::Integer, "u8", 8, false);
     u16_builtin_type = register_builtin(TypeKind::Integer, "u16", 16, false);
     u32_builtin_type = register_builtin(TypeKind::Integer, "u32", 32, false);
     u64_builtin_type = register_builtin(TypeKind::Integer, "u64", 64, false);
+    u128_builtin_type = register_builtin(TypeKind::Integer, "u128", 128, false);
     f32_builtin_type = register_builtin(TypeKind::Float, "f32", 32);
     f64_builtin_type = register_builtin(TypeKind::Float, "f64", 64);
     char_builtin_type = register_builtin(TypeKind::Char, "char", 8);
@@ -64,6 +66,8 @@ auto TypeContext::i32Type() const -> const Type* { return i32_builtin_type; }
 
 auto TypeContext::i64Type() const -> const Type* { return i64_builtin_type; }
 
+auto TypeContext::i128Type() const -> const Type* { return i128_builtin_type; }
+
 auto TypeContext::u8Type() const -> const Type* { return u8_builtin_type; }
 
 auto TypeContext::u16Type() const -> const Type* { return u16_builtin_type; }
@@ -71,6 +75,8 @@ auto TypeContext::u16Type() const -> const Type* { return u16_builtin_type; }
 auto TypeContext::u32Type() const -> const Type* { return u32_builtin_type; }
 
 auto TypeContext::u64Type() const -> const Type* { return u64_builtin_type; }
+
+auto TypeContext::u128Type() const -> const Type* { return u128_builtin_type; }
 
 auto TypeContext::f32Type() const -> const Type* { return f32_builtin_type; }
 
@@ -87,6 +93,8 @@ auto TypeContext::integerType(std::uint16_t bit_width, bool is_signed) const
         return is_signed ? i32_builtin_type : u32_builtin_type;
     case 64:
         return is_signed ? i64_builtin_type : u64_builtin_type;
+    case 128:
+        return is_signed ? i128_builtin_type : u128_builtin_type;
     default:
         return nullptr;
     }

@@ -8,10 +8,7 @@ structure with `println`, sends a `200 OK`, then exits.
 
 ```sh
 ./build/cyan examples/http_parse/main.cyan -o /tmp/http_parse.o
-cc /tmp/http_parse.o \
-  examples/http_parse/println.c \
-  examples/http_parse/socket_ffi.c \
-  -o /tmp/http_parse
+cc /tmp/http_parse.o examples/http_parse/socket_ffi.c -o /tmp/http_parse
 ```
 
 ## Run

@@ -70,8 +70,12 @@ class Parser {
     auto parseExpr() -> std::expected<ast::ExprPtr, Diagnostic>;
     auto parseLogicalOr() -> std::expected<ast::ExprPtr, Diagnostic>;
     auto parseLogicalAnd() -> std::expected<ast::ExprPtr, Diagnostic>;
+    auto parseBitwiseOr() -> std::expected<ast::ExprPtr, Diagnostic>;
+    auto parseBitwiseXor() -> std::expected<ast::ExprPtr, Diagnostic>;
+    auto parseBitwiseAnd() -> std::expected<ast::ExprPtr, Diagnostic>;
     auto parseEquality() -> std::expected<ast::ExprPtr, Diagnostic>;
     auto parseRelational() -> std::expected<ast::ExprPtr, Diagnostic>;
+    auto parseShift() -> std::expected<ast::ExprPtr, Diagnostic>;
     auto parseAdditive() -> std::expected<ast::ExprPtr, Diagnostic>;
     auto parseMultiplicative() -> std::expected<ast::ExprPtr, Diagnostic>;
     auto parseCast() -> std::expected<ast::ExprPtr, Diagnostic>;

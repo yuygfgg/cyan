@@ -8,6 +8,11 @@ import {
 } from "vscode-languageclient/node";
 
 let client: LanguageClient | undefined;
+const builtinScheme = "cyan-stdlib";
+
+type BuiltinSourceResult = {
+  text: string;
+};
 
 function candidateExecutableNames(): string[] {
   if (process.platform !== "win32") {
@@ -90,6 +95,36 @@ export async function activate(
   const output = vscode.window.createOutputChannel("Cyan");
   context.subscriptions.push(output);
 
+  const builtinProvider: vscode.TextDocumentContentProvider = {
+    async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
+      if (!client) {
+        return "// Cyan language server is not running.\n";
+      }
+
+      try {
+        const result = await client.sendRequest<BuiltinSourceResult | null>(
+          "cyan/builtinSource",
+          { uri: uri.toString() }
+        );
+        if (result?.text) {
+          return result.text;
+        }
+        return `// Builtin source not found: ${uri.toString()}\n`;
+      } catch (error) {
+        output.appendLine(
+          `Failed to fetch builtin source for ${uri.toString()}: ${String(error)}`
+        );
+        return `// Failed to fetch builtin source: ${String(error)}\n`;
+      }
+    }
+  };
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(
+      builtinScheme,
+      builtinProvider
+    )
+  );
+
   const serverPath =
     resolveServerPathFromPath() ?? resolveConfiguredServerPath(output);
   if (!serverPath) {
@@ -111,7 +146,10 @@ export async function activate(
   };
 
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [{ scheme: "file", language: "cyan" }],
+    documentSelector: [
+      { scheme: "file", language: "cyan" },
+      { scheme: builtinScheme, language: "cyan" }
+    ],
     synchronize: {
       configurationSection: "cyan"
     },

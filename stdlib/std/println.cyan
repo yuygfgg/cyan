@@ -1,0 +1,315 @@
+import /std.cstr as cstr;
+import /std.file as file;
+import /std.heap as heap;
+import /std.strconv as strconv;
+
+extern {
+    i32 dup(i32 fd);
+}
+
+export struct StringBuilder {
+    char* ptr;
+    i64 len;
+    i64 capacity;
+};
+
+impl drop(&mut StringBuilder self) {
+    heap.free_ptr(self.ptr);
+}
+
+StringBuilder builder_new(i64 capacity) {
+    char* memory = heap.malloc_array<char>(capacity);
+    unchecked {
+        memory[0] = '\0';
+    }
+    return {memory, 0, capacity};
+}
+
+void builder_reserve(&mut StringBuilder out, i64 needed) {
+    if (needed <= out.capacity) {
+        return;
+    }
+
+    i64 next_capacity = out.capacity;
+    while (next_capacity < needed) {
+        next_capacity = next_capacity * 2;
+    }
+
+    out.ptr = heap.realloc_array<char>(out.ptr, next_capacity);
+    out.capacity = next_capacity;
+}
+
+void builder_push_char(&mut StringBuilder out, char value) {
+    i64 needed = out.len + 2;
+    builder_reserve(out, needed);
+    unchecked {
+        out.ptr[out.len] = value;
+        out.len = out.len + 1;
+        out.ptr[out.len] = '\0';
+    }
+}
+
+void builder_append_cstring(&mut StringBuilder out, const char* text) {
+    i64 text_len = cstr.strlen(text);
+    i64 needed = out.len + text_len + 1;
+    builder_reserve(out, needed);
+
+    unchecked {
+        i64 i = 0;
+        while (i < text_len) {
+            out.ptr[out.len + i] = text[i];
+            i = i + 1;
+        }
+        out.len = out.len + text_len;
+        out.ptr[out.len] = '\0';
+    }
+}
+
+void builder_append_slice(&mut StringBuilder out, []const char text) {
+    i64 text_len = len(text);
+    i64 needed = out.len + text_len + 1;
+    builder_reserve(out, needed);
+
+    i64 i = 0;
+    while (i < text_len) {
+        unchecked {
+            out.ptr[out.len + i] = text[i];
+        }
+        i++;
+    }
+
+    unchecked {
+        out.len = out.len + text_len;
+        out.ptr[out.len] = '\0';
+    }
+}
+
+void builder_append_buffer(&mut StringBuilder out, char* text, i64 text_len) {
+    i64 needed = out.len + text_len + 1;
+    builder_reserve(out, needed);
+
+    i64 i = 0;
+    while (i < text_len) {
+        unchecked {
+            out.ptr[out.len + i] = text[i];
+        }
+        i++;
+    }
+
+    unchecked {
+        out.len = out.len + text_len;
+        out.ptr[out.len] = '\0';
+    }
+}
+
+void builder_append_i64(&mut StringBuilder out, i64 value) {
+    i64 needed = out.len + 21;
+    builder_reserve(out, needed);
+    unchecked {
+        char* dst = out.ptr + out.len;
+        i64 written = strconv.write_i64(dst, value);
+        out.len = out.len + written;
+    }
+}
+
+void builder_append_u64(&mut StringBuilder out, u64 value) {
+    i64 needed = out.len + 21;
+    builder_reserve(out, needed);
+    unchecked {
+        char* dst = out.ptr + out.len;
+        i64 written = strconv.write_u64(dst, value);
+        out.len = out.len + written;
+    }
+}
+
+void builder_append_f64(&mut StringBuilder out, f64 value) {
+    i64 needed = out.len + 64;
+    builder_reserve(out, needed);
+    i64 written = 0;
+    unchecked {
+        char* dst = out.ptr + out.len;
+        written = strconv.write_f64(dst, out.capacity - out.len, value);
+    }
+    if (written < 0) {
+        builder_append_cstring(out, "<float fmt error>");
+        return;
+    }
+    out.len = out.len + written;
+}
+
+export interface<T> void fmt(&T value, &mut StringBuilder out);
+
+export void fmt_write_char(&mut StringBuilder out, char value) {
+    builder_push_char(out, value);
+}
+
+export void fmt_write_cstr(&mut StringBuilder out, const char* text) {
+    builder_append_cstring(out, text);
+}
+
+export void fmt_write_slice(&mut StringBuilder out, []const char text) {
+    builder_append_slice(out, text);
+}
+
+export void fmt_write_i64(&mut StringBuilder out, i64 value) {
+    builder_append_i64(out, value);
+}
+
+export void fmt_write_u64(&mut StringBuilder out, u64 value) {
+    builder_append_u64(out, value);
+}
+
+export void fmt_write_f64(&mut StringBuilder out, f64 value) {
+    builder_append_f64(out, value);
+}
+
+export void fmt_write_bool(&mut StringBuilder out, bool value) {
+    if (value) {
+        builder_append_cstring(out, "true");
+        return;
+    }
+    builder_append_cstring(out, "false");
+}
+
+impl fmt(&[]const char value, &mut StringBuilder out) {
+    builder_append_slice(out, *value);
+}
+
+impl fmt(&bool value, &mut StringBuilder out) {
+    fmt_write_bool(out, *value);
+}
+
+impl fmt(&char value, &mut StringBuilder out) {
+    builder_push_char(out, *value);
+}
+
+impl fmt(&i8 value, &mut StringBuilder out) {
+    builder_append_i64(out, *value as i64);
+}
+
+impl fmt(&i16 value, &mut StringBuilder out) {
+    builder_append_i64(out, *value as i64);
+}
+
+impl fmt(&i32 value, &mut StringBuilder out) {
+    builder_append_i64(out, *value as i64);
+}
+
+impl fmt(&i64 value, &mut StringBuilder out) {
+    builder_append_i64(out, *value);
+}
+
+impl fmt(&u8 value, &mut StringBuilder out) {
+    builder_append_u64(out, *value as u64);
+}
+
+impl fmt(&u16 value, &mut StringBuilder out) {
+    builder_append_u64(out, *value as u64);
+}
+
+impl fmt(&u32 value, &mut StringBuilder out) {
+    builder_append_u64(out, *value as u64);
+}
+
+impl fmt(&u64 value, &mut StringBuilder out) {
+    builder_append_u64(out, *value);
+}
+
+impl fmt(&f32 value, &mut StringBuilder out) {
+    builder_append_f64(out, *value as f64);
+}
+
+impl fmt(&f64 value, &mut StringBuilder out) {
+    builder_append_f64(out, *value);
+}
+
+void render_into(&mut StringBuilder out, const char* format_text, []&fmt args) {
+    i64 next_arg = 0;
+
+    unchecked {
+        const char* cursor = format_text;
+        while (*cursor != '\0') {
+            if (cursor[0] == '{' && cursor[1] == '}') {
+                if (next_arg < len(args)) {
+                    fmt(args[next_arg], out);
+                    next_arg++;
+                } else {
+                    builder_append_cstring(out, "<missing>");
+                }
+                cursor = cursor + 2;
+                continue;
+            }
+
+            if (cursor[0] == '{' && cursor[1] == '{') {
+                builder_push_char(out, '{');
+                cursor = cursor + 2;
+                continue;
+            }
+
+            if (cursor[0] == '}' && cursor[1] == '}') {
+                builder_push_char(out, '}');
+                cursor = cursor + 2;
+                continue;
+            }
+
+            builder_push_char(out, *cursor);
+            cursor = cursor + 1;
+        }
+    }
+
+    if (next_arg < len(args)) {
+        builder_append_cstring(out, " <extra args>");
+    }
+}
+
+void write_fd(i32 fd, &StringBuilder out) {
+    void* stream = file.fdopen(dup(fd), "w");
+    file.fwrite(out.ptr, 1, out.len, stream);
+    file.fclose(stream);
+}
+
+export void fprint(void* stream, const char* format_text, []&fmt args) {
+    StringBuilder out = builder_new(64);
+    render_into(&mut out, format_text, args);
+    file.fwrite(out.ptr, 1, out.len, stream);
+}
+
+export void fprintln(void* stream, const char* format_text, []&fmt args) {
+    StringBuilder out = builder_new(64);
+    render_into(&mut out, format_text, args);
+    builder_push_char(&mut out, '\n');
+    file.fwrite(out.ptr, 1, out.len, stream);
+}
+
+export void print(const char* format_text, []&fmt args) {
+    StringBuilder out = builder_new(64);
+    render_into(&mut out, format_text, args);
+    write_fd(1, &out);
+}
+
+export void println(const char* format_text, []&fmt args) {
+    StringBuilder out = builder_new(64);
+    render_into(&mut out, format_text, args);
+    builder_push_char(&mut out, '\n');
+    write_fd(1, &out);
+}
+
+export void fprint0(void* stream, const char* format_text) {
+    []&fmt args = [];
+    fprint(stream, format_text, args);
+}
+
+export void fprintln0(void* stream, const char* format_text) {
+    []&fmt args = [];
+    fprintln(stream, format_text, args);
+}
+
+export void print0(const char* format_text) {
+    []&fmt args = [];
+    print(format_text, args);
+}
+
+export void println0(const char* format_text) {
+    []&fmt args = [];
+    println(format_text, args);
+}

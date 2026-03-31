@@ -1,0 +1,10 @@
+extern {
+    //@lower constant=null
+    void* null_raw();
+}
+
+export T* null<T>() {
+    unchecked {
+        return null_raw() as T*;
+    }
+}

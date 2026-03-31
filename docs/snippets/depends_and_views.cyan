@@ -1,0 +1,44 @@
+struct Split {
+    []const char head;
+    []const char tail;
+};
+
+struct View {
+    []const char data;
+};
+
+Split split_at([]const char text, i64 mid)
+    depends(return on text) {
+    if (mid <= 0) {
+        return {subslice(text, 0, 0), text};
+    }
+    if (mid >= len(text)) {
+        return {text, subslice(text, 0, 0)};
+    }
+    return {subslice(text, 0, mid), subslice(text, mid, len(text) - mid)};
+}
+
+void take_tail(&mut View out, []const char text, i64 mid)
+    depends(out on text) {
+    Split parts = split_at(text, mid);
+    out.data = parts.tail;
+}
+
+i64 main() {
+    []const char word = subslice("cyan", 0, 4);
+    Split parts = split_at(word, 2);
+    []const char empty = subslice("", 0, 0);
+    View view = {empty};
+    take_tail(&mut view, word, 2);
+
+    if (parts.head[0] != 'c') {
+        return 1;
+    }
+    if (parts.tail[1] != 'n') {
+        return 2;
+    }
+    if (view.data[0] != 'a') {
+        return 3;
+    }
+    return 0;
+}

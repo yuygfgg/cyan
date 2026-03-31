@@ -1,0 +1,30 @@
+import /std.ptr as ptr;
+
+void* make_raw_null() {
+    return ptr.null<void>();
+}
+
+i64* make_int_null() {
+    return ptr.null<i64>();
+}
+
+i64 main() {
+    void* raw = make_raw_null();
+    void* raw_again = ptr.null<void>();
+    i64* ints = make_int_null();
+    i64* ints_again = ptr.null<i64>();
+
+    if (raw != raw_again) {
+        return 1;
+    }
+    if (ints != ints_again) {
+        return 2;
+    }
+    if (raw != ptr.null<void>()) {
+        return 3;
+    }
+    if (ints != ptr.null<i64>()) {
+        return 4;
+    }
+    return 0;
+}

@@ -1650,6 +1650,11 @@ auto SemanticAnalyzer::findVisibleTemplateEnumVariants(std::string_view name)
 
 auto SemanticAnalyzer::validateExternSignature(const ast::FunctionDecl& decl)
     -> std::expected<void, Diagnostic> {
+    if (decl.intrinsic_lowering.has_value() && !decl.is_extern) {
+        return std::unexpected(Diagnostic(
+            "lowering directives are only supported on extern functions",
+            decl.intrinsic_lowering->range));
+    }
     if (!decl.is_extern) {
         return {};
     }
@@ -1684,6 +1689,15 @@ auto SemanticAnalyzer::validateExternSignature(const ast::FunctionDecl& decl)
             "raw pointers",
             decl.return_type != nullptr ? decl.return_type->range
                                         : decl.range));
+    }
+    if (decl.intrinsic_lowering.has_value() &&
+        decl.intrinsic_lowering->constant_kind ==
+            ast::LoweringConstantKind::NullValue &&
+        types.unqualify(decl.resolved_return_type) == types.voidType()) {
+        return std::unexpected(
+            Diagnostic("constant=null lowering requires a non-void return type",
+                       decl.return_type != nullptr ? decl.return_type->range
+                                                   : decl.range));
     }
     for (const auto& parameter : decl.parameters) {
         if (!is_ffi_type(parameter.resolved_type) ||

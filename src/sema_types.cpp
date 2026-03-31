@@ -154,6 +154,7 @@ auto SemanticAnalyzer::instantiateFunctionTemplate(
     instantiated_decl.impl_target_kind = decl.impl_target_kind;
     instantiated_decl.impl_target_name = decl.impl_target_name;
     instantiated_decl.interface_decl = decl.interface_decl;
+    instantiated_decl.intrinsic_lowering = decl.intrinsic_lowering;
     instantiated_decl.is_export = decl.is_export;
     instantiated_decl.is_extern = decl.is_extern;
     instantiated_decl.owner_module = decl.owner_module;

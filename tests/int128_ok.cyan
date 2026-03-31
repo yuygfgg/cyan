@@ -1,0 +1,24 @@
+i64 main() {
+    i128 min = -170141183460469231731687303715884105728;
+    i128 signed = ((1 as i128) << 100) | (7 as i128);
+    signed = signed ^ (3 as i128);
+    i128 signed_top = min >> 127;
+    u128 top = (1 as u128) << 127;
+    u128 max = 340282366920938463463374607431768211455 as u128;
+    if ((signed & (15 as i128)) != (4 as i128)) {
+        return 1;
+    }
+    if (min >= (0 as i128)) {
+        return 2;
+    }
+    if (signed_top != -1) {
+        return 3;
+    }
+    if ((top >> 126) != (2 as u128)) {
+        return 4;
+    }
+    if ((max >> 127) != (1 as u128)) {
+        return 5;
+    }
+    return 0;
+}

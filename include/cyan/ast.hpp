@@ -17,6 +17,7 @@ namespace cyan::ast {
 enum class UnaryOp : std::uint8_t {
     Negate,
     LogicalNot,
+    BitwiseNot,
     Dereference,
     Borrow,
     BorrowMut,
@@ -29,6 +30,11 @@ enum class BinaryOp : std::uint8_t {
     Multiply,
     Divide,
     Remainder,
+    ShiftLeft,
+    ShiftRight,
+    BitwiseAnd,
+    BitwiseXor,
+    BitwiseOr,
     Less,
     LessEqual,
     Greater,
@@ -126,7 +132,7 @@ struct CachedViewBinding {
 };
 
 struct IntegerLiteralExpr {
-    std::int64_t value = 0;
+    std::string text;
 };
 
 struct FloatLiteralExpr {
@@ -405,6 +411,25 @@ struct InterfaceDecl {
     const Module* owner_module = nullptr;
 };
 
+struct IntrinsicLoweringArgument {
+    std::size_t index = 0;
+    std::string value_spec;
+};
+
+enum class LoweringConstantKind : std::uint8_t {
+    None,
+    NullValue,
+};
+
+struct IntrinsicLowering {
+    SourceRange range;
+    std::string intrinsic_name;
+    LoweringConstantKind constant_kind = LoweringConstantKind::None;
+    std::optional<std::string> intrinsic_return_spec;
+    std::optional<std::size_t> return_argument_index;
+    std::vector<IntrinsicLoweringArgument> argument_overrides;
+};
+
 struct FunctionDecl {
     SourceRange range;
     TypeSyntaxPtr return_type;
@@ -424,6 +449,7 @@ struct FunctionDecl {
     ImplTargetKind impl_target_kind = ImplTargetKind::None;
     std::string impl_target_name;
     const InterfaceDecl* interface_decl = nullptr;
+    std::optional<IntrinsicLowering> intrinsic_lowering;
     bool is_export = false;
     bool is_extern = false;
     const Module* owner_module = nullptr;

@@ -1,6 +1,7 @@
 #include "cyan/codegen.hpp"
 
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/StringRef.h>
 #include <llvm/BinaryFormat/Dwarf.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
@@ -28,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -848,7 +850,8 @@ class LLVMCodegen {
         auto declare_decl = [&](ast::Decl& decl) {
             if (auto* function_decl = std::get_if<ast::FunctionDecl>(&decl);
                 function_decl != nullptr &&
-                function_decl->type_parameters.empty()) {
+                function_decl->type_parameters.empty() &&
+                !function_decl->intrinsic_lowering.has_value()) {
                 std::vector<llvm::Type*> parameter_types;
                 parameter_types.reserve(function_decl->parameters.size());
                 for (const auto& parameter : function_decl->parameters) {
@@ -1659,52 +1662,257 @@ class LLVMCodegen {
         builder.SetInsertPoint(cont_block);
     }
 
-    [[nodiscard]] auto isBuiltinFunction(const ast::FunctionDecl& decl,
-                                         std::string_view module_name,
-                                         std::string_view function_name) const
-        -> bool {
-        return decl.owner_module != nullptr && decl.owner_module->is_builtin &&
-               decl.owner_module->module_name == module_name &&
-               decl.name == function_name;
+    auto finishIntrinsicLowering(
+        const ast::IntrinsicLowering& lowering, llvm::Value* emitted_call,
+        const std::vector<llvm::Value*>& wrapper_arguments) -> llvm::Value* {
+        if (lowering.return_argument_index.has_value()) {
+            if (*lowering.return_argument_index >= wrapper_arguments.size()) {
+                return nullptr;
+            }
+            return wrapper_arguments[*lowering.return_argument_index];
+        }
+        return emitted_call;
     }
 
-    auto emitMemcpyIntrinsic(ast::CallExpr& call) -> llvm::Value* {
-        if (call.arguments.size() != 3) {
-            return nullptr;
+    auto parseLoweringArgIndex(std::string_view text)
+        -> std::optional<std::size_t> {
+        if (!text.starts_with("arg") || text.size() <= 3) {
+            return std::nullopt;
         }
-
-        auto* dst = emitExpr(*call.arguments[0]);
-        auto* src = emitExpr(*call.arguments[1]);
-        auto* size = emitExpr(*call.arguments[2]);
-        if (dst == nullptr || src == nullptr || size == nullptr) {
-            return nullptr;
+        std::size_t value = 0;
+        for (std::size_t index = 3; index < text.size(); ++index) {
+            const auto ch = text[index];
+            if (ch < '0' || ch > '9') {
+                return std::nullopt;
+            }
+            value = value * 10 + static_cast<std::size_t>(
+                                     ch - static_cast<unsigned char>('0'));
         }
-
-        size = extendOrTruncateInteger(size, call.arguments[2]->resolved_type,
-                                       types.i64Type());
-        builder.CreateMemCpy(dst, llvm::MaybeAlign(), src, llvm::MaybeAlign(),
-                             size);
-        return dst;
+        return value;
     }
 
-    auto emitMemsetIntrinsic(ast::CallExpr& call) -> llvm::Value* {
-        if (call.arguments.size() != 3) {
+    auto parseIntegerLiteralSpec(std::string_view spec)
+        -> std::optional<std::pair<unsigned, llvm::APInt>> {
+        const auto colon = spec.find(':');
+        if (colon == std::string_view::npos || colon == 0 ||
+            colon + 1 >= spec.size()) {
+            return std::nullopt;
+        }
+        const auto type_name = spec.substr(0, colon);
+        const auto value_text = spec.substr(colon + 1);
+        unsigned bits = 0;
+        bool is_signed = false;
+        if (type_name == "i8") {
+            bits = 8;
+            is_signed = true;
+        } else if (type_name == "u8") {
+            bits = 8;
+        } else if (type_name == "i16") {
+            bits = 16;
+            is_signed = true;
+        } else if (type_name == "u16") {
+            bits = 16;
+        } else if (type_name == "i32") {
+            bits = 32;
+            is_signed = true;
+        } else if (type_name == "u32") {
+            bits = 32;
+        } else if (type_name == "i64") {
+            bits = 64;
+            is_signed = true;
+        } else if (type_name == "u64") {
+            bits = 64;
+        } else if (type_name == "i128") {
+            bits = 128;
+            is_signed = true;
+        } else if (type_name == "u128") {
+            bits = 128;
+        } else {
+            return std::nullopt;
+        }
+
+        std::size_t offset = 0;
+        bool negative = false;
+        if (!value_text.empty() && value_text.front() == '-') {
+            negative = true;
+            offset = 1;
+        }
+        if (offset >= value_text.size()) {
+            return std::nullopt;
+        }
+        const auto digits = value_text.substr(offset);
+        for (const auto ch : digits) {
+            if (ch < '0' || ch > '9') {
+                return std::nullopt;
+            }
+        }
+        const auto parse_width = std::max<unsigned>(
+            bits + 1U, static_cast<unsigned>(digits.size() * 4 + 1));
+        auto value = llvm::APInt(
+            parse_width, llvm::StringRef(digits.data(), digits.size()), 10);
+        if (negative) {
+            value = -value;
+            return std::pair<unsigned, llvm::APInt>{bits,
+                                                    value.sextOrTrunc(bits)};
+        }
+        return std::pair<unsigned, llvm::APInt>{
+            bits,
+            is_signed ? value.sextOrTrunc(bits) : value.zextOrTrunc(bits)};
+    }
+
+    auto parseFloatLiteralSpec(std::string_view spec)
+        -> std::optional<std::pair<llvm::Type*, double>> {
+        const auto colon = spec.find(':');
+        if (colon == std::string_view::npos || colon == 0 ||
+            colon + 1 >= spec.size()) {
+            return std::nullopt;
+        }
+        const auto type_name = spec.substr(0, colon);
+        const auto value_text = spec.substr(colon + 1);
+        llvm::Type* type = nullptr;
+        if (type_name == "f32") {
+            type = llvm::Type::getFloatTy(context);
+        } else if (type_name == "f64") {
+            type = llvm::Type::getDoubleTy(context);
+        } else {
+            return std::nullopt;
+        }
+        char* end = nullptr;
+        const auto parsed = std::strtod(std::string(value_text).c_str(), &end);
+        if (end == nullptr || *end != '\0') {
+            return std::nullopt;
+        }
+        return std::pair<llvm::Type*, double>{type, parsed};
+    }
+
+    auto
+    emitLoweringValueSpec(std::string_view spec,
+                          const std::vector<llvm::Value*>& wrapper_arguments)
+        -> llvm::Value* {
+        if (const auto argument_index = parseLoweringArgIndex(spec);
+            argument_index.has_value()) {
+            if (*argument_index >= wrapper_arguments.size()) {
+                return nullptr;
+            }
+            return wrapper_arguments[*argument_index];
+        }
+        if (spec == "true" || spec == "false") {
+            return llvm::ConstantInt::getBool(context, spec == "true");
+        }
+        if (const auto integer_literal = parseIntegerLiteralSpec(spec);
+            integer_literal.has_value()) {
+            return llvm::ConstantInt::get(context, integer_literal->second);
+        }
+        if (const auto float_literal = parseFloatLiteralSpec(spec);
+            float_literal.has_value()) {
+            return llvm::ConstantFP::get(float_literal->first,
+                                         float_literal->second);
+        }
+        return nullptr;
+    }
+
+    auto intrinsicReturnType(const ast::CallExpr& call,
+                             const ast::IntrinsicLowering& lowering,
+                             const std::vector<llvm::Value*>& wrapper_arguments)
+        -> llvm::Type* {
+        const auto spec = lowering.intrinsic_return_spec.value_or("wrapper");
+        if (spec == "wrapper") {
+            return lowerType(call.function->resolved_return_type);
+        }
+        if (spec == "void") {
+            return llvm::Type::getVoidTy(context);
+        }
+        if (const auto argument_index = parseLoweringArgIndex(spec);
+            argument_index.has_value()) {
+            if (*argument_index >= wrapper_arguments.size()) {
+                return nullptr;
+            }
+            return wrapper_arguments[*argument_index]->getType();
+        }
+        if (spec == "i8" || spec == "u8") {
+            return llvm::Type::getInt8Ty(context);
+        }
+        if (spec == "i16" || spec == "u16") {
+            return llvm::Type::getInt16Ty(context);
+        }
+        if (spec == "i32" || spec == "u32") {
+            return llvm::Type::getInt32Ty(context);
+        }
+        if (spec == "i64" || spec == "u64") {
+            return llvm::Type::getInt64Ty(context);
+        }
+        if (spec == "i128" || spec == "u128") {
+            return llvm::Type::getIntNTy(context, 128);
+        }
+        if (spec == "f32") {
+            return llvm::Type::getFloatTy(context);
+        }
+        if (spec == "f64") {
+            return llvm::Type::getDoubleTy(context);
+        }
+        return nullptr;
+    }
+
+    auto emitIntrinsicLowering(ast::CallExpr& call) -> llvm::Value* {
+        if (call.function == nullptr ||
+            !call.function->intrinsic_lowering.has_value()) {
+            return nullptr;
+        }
+        const auto& lowering = *call.function->intrinsic_lowering;
+        std::vector<llvm::Value*> wrapper_arguments;
+        wrapper_arguments.reserve(call.arguments.size());
+        for (auto& argument : call.arguments) {
+            auto* emitted_argument = emitExpr(*argument);
+            if (emitted_argument == nullptr) {
+                return nullptr;
+            }
+            wrapper_arguments.push_back(emitted_argument);
+        }
+
+        if (lowering.constant_kind == ast::LoweringConstantKind::NullValue) {
+            if (call.function->resolved_return_type == nullptr) {
+                return nullptr;
+            }
+            auto* return_type = lowerType(call.function->resolved_return_type);
+            if (return_type->isVoidTy()) {
+                return nullptr;
+            }
+            return llvm::Constant::getNullValue(return_type);
+        }
+
+        std::vector<llvm::Value*> intrinsic_arguments = wrapper_arguments;
+        for (const auto& override : lowering.argument_overrides) {
+            if (override.index >= intrinsic_arguments.size()) {
+                intrinsic_arguments.resize(override.index + 1, nullptr);
+            }
+            intrinsic_arguments[override.index] =
+                emitLoweringValueSpec(override.value_spec, wrapper_arguments);
+        }
+        if (std::ranges::any_of(intrinsic_arguments, [](llvm::Value* argument) {
+                return argument == nullptr;
+            })) {
             return nullptr;
         }
 
-        auto* dst = emitExpr(*call.arguments[0]);
-        auto* value = emitExpr(*call.arguments[1]);
-        auto* size = emitExpr(*call.arguments[2]);
-        if (dst == nullptr || value == nullptr || size == nullptr) {
-            return nullptr;
+        std::vector<llvm::Type*> intrinsic_argument_types;
+        intrinsic_argument_types.reserve(intrinsic_arguments.size());
+        for (auto* argument : intrinsic_arguments) {
+            intrinsic_argument_types.push_back(argument->getType());
         }
 
-        value = extendOrTruncateInteger(value, call.arguments[1]->resolved_type,
-                                        types.u8Type());
-        size = extendOrTruncateInteger(size, call.arguments[2]->resolved_type,
-                                       types.i64Type());
-        builder.CreateMemSet(dst, value, size, llvm::MaybeAlign());
-        return dst;
+        auto intrinsic_id =
+            llvm::Intrinsic::lookupIntrinsicID(lowering.intrinsic_name);
+        if (intrinsic_id == llvm::Intrinsic::not_intrinsic) {
+            return nullptr;
+        }
+        auto* ret_type = intrinsicReturnType(call, lowering, wrapper_arguments);
+        if (ret_type == nullptr) {
+            return nullptr;
+        }
+        auto* callee = llvm::Intrinsic::getOrInsertDeclaration(
+            &module, intrinsic_id, ret_type, intrinsic_argument_types);
+        auto* call_inst = builder.CreateCall(callee, intrinsic_arguments);
+        return finishIntrinsicLowering(lowering, call_inst, wrapper_arguments);
     }
 
     auto emitSubsliceBuiltin(ast::CallExpr& call) -> llvm::Value* {
@@ -1826,7 +2034,7 @@ class LLVMCodegen {
         return std::visit(
             Overloaded{
                 [&](ast::IntegerLiteralExpr& literal) -> llvm::Value* {
-                    return integerConstant(expr.resolved_type, literal.value);
+                    return integerConstant(expr.resolved_type, literal.text);
                 },
                 [&](ast::FloatLiteralExpr& literal) -> llvm::Value* {
                     return llvm::ConstantFP::get(lowerType(expr.resolved_type),
@@ -1885,6 +2093,9 @@ class LLVMCodegen {
                     case ast::UnaryOp::LogicalNot:
                         return builder.CreateNot(emitExpr(*unary.operand),
                                                  "nottmp");
+                    case ast::UnaryOp::BitwiseNot:
+                        return builder.CreateNot(emitExpr(*unary.operand),
+                                                 "bitnottmp");
                     case ast::UnaryOp::Dereference:
                         return builder.CreateLoad(lowerType(expr.resolved_type),
                                                   emitPlaceAddress(expr),
@@ -1964,6 +2175,25 @@ class LLVMCodegen {
                             return builder.CreateURem(lhs, rhs, "modtmp");
                         }
                         return builder.CreateSRem(lhs, rhs, "modtmp");
+                    case ast::BinaryOp::ShiftLeft:
+                        rhs = extendOrTruncateInteger(
+                            rhs, binary.rhs->resolved_type,
+                            binary.lhs->resolved_type);
+                        return builder.CreateShl(lhs, rhs, "shltmp");
+                    case ast::BinaryOp::ShiftRight:
+                        rhs = extendOrTruncateInteger(
+                            rhs, binary.rhs->resolved_type,
+                            binary.lhs->resolved_type);
+                        if (types.isUnsignedInteger(lhs_type)) {
+                            return builder.CreateLShr(lhs, rhs, "lshrtmp");
+                        }
+                        return builder.CreateAShr(lhs, rhs, "ashrtmp");
+                    case ast::BinaryOp::BitwiseAnd:
+                        return builder.CreateAnd(lhs, rhs, "bitandtmp");
+                    case ast::BinaryOp::BitwiseXor:
+                        return builder.CreateXor(lhs, rhs, "bitxortmp");
+                    case ast::BinaryOp::BitwiseOr:
+                        return builder.CreateOr(lhs, rhs, "bitortmp");
                     case ast::BinaryOp::Less:
                         if (is_float) {
                             return builder.CreateFCmpOLT(lhs, rhs, "fcmptmp");
@@ -2033,14 +2263,8 @@ class LLVMCodegen {
                         return emitSubsliceBuiltin(call);
                     }
                     if (call.function != nullptr &&
-                        isBuiltinFunction(*call.function, "std.mem",
-                                          "memcpy")) {
-                        return emitMemcpyIntrinsic(call);
-                    }
-                    if (call.function != nullptr &&
-                        isBuiltinFunction(*call.function, "std.mem",
-                                          "memset")) {
-                        return emitMemsetIntrinsic(call);
+                        call.function->intrinsic_lowering.has_value()) {
+                        return emitIntrinsicLowering(call);
                     }
 
                     if (call.dispatched_interface != nullptr &&
@@ -2327,6 +2551,10 @@ class LLVMCodegen {
                             "ptrcasttmp");
                     }
                     if (types.isFloat(target_type)) {
+                        if (types.isFloat(source_type)) {
+                            return builder.CreateFPCast(
+                                operand, lowerType(target_type), "fpcasttmp");
+                        }
                         if (types.isInteger(source_type)) {
                             if (types.isUnsignedInteger(source_type)) {
                                 return builder.CreateUIToFP(
@@ -2503,6 +2731,17 @@ class LLVMCodegen {
         return llvm::ConstantInt::get(
             context,
             llvm::APInt(bit_width, static_cast<std::uint64_t>(value), true));
+    }
+
+    auto integerConstant(const Type* type, std::string_view text)
+        -> llvm::ConstantInt* {
+        const auto* base = types.unqualify(type);
+        const auto bit_width = base->kind == TypeKind::Integer
+                                   ? base->bit_width
+                                   : std::uint16_t{64};
+        auto value = llvm::APInt(bit_width,
+                                 llvm::StringRef(text.data(), text.size()), 10);
+        return llvm::ConstantInt::get(context, value);
     }
 
     auto lengthConstant(std::uint64_t value) -> llvm::ConstantInt* {

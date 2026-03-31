@@ -1,0 +1,7 @@
+export i64 span_len<T>([]T values) {
+    return len(values);
+}
+
+export []T span_slice<T>([]T values, i64 start, i64 count) {
+    return subslice(values, start, count);
+}

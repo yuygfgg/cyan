@@ -43,8 +43,8 @@ struct TypeParameterInfo {
 
 auto is_builtin_type_name(std::string_view name) -> bool {
     static const std::unordered_set<std::string_view> builtins = {
-        "bool", "char", "f32", "f64", "i8",  "i16", "i32",
-        "i64",  "u8",   "u16", "u32", "u64", "void"};
+        "bool", "char", "f32", "f64", "i8",  "i16",  "i32", "i64",
+        "i128", "u8",   "u16", "u32", "u64", "u128", "void"};
     return builtins.contains(name);
 }
 
@@ -1214,6 +1214,14 @@ struct SemanticTokensParams {
     TextDocumentIdentifier textDocument;
 };
 
+struct BuiltinSourceParams {
+    std::string uri;
+};
+
+struct BuiltinSourceResult {
+    std::string text;
+};
+
 struct SemanticTokens {
     std::vector<std::uint32_t> data;
 };
@@ -1484,23 +1492,57 @@ auto percent_encode(std::string_view raw) -> std::string {
     return encoded;
 }
 
+auto builtin_uri_prefix() -> std::string_view {
+    static constexpr std::string_view PREFIX = "cyan-stdlib:/";
+    return PREFIX;
+}
+
 auto path_from_uri(std::string_view uri)
     -> std::optional<std::filesystem::path> {
     static constexpr std::string_view PREFIX = "file://";
-    if (!uri.starts_with(PREFIX)) {
+    if (uri.starts_with(PREFIX)) {
+        auto path = percent_decode(uri.substr(PREFIX.size()));
+        if (path.size() >= 3 && path[0] == '/' &&
+            (std::isalpha(path[1]) != 0) && path[2] == ':') {
+            path.erase(path.begin());
+        }
+        return normalized_path(path);
+    }
+    if (!uri.starts_with(builtin_uri_prefix())) {
         return std::nullopt;
     }
-    auto path = percent_decode(uri.substr(PREFIX.size()));
-    if (path.size() >= 3 && path[0] == '/' && (std::isalpha(path[1]) != 0) &&
-        path[2] == ':') {
-        path.erase(path.begin());
+
+    auto relative = percent_decode(uri.substr(builtin_uri_prefix().size()));
+    while (!relative.empty() && relative.front() == '/') {
+        relative.erase(relative.begin());
     }
-    return normalized_path(path);
+    return normalized_path(builtin_virtual_root_path() / relative);
 }
 
 auto uri_from_path(const std::filesystem::path& path) -> std::string {
-    const auto normalized = normalized_path(path).generic_string();
-    return "file://" + percent_encode(normalized);
+    const auto normalized = normalized_path(path);
+    if (const auto relative =
+            normalized.lexically_relative(builtin_virtual_root_path());
+        !relative.empty() && !relative.is_absolute() &&
+        relative.begin()->string() != "..") {
+        return std::string(builtin_uri_prefix()) +
+               percent_encode(relative.generic_string());
+    }
+    const auto text = normalized.generic_string();
+    return "file://" + percent_encode(text);
+}
+
+auto builtin_source_for_uri(std::string_view uri)
+    -> std::optional<BuiltinSourceResult> {
+    const auto path = path_from_uri(uri);
+    if (!path.has_value()) {
+        return std::nullopt;
+    }
+    const auto text = builtin_source_text(*path);
+    if (!text.has_value()) {
+        return std::nullopt;
+    }
+    return BuiltinSourceResult{.text = *text};
 }
 
 class TextPositionConverter {
@@ -2022,13 +2064,14 @@ auto is_symbol_renamable(LSPSymbolKind kind) -> bool {
 
 auto is_valid_identifier_name(std::string_view name) -> bool {
     static const std::unordered_set<std::string_view> keywords = {
-        "as",       "bool",      "break",     "case", "char",  "const",
-        "continue", "default",   "depends",   "drop", "else",  "enum",
-        "export",   "extern",    "f32",       "f64",  "false", "for",
-        "i8",       "i16",       "i32",       "i64",  "if",    "impl",
-        "import",   "interface", "move",      "mut",  "on",    "return",
-        "sizeof",   "struct",    "switch",    "true", "u8",    "u16",
-        "u32",      "u64",       "unchecked", "void", "while"};
+        "as",       "bool",    "break",     "case",   "char",      "const",
+        "continue", "default", "depends",   "drop",   "else",      "enum",
+        "export",   "extern",  "f32",       "f64",    "false",     "for",
+        "i8",       "i16",     "i32",       "i64",    "i128",      "if",
+        "impl",     "import",  "interface", "move",   "mut",       "on",
+        "return",   "sizeof",  "struct",    "switch", "true",      "u8",
+        "u16",      "u32",     "u64",       "u128",   "unchecked", "void",
+        "while"};
     if (name.empty()) {
         return false;
     }
@@ -2227,10 +2270,12 @@ auto is_builtin_type_keyword(TokenKind kind) -> bool {
     case TokenKind::KwI16:
     case TokenKind::KwI32:
     case TokenKind::KwI64:
+    case TokenKind::KwI128:
     case TokenKind::KwU8:
     case TokenKind::KwU16:
     case TokenKind::KwU32:
     case TokenKind::KwU64:
+    case TokenKind::KwU128:
     case TokenKind::KwVoid:
         return true;
     default:
@@ -2289,6 +2334,9 @@ auto is_semantic_operator(TokenKind kind) -> bool {
     case TokenKind::MinusMinus:
     case TokenKind::Slash:
     case TokenKind::Percent:
+    case TokenKind::Pipe:
+    case TokenKind::Caret:
+    case TokenKind::Tilde:
     case TokenKind::Less:
     case TokenKind::LessEqual:
     case TokenKind::Greater:
@@ -2581,6 +2629,43 @@ class LanguageServerState {
                 open_documents.erase(params->textDocument.uri);
                 snapshots.erase(params->textDocument.uri);
                 append(outgoing, rebuildSnapshots());
+            }
+            return outgoing;
+        }
+
+        if (request.method == "cyan/builtinSource") {
+            if (!request.id.has_value()) {
+                return outgoing;
+            }
+            const auto params = parse_params<BuiltinSourceParams>(request);
+            if (!params.has_value()) {
+                if (auto response = make_error_response(
+                        request.id, -32602, "Invalid params", params.error());
+                    response.has_value()) {
+                    outgoing.push_back(std::move(response.value()));
+                }
+                return outgoing;
+            }
+
+            const auto builtin_source = builtin_source_for_uri(params->uri);
+            auto raw_result =
+                builtin_source.has_value()
+                    ? to_raw_json(*builtin_source)
+                    : std::expected<glz::raw_json, std::string>(json_null());
+            if (!raw_result.has_value()) {
+                if (auto response = make_error_response(request.id, -32603,
+                                                        "Internal error",
+                                                        raw_result.error());
+                    response.has_value()) {
+                    outgoing.push_back(std::move(response.value()));
+                }
+                return outgoing;
+            }
+
+            if (auto response =
+                    make_success_response(request.id, std::move(*raw_result));
+                response.has_value()) {
+                outgoing.push_back(std::move(response.value()));
             }
             return outgoing;
         }

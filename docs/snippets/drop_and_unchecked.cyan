@@ -1,0 +1,29 @@
+extern {
+    void* malloc(u64 n);
+    void free(void* p);
+}
+
+struct IntBox {
+    i64* ptr;
+};
+
+impl drop(&mut IntBox self) {
+    unchecked {
+        free(self.ptr as void*);
+    }
+}
+
+IntBox new_box(i64 value) {
+    unchecked {
+        i64* ptr = malloc(sizeof(i64));
+        *ptr = value;
+        return {ptr};
+    }
+}
+
+i64 main() {
+    IntBox box = new_box(7);
+    unchecked {
+        return *box.ptr - 7;
+    }
+}

@@ -54,6 +54,14 @@ target_include_directories(cyan PRIVATE include)
 target_include_directories(cyan SYSTEM PRIVATE third_party/glaze/include)
 target_link_libraries(cyan PRIVATE ${LLVM_LIBS})
 
+add_library(
+    cyan_runtime
+    STATIC
+    runtime/strconv.cpp
+)
+
+add_dependencies(cyan cyan_runtime)
+
 add_executable(
     cyan_lsp_support_tests
     src/ast.cpp
@@ -82,6 +90,8 @@ target_include_directories(
     third_party/glaze/include
 )
 
+add_dependencies(cyan_lsp_support_tests cyan_runtime)
+
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
     target_compile_options(
         cyan
@@ -93,6 +103,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
         -Wsign-conversion
         -Wshadow
         -Wimplicit-fallthrough
+        -Wno-c23-extensions
     )
     target_compile_options(
         cyan_lsp_support_tests
@@ -104,6 +115,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
         -Wsign-conversion
         -Wshadow
         -Wimplicit-fallthrough
+        -Wno-c23-extensions
     )
 endif()
 
@@ -115,6 +127,10 @@ add_test(
             python3 ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_tests.py
             $<TARGET_FILE:cyan>
             ${CMAKE_CURRENT_SOURCE_DIR}/tests
+)
+set_tests_properties(
+    cyan_core_tests PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 add_test(

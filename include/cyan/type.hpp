@@ -57,10 +57,12 @@ class TypeContext {
     [[nodiscard]] auto i16Type() const -> const Type*;
     [[nodiscard]] auto i32Type() const -> const Type*;
     [[nodiscard]] auto i64Type() const -> const Type*;
+    [[nodiscard]] auto i128Type() const -> const Type*;
     [[nodiscard]] auto u8Type() const -> const Type*;
     [[nodiscard]] auto u16Type() const -> const Type*;
     [[nodiscard]] auto u32Type() const -> const Type*;
     [[nodiscard]] auto u64Type() const -> const Type*;
+    [[nodiscard]] auto u128Type() const -> const Type*;
     [[nodiscard]] auto f32Type() const -> const Type*;
     [[nodiscard]] auto f64Type() const -> const Type*;
     [[nodiscard]] auto integerType(std::uint16_t bit_width,
@@ -124,10 +126,12 @@ class TypeContext {
     const Type* i16_builtin_type = nullptr;
     const Type* i32_builtin_type = nullptr;
     const Type* i64_builtin_type = nullptr;
+    const Type* i128_builtin_type = nullptr;
     const Type* u8_builtin_type = nullptr;
     const Type* u16_builtin_type = nullptr;
     const Type* u32_builtin_type = nullptr;
     const Type* u64_builtin_type = nullptr;
+    const Type* u128_builtin_type = nullptr;
     const Type* f32_builtin_type = nullptr;
     const Type* f64_builtin_type = nullptr;
     const Type* char_builtin_type = nullptr;

@@ -5,6 +5,7 @@
 
 #include <expected>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <unordered_map>
 
@@ -19,6 +20,9 @@ struct ModuleLoadOptions {
 [[nodiscard]] auto normalized_path(const std::filesystem::path& path)
     -> std::filesystem::path;
 [[nodiscard]] auto path_key(const std::filesystem::path& path) -> std::string;
+[[nodiscard]] auto builtin_virtual_root_path() -> const std::filesystem::path&;
+[[nodiscard]] auto builtin_source_text(const std::filesystem::path& path)
+    -> std::optional<std::string>;
 auto load_package(ast::Package& package,
                   const std::filesystem::path& entry_path,
                   const ModuleLoadOptions& options = {})

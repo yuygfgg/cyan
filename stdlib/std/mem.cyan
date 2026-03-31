@@ -1,0 +1,23 @@
+export extern {
+    //@lower intrinsic=llvm.memcpy llvm_return=void arg3=false return=arg0
+    char* memcpy(char* dst, const char* src, i64 size);
+
+    //@lower intrinsic=llvm.memset llvm_return=void arg3=false return=arg0
+    char* memset(char* dst, u8 value, i64 size);
+
+    i32 memcmp(const char* lhs, const char* rhs, i64 size);
+}
+
+export T* copy<T>(T* dst, const T* src, i64 count) {
+    unchecked {
+        memcpy(dst as char*, src as const char*, count * sizeof(T));
+    }
+    return dst;
+}
+
+export T* fill<T>(T* dst, u8 value, i64 count) {
+    unchecked {
+        memset(dst as char*, value, count * sizeof(T));
+    }
+    return dst;
+}

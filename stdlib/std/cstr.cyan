@@ -1,0 +1,4 @@
+export extern {
+    i64 strlen(const char* text);
+    i32 strcmp(const char* lhs, const char* rhs);
+}

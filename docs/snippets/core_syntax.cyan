@@ -1,0 +1,27 @@
+struct Pair {
+    i64 left;
+    i64 right;
+};
+
+i64 sum([]i64 values) {
+    i64 i = 0;
+    i64 total = 0;
+    while (i < len(values)) {
+        total = total + values[i];
+        i++;
+    }
+    return total;
+}
+
+i64 main() {
+    Pair pair = {3, 4};
+    i64[4] values = [pair.left, pair.right, 5, 6];
+    []i64 tail = subslice(values, 1, len(values) - 1);
+    i64 total = sum(tail);
+
+    for (i64 i = 0; i < 2; i++) {
+        total++;
+    }
+
+    return total - 17;
+}

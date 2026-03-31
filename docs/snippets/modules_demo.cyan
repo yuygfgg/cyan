@@ -1,0 +1,5 @@
+import tutorial_support.stats as stats;
+
+i64 main() {
+    return stats.meaning() - 42;
+}

@@ -1,4 +1,4 @@
-import println;
+import /std.println;
 
 extern {
     i64 http_listen_loopback(i64 port);

@@ -1,0 +1,27 @@
+enum Option<T> {
+    None,
+    Some(T),
+};
+
+i64 read_by_borrow(Option<i64> value) {
+    switch (&value) {
+        case None:
+            return 0;
+        case Some(payload):
+            return *payload;
+    }
+}
+
+i64 read_by_move(Option<i64> value) {
+    switch (move value) {
+        case None:
+            return 0;
+        case Some(payload):
+            return payload;
+    }
+}
+
+i64 main() {
+    Option<i64> value = Some(9);
+    return read_by_borrow(value) + read_by_move(Some(1)) - 10;
+}

@@ -1182,8 +1182,9 @@ auto Parser::looksLikeVarDecl() -> bool {
           check(TokenKind::KwF32) || check(TokenKind::KwF64) ||
           check(TokenKind::KwI8) || check(TokenKind::KwI16) ||
           check(TokenKind::KwI32) || check(TokenKind::KwI64) ||
-          check(TokenKind::KwU8) || check(TokenKind::KwU16) ||
-          check(TokenKind::KwU32) || check(TokenKind::KwU64) ||
+          check(TokenKind::KwI128) || check(TokenKind::KwU8) ||
+          check(TokenKind::KwU16) || check(TokenKind::KwU32) ||
+          check(TokenKind::KwU64) || check(TokenKind::KwU128) ||
           check(TokenKind::KwVoid) || check(TokenKind::Identifier))) {
         return false;
     }
@@ -1249,8 +1250,9 @@ auto Parser::parseType() -> std::expected<ast::TypeSyntaxPtr, Diagnostic> {
               check(TokenKind::KwF32) || check(TokenKind::KwF64) ||
               check(TokenKind::KwI8) || check(TokenKind::KwI16) ||
               check(TokenKind::KwI32) || check(TokenKind::KwI64) ||
-              check(TokenKind::KwU8) || check(TokenKind::KwU16) ||
-              check(TokenKind::KwU32) || check(TokenKind::KwU64) ||
+              check(TokenKind::KwI128) || check(TokenKind::KwU8) ||
+              check(TokenKind::KwU16) || check(TokenKind::KwU32) ||
+              check(TokenKind::KwU64) || check(TokenKind::KwU128) ||
               check(TokenKind::KwVoid) || check(TokenKind::Identifier))) {
             return std::unexpected(
                 Diagnostic("expected type name", current().range));
@@ -1369,6 +1371,36 @@ auto Parser::parseLogicalOr() -> std::expected<ast::ExprPtr, Diagnostic> {
 auto Parser::parseLogicalAnd() -> std::expected<ast::ExprPtr, Diagnostic> {
     static const auto ops = std::vector<std::pair<TokenKind, ast::BinaryOp>>{
         {TokenKind::AndAnd, ast::BinaryOp::LogicalAnd}};
+    auto expr = parseBitwiseOr();
+    if (!expr) {
+        return std::unexpected(expr.error());
+    }
+    return binaryExprTail(std::move(*expr), ops, &Parser::parseBitwiseOr);
+}
+
+auto Parser::parseBitwiseOr() -> std::expected<ast::ExprPtr, Diagnostic> {
+    static const auto ops = std::vector<std::pair<TokenKind, ast::BinaryOp>>{
+        {TokenKind::Pipe, ast::BinaryOp::BitwiseOr}};
+    auto expr = parseBitwiseXor();
+    if (!expr) {
+        return std::unexpected(expr.error());
+    }
+    return binaryExprTail(std::move(*expr), ops, &Parser::parseBitwiseXor);
+}
+
+auto Parser::parseBitwiseXor() -> std::expected<ast::ExprPtr, Diagnostic> {
+    static const auto ops = std::vector<std::pair<TokenKind, ast::BinaryOp>>{
+        {TokenKind::Caret, ast::BinaryOp::BitwiseXor}};
+    auto expr = parseBitwiseAnd();
+    if (!expr) {
+        return std::unexpected(expr.error());
+    }
+    return binaryExprTail(std::move(*expr), ops, &Parser::parseBitwiseAnd);
+}
+
+auto Parser::parseBitwiseAnd() -> std::expected<ast::ExprPtr, Diagnostic> {
+    static const auto ops = std::vector<std::pair<TokenKind, ast::BinaryOp>>{
+        {TokenKind::Ampersand, ast::BinaryOp::BitwiseAnd}};
     auto expr = parseEquality();
     if (!expr) {
         return std::unexpected(expr.error());
@@ -1393,11 +1425,50 @@ auto Parser::parseRelational() -> std::expected<ast::ExprPtr, Diagnostic> {
         {TokenKind::LessEqual, ast::BinaryOp::LessEqual},
         {TokenKind::Greater, ast::BinaryOp::Greater},
         {TokenKind::GreaterEqual, ast::BinaryOp::GreaterEqual}};
+    auto expr = parseShift();
+    if (!expr) {
+        return std::unexpected(expr.error());
+    }
+    return binaryExprTail(std::move(*expr), ops, &Parser::parseShift);
+}
+
+auto Parser::parseShift() -> std::expected<ast::ExprPtr, Diagnostic> {
     auto expr = parseAdditive();
     if (!expr) {
         return std::unexpected(expr.error());
     }
-    return binaryExprTail(std::move(*expr), ops, &Parser::parseAdditive);
+
+    while (true) {
+        std::optional<ast::BinaryOp> op;
+        if (check(TokenKind::Less) && index + 1 < tokens.size() &&
+            tokens[index + 1].kind == TokenKind::Less) {
+            advance();
+            advance();
+            op = ast::BinaryOp::ShiftLeft;
+        } else if (check(TokenKind::Greater) && index + 1 < tokens.size() &&
+                   tokens[index + 1].kind == TokenKind::Greater) {
+            advance();
+            advance();
+            op = ast::BinaryOp::ShiftRight;
+        }
+
+        if (!op.has_value()) {
+            break;
+        }
+
+        auto rhs = parseAdditive();
+        if (!rhs) {
+            return std::unexpected(rhs.error());
+        }
+        const auto begin = (*expr)->range.begin;
+        const auto end = (*rhs)->range.end;
+        expr = make_expr(source_file.range(begin, end),
+                         ast::BinaryExpr{.op = *op,
+                                         .lhs = std::move(*expr),
+                                         .rhs = std::move(*rhs)});
+    }
+
+    return expr;
 }
 
 auto Parser::parseAdditive() -> std::expected<ast::ExprPtr, Diagnostic> {
@@ -1465,6 +1536,17 @@ auto Parser::parseUnary() -> std::expected<ast::ExprPtr, Diagnostic> {
         return make_expr(
             source_file.range(op.range.begin, (*operand)->range.end),
             ast::UnaryExpr{.op = ast::UnaryOp::LogicalNot,
+                           .operand = std::move(*operand)});
+    }
+    if (match(TokenKind::Tilde)) {
+        auto op = previous();
+        auto operand = parseUnary();
+        if (!operand) {
+            return std::unexpected(operand.error());
+        }
+        return make_expr(
+            source_file.range(op.range.begin, (*operand)->range.end),
+            ast::UnaryExpr{.op = ast::UnaryOp::BitwiseNot,
                            .operand = std::move(*operand)});
     }
     if (match(TokenKind::Star)) {
@@ -1629,8 +1711,7 @@ auto Parser::parsePostfix() -> std::expected<ast::ExprPtr, Diagnostic> {
 auto Parser::parsePrimary() -> std::expected<ast::ExprPtr, Diagnostic> {
     if (match(TokenKind::Integer)) {
         return make_expr(previous().range,
-                         ast::IntegerLiteralExpr{std::strtoll(
-                             previous().text.c_str(), nullptr, 10)});
+                         ast::IntegerLiteralExpr{.text = previous().text});
     }
     if (match(TokenKind::Float)) {
         return make_expr(previous().range,
@@ -2041,10 +2122,12 @@ auto Parser::canStartType(TokenKind kind) const -> bool {
     case TokenKind::KwI16:
     case TokenKind::KwI32:
     case TokenKind::KwI64:
+    case TokenKind::KwI128:
     case TokenKind::KwU8:
     case TokenKind::KwU16:
     case TokenKind::KwU32:
     case TokenKind::KwU64:
+    case TokenKind::KwU128:
     case TokenKind::KwVoid:
     case TokenKind::Identifier:
         return true;
@@ -2068,6 +2151,7 @@ auto Parser::canStartExpr(TokenKind kind) const -> bool {
     case TokenKind::KwSizeof:
     case TokenKind::Minus:
     case TokenKind::Bang:
+    case TokenKind::Tilde:
     case TokenKind::Star:
     case TokenKind::Ampersand:
     case TokenKind::KwMove:
