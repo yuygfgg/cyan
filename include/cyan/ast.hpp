@@ -172,6 +172,7 @@ enum class BuiltinCallKind : std::uint8_t {
 struct CallExpr {
     std::string callee;
     SourceRange callee_range;
+    std::vector<TypeSyntaxPtr> explicit_type_arguments;
     std::vector<ExprPtr> arguments;
     BuiltinCallKind builtin_kind = BuiltinCallKind::None;
     const FunctionDecl* function = nullptr;
@@ -430,9 +431,14 @@ struct FunctionDecl {
 
 struct ImportDecl {
     SourceRange range;
+    bool is_export = false;
+    bool is_builtin = false;
+    std::size_t parent_depth = 0;
     std::string module_name;
     SourceRange module_name_range;
     std::vector<SourceRange> module_name_part_ranges;
+    std::optional<std::string> alias;
+    std::optional<SourceRange> alias_range;
     Module* imported_module = nullptr;
 };
 
@@ -442,6 +448,7 @@ struct Module {
     const SourceFile* source = nullptr;
     std::filesystem::path path;
     std::string module_name;
+    bool is_builtin = false;
     std::vector<ImportDecl> imports;
     std::vector<Decl> declarations;
     DiagnosticList diagnostics;
@@ -449,6 +456,7 @@ struct Module {
 
 struct Package {
     Module* entry_module = nullptr;
+    std::filesystem::path root_dir;
     std::vector<std::unique_ptr<SourceFile>> sources;
     std::vector<std::unique_ptr<Module>> modules;
     std::vector<std::unique_ptr<Decl>> instantiated_declarations;

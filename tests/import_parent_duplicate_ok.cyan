@@ -1,0 +1,8 @@
+import relmods.nested.child;
+
+i64 main() {
+    if (child_value() == 7) {
+        return 0;
+    }
+    return 1;
+}

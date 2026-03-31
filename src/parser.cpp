@@ -1,6 +1,7 @@
 #include "cyan/parser.hpp"
 
 #include <cstdlib>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -77,9 +78,10 @@ auto Parser::parseModule() -> ast::Module {
     ast::Module module;
     module.source = &source_file;
     while (!isAtEnd()) {
+        const auto is_export = match(TokenKind::KwExport);
         if (check(TokenKind::KwImport)) {
             const auto start_index = index;
-            auto import_decl = parseImportDecl();
+            auto import_decl = parseImportDecl(is_export);
             if (!import_decl) {
                 report(import_decl.error());
                 synchronize(SyncContext::TopLevel, index != start_index);
@@ -89,7 +91,6 @@ auto Parser::parseModule() -> ast::Module {
             continue;
         }
 
-        const auto is_export = match(TokenKind::KwExport);
         if (check(TokenKind::KwExtern)) {
             const auto start_index = index;
             auto decls = parseExternDecls();
@@ -224,8 +225,25 @@ auto Parser::parseInterfaceDecl(bool is_export)
     return decl;
 }
 
-auto Parser::parseImportDecl() -> std::expected<ast::ImportDecl, Diagnostic> {
+auto Parser::parseImportDecl(bool is_export)
+    -> std::expected<ast::ImportDecl, Diagnostic> {
     const auto begin = advance().range.begin;
+
+    bool is_builtin = false;
+    std::size_t parent_depth = 0;
+    if (match(TokenKind::Slash)) {
+        is_builtin = true;
+    } else {
+        while (match(TokenKind::Dot)) {
+            if (!match(TokenKind::Dot)) {
+                return std::unexpected(Diagnostic(
+                    "relative imports use '..' to reference parent directories",
+                    previous().range));
+            }
+            parent_depth++;
+        }
+    }
+
     auto first = parseIdentifier();
     if (!first) {
         return std::unexpected(first.error());
@@ -245,6 +263,17 @@ auto Parser::parseImportDecl() -> std::expected<ast::ImportDecl, Diagnostic> {
         module_name_range.end = part->range.end;
     }
 
+    std::optional<std::string> alias;
+    std::optional<SourceRange> alias_range;
+    if (match(TokenKind::KwAs)) {
+        auto alias_token = parseIdentifier();
+        if (!alias_token) {
+            return std::unexpected(alias_token.error());
+        }
+        alias = alias_token->text;
+        alias_range = alias_token->range;
+    }
+
     auto semicolon = expect(TokenKind::Semicolon, "expected ';' after import");
     if (!semicolon) {
         return std::unexpected(semicolon.error());
@@ -252,9 +281,14 @@ auto Parser::parseImportDecl() -> std::expected<ast::ImportDecl, Diagnostic> {
 
     ast::ImportDecl import_decl;
     import_decl.range = source_file.range(begin, semicolon->range.end);
+    import_decl.is_export = is_export;
+    import_decl.is_builtin = is_builtin;
+    import_decl.parent_depth = parent_depth;
     import_decl.module_name = std::move(module_name);
     import_decl.module_name_range = module_name_range;
     import_decl.module_name_part_ranges = std::move(module_name_part_ranges);
+    import_decl.alias = std::move(alias);
+    import_decl.alias_range = alias_range;
     return import_decl;
 }
 
@@ -990,6 +1024,15 @@ auto Parser::parseSwitchCase() -> std::expected<ast::SwitchCase, Diagnostic> {
         }
         switch_case.variant_name = variant_name->text;
         switch_case.variant_name_range = variant_name->range;
+        while (match(TokenKind::Dot)) {
+            auto part = parseIdentifier();
+            if (!part) {
+                return std::unexpected(part.error());
+            }
+            switch_case.variant_name += '.';
+            switch_case.variant_name += part->text;
+            switch_case.variant_name_range.end = part->range.end;
+        }
         if (match(TokenKind::LParen)) {
             auto binding = parseIdentifier();
             if (!binding) {
@@ -1153,6 +1196,19 @@ auto Parser::looksLikeVarDecl() -> bool {
     return looks_like_decl;
 }
 
+auto Parser::looksLikeExplicitCallTypeArguments() -> bool {
+    if (!check(TokenKind::Less)) {
+        return false;
+    }
+
+    const auto saved_index = index;
+    auto maybe_type_arguments = parseTypeArguments();
+    const auto looks_like_call =
+        maybe_type_arguments.has_value() && check(TokenKind::LParen);
+    index = saved_index;
+    return looks_like_call;
+}
+
 auto Parser::parseType() -> std::expected<ast::TypeSyntaxPtr, Diagnostic> {
     if (check(TokenKind::LBracket) && index + 1 < tokens.size() &&
         tokens[index + 1].kind == TokenKind::RBracket) {
@@ -1207,6 +1263,18 @@ auto Parser::parseType() -> std::expected<ast::TypeSyntaxPtr, Diagnostic> {
         type->name = advance().text;
         type->name_range = previous().range;
         type->range.end = previous().range.end;
+        while (type->name_range.source != nullptr && check(TokenKind::Dot) &&
+               tokens[index - 1].kind == TokenKind::Identifier) {
+            advance();
+            auto part = parseIdentifier();
+            if (!part) {
+                return std::unexpected(part.error());
+            }
+            type->name += '.';
+            type->name += part->text;
+            type->name_range.end = part->range.end;
+            type->range.end = part->range.end;
+        }
         if (check(TokenKind::Less)) {
             auto type_arguments = parseTypeArguments();
             if (!type_arguments) {
@@ -1443,16 +1511,55 @@ auto Parser::parsePostfix() -> std::expected<ast::ExprPtr, Diagnostic> {
         return std::unexpected(expr.error());
     }
 
+    std::function<std::optional<std::pair<std::string, SourceRange>>(
+        const ast::Expr&)>
+        flatten_direct_callee = [&](const ast::Expr& candidate)
+        -> std::optional<std::pair<std::string, SourceRange>> {
+        if (const auto* name = std::get_if<ast::NameExpr>(&candidate.node);
+            name != nullptr) {
+            return std::pair{name->name, name->name_range};
+        }
+        if (const auto* member = std::get_if<ast::MemberExpr>(&candidate.node);
+            member != nullptr) {
+            auto base = flatten_direct_callee(*member->base);
+            if (!base.has_value()) {
+                return std::nullopt;
+            }
+            base->first += '.';
+            base->first += member->field_name;
+            base->second.end = member->field_range.end;
+            return base;
+        }
+        return std::nullopt;
+    };
+
+    std::vector<ast::TypeSyntaxPtr> pending_call_type_arguments;
+
     while (true) {
+        if (pending_call_type_arguments.empty() && check(TokenKind::Less)) {
+            if (const auto callee = flatten_direct_callee(**expr);
+                callee.has_value() && looksLikeExplicitCallTypeArguments()) {
+                auto type_arguments = parseTypeArguments();
+                if (!type_arguments) {
+                    return std::unexpected(type_arguments.error());
+                }
+                pending_call_type_arguments = std::move(*type_arguments);
+                continue;
+            }
+        }
+
         if (match(TokenKind::LParen)) {
             ast::CallExpr call;
-            if (const auto* name = std::get_if<ast::NameExpr>(&(*expr)->node);
-                name != nullptr) {
-                call.callee = name->name;
-                call.callee_range = name->name_range;
+            if (const auto callee = flatten_direct_callee(**expr);
+                callee.has_value()) {
+                call.callee = std::move(callee->first);
+                call.callee_range = callee->second;
+                call.explicit_type_arguments =
+                    std::move(pending_call_type_arguments);
             } else {
                 return std::unexpected(Diagnostic(
-                    "calls currently require a direct function or variant name",
+                    "calls currently require a direct function, variant, or "
+                    "import-alias-qualified name",
                     (*expr)->range));
             }
 
@@ -1480,6 +1587,7 @@ auto Parser::parsePostfix() -> std::expected<ast::ExprPtr, Diagnostic> {
         }
 
         if (match(TokenKind::Dot)) {
+            pending_call_type_arguments.clear();
             auto member = parseIdentifier();
             if (!member) {
                 return std::unexpected(member.error());
@@ -1495,6 +1603,7 @@ auto Parser::parsePostfix() -> std::expected<ast::ExprPtr, Diagnostic> {
         }
 
         if (match(TokenKind::LBracket)) {
+            pending_call_type_arguments.clear();
             auto index_expr = parseExpr();
             if (!index_expr) {
                 return std::unexpected(index_expr.error());

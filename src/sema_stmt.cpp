@@ -1582,17 +1582,27 @@ auto SemanticAnalyzer::analyzeSwitch(FunctionState& state,
             continue;
         }
 
-        const auto variant_it = std::ranges::find_if(
-            stmt.enum_decl->variants, [&](const ast::EnumVariant& variant) {
-                return variant.name == switch_case.variant_name;
-            });
-        if (variant_it == stmt.enum_decl->variants.end()) {
+        std::optional<std::size_t> resolved_variant_index;
+        if (switch_case.variant_name.find('.') == std::string::npos) {
+            const auto variant_it = std::ranges::find_if(
+                stmt.enum_decl->variants, [&](const ast::EnumVariant& variant) {
+                    return variant.name == switch_case.variant_name;
+                });
+            if (variant_it != stmt.enum_decl->variants.end()) {
+                resolved_variant_index = static_cast<std::size_t>(std::distance(
+                    stmt.enum_decl->variants.begin(), variant_it));
+            }
+        } else if (const auto variant =
+                       findVisibleEnumVariant(switch_case.variant_name);
+                   variant.has_value() && variant->first == stmt.enum_decl) {
+            resolved_variant_index = variant->second;
+        }
+        if (!resolved_variant_index.has_value()) {
             return make_error("unknown enum variant '" +
                                   switch_case.variant_name + "'",
                               switch_case.range);
         }
-        const auto variant_index = static_cast<std::size_t>(
-            std::distance(stmt.enum_decl->variants.begin(), variant_it));
+        const auto variant_index = *resolved_variant_index;
         if (seen_variants[variant_index]) {
             return make_error("duplicate switch case for '" +
                                   switch_case.variant_name + "'",
@@ -1600,7 +1610,7 @@ auto SemanticAnalyzer::analyzeSwitch(FunctionState& state,
         }
         seen_variants[variant_index] = true;
         switch_case.variant_index = static_cast<std::uint32_t>(variant_index);
-        const auto& variant = *variant_it;
+        const auto& variant = stmt.enum_decl->variants[variant_index];
 
         auto case_state = switch_entry_state;
         if (switch_loan.has_value()) {

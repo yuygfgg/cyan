@@ -36,6 +36,7 @@ add_executable(
     src/lexer.cpp
     src/lsp_support.cpp
     src/main.cpp
+    src/module_loader.cpp
     src/parser.cpp
     src/sema_borrow.cpp
     src/sema_detail.cpp
@@ -59,6 +60,7 @@ add_executable(
     src/diagnostic.cpp
     src/lexer.cpp
     src/lsp_support.cpp
+    src/module_loader.cpp
     src/parser.cpp
     src/sema_borrow.cpp
     src/sema_detail.cpp

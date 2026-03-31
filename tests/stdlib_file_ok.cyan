@@ -1,0 +1,37 @@
+import /std.file as file;
+import /std.mem as mem;
+
+i64 main() {
+    char[5] text = "cyan";
+    char[5] out = ['\0', '\0', '\0', '\0', '\0'];
+
+    void* handle = file.fopen("cyan_stdlib_file_ok.tmp", "w+b");
+    if (file.fwrite(&text[0], 1, 4, handle) != 4) {
+        return 1;
+    }
+    if (file.ftell(handle) != 4) {
+        return 2;
+    }
+    if (file.fseek(handle, 0, 0) != 0) {
+        return 3;
+    }
+    if (file.ftell(handle) != 0) {
+        return 4;
+    }
+    if (file.fread(&mut out[0], 1, 4, handle) != 4) {
+        return 5;
+    }
+    if (mem.memcmp(&out[0], &text[0], 4) != 0) {
+        return 6;
+    }
+    if (file.fseek(handle, 0, 2) != 0) {
+        return 7;
+    }
+    if (file.ftell(handle) != 4) {
+        return 8;
+    }
+    if (file.fclose(handle) != 0) {
+        return 9;
+    }
+    return 0;
+}

@@ -15,6 +15,7 @@
 namespace cyan {
 
 struct SemanticScope {
+    std::unordered_map<std::string, const ast::Module*> import_namespaces;
     std::unordered_map<std::string, const ast::StructDecl*> structs;
     std::unordered_map<std::string, const ast::StructDecl*> struct_templates;
     std::unordered_map<std::string, const ast::EnumDecl*> enums;
@@ -94,6 +95,7 @@ class SemanticAnalyzer {
 
   private:
     struct ModuleScope {
+        std::unordered_map<std::string, ast::Module*> import_namespaces;
         std::unordered_map<std::string, ast::StructDecl*> structs;
         std::unordered_map<std::string, ast::StructDecl*> struct_templates;
         std::unordered_map<std::string, ast::EnumDecl*> enums;
@@ -219,6 +221,10 @@ class SemanticAnalyzer {
         -> std::expected<void, Diagnostic>;
     auto buildVisibleScopes(ast::Package& package)
         -> std::expected<void, Diagnostic>;
+    auto buildExportScope(const ast::Module& module)
+        -> std::expected<const ModuleScope*, Diagnostic>;
+    auto buildVisibleScope(const ast::Module& module)
+        -> std::expected<const ModuleScope*, Diagnostic>;
     auto registerImplDeclarations(ast::Package& package)
         -> std::expected<void, Diagnostic>;
     auto analyzeStruct(ast::StructDecl& decl)
@@ -346,12 +352,50 @@ class SemanticAnalyzer {
     auto registerVisibleDecl(ModuleScope& scope, ast::Decl& decl,
                              SourceRange conflict_range)
         -> std::expected<void, Diagnostic>;
+    auto registerImportNamespace(ModuleScope& scope, std::string name,
+                                 ast::Module* module,
+                                 SourceRange conflict_range)
+        -> std::expected<void, Diagnostic>;
+    auto mergeImportedScope(ModuleScope& target, const ModuleScope& source,
+                            SourceRange conflict_range)
+        -> std::expected<void, Diagnostic>;
     [[nodiscard]] auto visibleScopeFor(const ast::Module& module) const
         -> const ModuleScope&;
     [[nodiscard]] auto localScopeFor(const ast::Module& module) const
         -> const ModuleScope&;
+    [[nodiscard]] auto exportScopeFor(const ast::Module& module) const
+        -> const ModuleScope&;
+    [[nodiscard]] auto findNamedTypeInModule(const ast::Module& module,
+                                             std::string_view name) const
+        -> const Type*;
+    [[nodiscard]] auto findStructTemplateInModule(const ast::Module& module,
+                                                  std::string_view name) const
+        -> ast::StructDecl*;
+    [[nodiscard]] auto findEnumTemplateInModule(const ast::Module& module,
+                                                std::string_view name) const
+        -> ast::EnumDecl*;
+    [[nodiscard]] auto findInterfaceInModule(const ast::Module& module,
+                                             std::string_view name) const
+        -> const ast::InterfaceDecl*;
+    [[nodiscard]] auto findFunctionInModule(const ast::Module& module,
+                                            std::string_view name) const
+        -> ast::FunctionDecl*;
+    [[nodiscard]] auto findFunctionTemplateInModule(const ast::Module& module,
+                                                    std::string_view name) const
+        -> ast::FunctionDecl*;
+    [[nodiscard]] auto findEnumVariantInModule(const ast::Module& module,
+                                               std::string_view name) const
+        -> std::optional<std::pair<ast::EnumDecl*, std::size_t>>;
+    [[nodiscard]] auto
+    findTemplateEnumVariantsInModule(const ast::Module& module,
+                                     std::string_view name) const
+        -> std::vector<std::pair<ast::EnumDecl*, std::size_t>>;
     [[nodiscard]] auto findVisibleNamedType(std::string_view name) const
         -> const Type*;
+    [[nodiscard]] auto findVisibleStructTemplate(std::string_view name) const
+        -> ast::StructDecl*;
+    [[nodiscard]] auto findVisibleEnumTemplate(std::string_view name) const
+        -> ast::EnumDecl*;
     auto inferTypeBindings(FunctionState& state, const ast::FunctionDecl& decl,
                            const std::vector<ast::Expr*>& arguments)
         -> std::expected<TypeBindings, Diagnostic>;
@@ -365,6 +409,17 @@ class SemanticAnalyzer {
         -> std::expected<void, Diagnostic>;
     [[nodiscard]] auto findVisibleInterface(std::string_view name) const
         -> const ast::InterfaceDecl*;
+    [[nodiscard]] auto findVisibleFunction(std::string_view name) const
+        -> ast::FunctionDecl*;
+    [[nodiscard]] auto findVisibleFunctionTemplate(std::string_view name) const
+        -> ast::FunctionDecl*;
+    [[nodiscard]] auto findVisibleEnumVariant(std::string_view name) const
+        -> std::optional<std::pair<ast::EnumDecl*, std::size_t>>;
+    [[nodiscard]] auto
+    findVisibleTemplateEnumVariants(std::string_view name) const
+        -> std::vector<std::pair<ast::EnumDecl*, std::size_t>>;
+    auto validateExternSignature(const ast::FunctionDecl& decl)
+        -> std::expected<void, Diagnostic>;
     auto findImplForType(const ast::InterfaceDecl& interface_decl,
                          const Type* receiver_type)
         -> std::expected<ast::FunctionDecl*, Diagnostic>;
@@ -502,7 +557,10 @@ class SemanticAnalyzer {
     TypeContext& types;
     DiagnosticList diagnostics;
     std::unordered_map<const ast::Module*, ModuleScope> local_scopes;
+    std::unordered_map<const ast::Module*, ModuleScope> export_scopes;
     std::unordered_map<const ast::Module*, ModuleScope> visible_scopes;
+    std::unordered_map<const ast::Module*, bool> building_export_scopes;
+    std::unordered_map<const ast::Module*, bool> building_visible_scopes;
     std::unordered_map<std::string, std::vector<ast::FunctionDecl*>>
         package_impls;
     std::unordered_map<std::string, ast::StructDecl*> instantiated_structs;

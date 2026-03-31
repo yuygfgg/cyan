@@ -1,0 +1,3 @@
+extern {
+    bool ready(i64 value);
+}

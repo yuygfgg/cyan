@@ -617,6 +617,10 @@ auto clone_expr(
                 clone_call.callee = call.callee;
                 clone_call.callee_range = call.callee_range;
                 clone_call.builtin_kind = call.builtin_kind;
+                for (const auto& type_argument : call.explicit_type_arguments) {
+                    clone_call.explicit_type_arguments.push_back(
+                        clone_type_syntax(*type_argument, type_bindings));
+                }
                 for (const auto& argument : call.arguments) {
                     clone_call.arguments.push_back(
                         clone_expr(*argument, type_bindings));

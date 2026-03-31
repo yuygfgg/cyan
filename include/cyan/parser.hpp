@@ -29,7 +29,8 @@ class Parser {
 
     auto parseDecls(bool is_export)
         -> std::expected<std::vector<ast::Decl>, Diagnostic>;
-    auto parseImportDecl() -> std::expected<ast::ImportDecl, Diagnostic>;
+    auto parseImportDecl(bool is_export)
+        -> std::expected<ast::ImportDecl, Diagnostic>;
     auto parseExternDecls()
         -> std::expected<std::vector<ast::Decl>, Diagnostic>;
     auto parseInterfaceDecl(bool is_export)
@@ -61,6 +62,7 @@ class Parser {
     auto parseSimpleStmt(TokenKind terminator, std::string message)
         -> std::expected<ast::StmtPtr, Diagnostic>;
     [[nodiscard]] auto looksLikeVarDecl() -> bool;
+    [[nodiscard]] auto looksLikeExplicitCallTypeArguments() -> bool;
     auto parseType() -> std::expected<ast::TypeSyntaxPtr, Diagnostic>;
     auto parseTypeArguments()
         -> std::expected<std::vector<ast::TypeSyntaxPtr>, Diagnostic>;

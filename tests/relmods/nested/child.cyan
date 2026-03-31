@@ -1,0 +1,6 @@
+import ..shared;
+import ..shared;
+
+export i64 child_value() {
+    return shared_value();
+}

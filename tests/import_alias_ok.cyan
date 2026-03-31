@@ -1,0 +1,13 @@
+import modules.buffer as buf;
+
+extern {
+    i64* get_int_buffer();
+}
+
+i64 main() {
+    buf.Buffer<i64> values = {get_int_buffer(), 1};
+    if (buf.buffer_first(&values) == 7) {
+        return 0;
+    }
+    return 1;
+}

@@ -1,0 +1,3 @@
+extern {
+    T identity<T>(T value);
+}

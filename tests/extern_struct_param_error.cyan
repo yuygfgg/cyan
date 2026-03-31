@@ -1,0 +1,8 @@
+struct Pair {
+    i64 left;
+    i64 right;
+};
+
+extern {
+    void take_pair(Pair value);
+}

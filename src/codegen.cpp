@@ -1659,6 +1659,54 @@ class LLVMCodegen {
         builder.SetInsertPoint(cont_block);
     }
 
+    [[nodiscard]] auto isBuiltinFunction(const ast::FunctionDecl& decl,
+                                         std::string_view module_name,
+                                         std::string_view function_name) const
+        -> bool {
+        return decl.owner_module != nullptr && decl.owner_module->is_builtin &&
+               decl.owner_module->module_name == module_name &&
+               decl.name == function_name;
+    }
+
+    auto emitMemcpyIntrinsic(ast::CallExpr& call) -> llvm::Value* {
+        if (call.arguments.size() != 3) {
+            return nullptr;
+        }
+
+        auto* dst = emitExpr(*call.arguments[0]);
+        auto* src = emitExpr(*call.arguments[1]);
+        auto* size = emitExpr(*call.arguments[2]);
+        if (dst == nullptr || src == nullptr || size == nullptr) {
+            return nullptr;
+        }
+
+        size = extendOrTruncateInteger(size, call.arguments[2]->resolved_type,
+                                       types.i64Type());
+        builder.CreateMemCpy(dst, llvm::MaybeAlign(), src, llvm::MaybeAlign(),
+                             size);
+        return dst;
+    }
+
+    auto emitMemsetIntrinsic(ast::CallExpr& call) -> llvm::Value* {
+        if (call.arguments.size() != 3) {
+            return nullptr;
+        }
+
+        auto* dst = emitExpr(*call.arguments[0]);
+        auto* value = emitExpr(*call.arguments[1]);
+        auto* size = emitExpr(*call.arguments[2]);
+        if (dst == nullptr || value == nullptr || size == nullptr) {
+            return nullptr;
+        }
+
+        value = extendOrTruncateInteger(value, call.arguments[1]->resolved_type,
+                                        types.u8Type());
+        size = extendOrTruncateInteger(size, call.arguments[2]->resolved_type,
+                                       types.i64Type());
+        builder.CreateMemSet(dst, value, size, llvm::MaybeAlign());
+        return dst;
+    }
+
     auto emitSubsliceBuiltin(ast::CallExpr& call) -> llvm::Value* {
         if (call.arguments.size() != 3 ||
             call.arguments.front()->resolved_type == nullptr) {
@@ -1983,6 +2031,16 @@ class LLVMCodegen {
                     }
                     if (call.builtin_kind == ast::BuiltinCallKind::Subslice) {
                         return emitSubsliceBuiltin(call);
+                    }
+                    if (call.function != nullptr &&
+                        isBuiltinFunction(*call.function, "std.mem",
+                                          "memcpy")) {
+                        return emitMemcpyIntrinsic(call);
+                    }
+                    if (call.function != nullptr &&
+                        isBuiltinFunction(*call.function, "std.mem",
+                                          "memset")) {
+                        return emitMemsetIntrinsic(call);
                     }
 
                     if (call.dispatched_interface != nullptr &&

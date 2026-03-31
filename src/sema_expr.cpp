@@ -1244,13 +1244,13 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
     };
 
     ast::FunctionDecl* function = nullptr;
-    const auto& scope = visibleScopeFor(*active_module);
+    const auto callee_is_qualified = call.callee.find('.') != std::string::npos;
     const auto builtin_available =
-        !scope.functions.contains(call.callee) &&
-        !scope.function_templates.contains(call.callee) &&
+        !callee_is_qualified && findVisibleFunction(call.callee) == nullptr &&
+        findVisibleFunctionTemplate(call.callee) == nullptr &&
         findVisibleInterface(call.callee) == nullptr &&
-        !scope.variants.contains(call.callee) &&
-        !scope.template_variants.contains(call.callee);
+        !findVisibleEnumVariant(call.callee).has_value() &&
+        findVisibleTemplateEnumVariants(call.callee).empty();
     if (call.callee == "len" && builtin_available) {
         if (call.arguments.size() != 1) {
             return unexpected_result<const Type*>(
@@ -1422,28 +1422,60 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         }
         return expr.resolved_type;
     }
-    if (const auto function_it = scope.functions.find(call.callee);
-        function_it != scope.functions.end()) {
-        function = function_it->second;
-    } else {
-        auto template_it = scope.function_templates.find(call.callee);
-        if (template_it != scope.function_templates.end()) {
-            std::vector<ast::Expr*> arguments;
-            arguments.reserve(call.arguments.size());
-            for (const auto& argument : call.arguments) {
-                arguments.push_back(argument.get());
+    if (function == nullptr) {
+        function = findVisibleFunction(call.callee);
+        if (function != nullptr && !call.explicit_type_arguments.empty()) {
+            return unexpected_result<const Type*>(
+                "explicit type arguments require a generic function",
+                expr.range);
+        }
+        if (function == nullptr) {
+            if (auto* template_decl = findVisibleFunctionTemplate(call.callee);
+                template_decl != nullptr) {
+                TypeBindings type_bindings;
+                if (!call.explicit_type_arguments.empty()) {
+                    if (call.explicit_type_arguments.size() !=
+                        template_decl->type_parameters.size()) {
+                        return unexpected_result<const Type*>(
+                            "wrong number of explicit type arguments for '" +
+                                call.callee + "'",
+                            expr.range);
+                    }
+                    for (std::size_t index = 0;
+                         index < call.explicit_type_arguments.size(); ++index) {
+                        auto resolved_type =
+                            resolveType(*call.explicit_type_arguments[index]);
+                        if (!resolved_type) {
+                            return std::unexpected(resolved_type.error());
+                        }
+                        type_bindings.emplace(
+                            template_decl->type_parameters[index],
+                            *resolved_type);
+                    }
+                } else {
+                    std::vector<ast::Expr*> arguments;
+                    arguments.reserve(call.arguments.size());
+                    for (const auto& argument : call.arguments) {
+                        arguments.push_back(argument.get());
+                    }
+                    auto inferred_type_bindings =
+                        inferTypeBindings(state, *template_decl, arguments);
+                    if (!inferred_type_bindings) {
+                        return std::unexpected(inferred_type_bindings.error());
+                    }
+                    type_bindings = std::move(*inferred_type_bindings);
+                }
+                auto instantiated =
+                    instantiateFunctionTemplate(*template_decl, type_bindings);
+                if (!instantiated) {
+                    return std::unexpected(instantiated.error());
+                }
+                function = *instantiated;
+            } else if (!call.explicit_type_arguments.empty()) {
+                return unexpected_result<const Type*>(
+                    "explicit type arguments require a generic function",
+                    expr.range);
             }
-            auto type_bindings =
-                inferTypeBindings(state, *template_it->second, arguments);
-            if (!type_bindings) {
-                return std::unexpected(type_bindings.error());
-            }
-            auto instantiated = instantiateFunctionTemplate(
-                *template_it->second, *type_bindings);
-            if (!instantiated) {
-                return std::unexpected(instantiated.error());
-            }
-            function = *instantiated;
         }
     }
 
@@ -1520,7 +1552,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         std::size_t variant_index = 0;
 
         if (expected_type != nullptr && expected_type->kind == TypeKind::Enum &&
-            expected_type->enum_decl != nullptr) {
+            expected_type->enum_decl != nullptr && !callee_is_qualified) {
             const auto expected_variant =
                 find_variant_index(*expected_type->enum_decl, call.callee);
             if (!expected_variant.has_value()) {
@@ -1529,19 +1561,19 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
             }
             enum_decl = const_cast<ast::EnumDecl*>(expected_type->enum_decl);
             variant_index = *expected_variant;
-        } else if (const auto variant_it = scope.variants.find(call.callee);
-                   variant_it != scope.variants.end()) {
-            enum_decl = variant_it->second.first;
-            variant_index = variant_it->second.second;
-        } else if (const auto template_variant_it =
-                       scope.template_variants.find(call.callee);
-                   template_variant_it != scope.template_variants.end()) {
+        } else if (const auto variant = findVisibleEnumVariant(call.callee);
+                   variant.has_value()) {
+            enum_decl = variant->first;
+            variant_index = variant->second;
+        } else if (const auto template_variants =
+                       findVisibleTemplateEnumVariants(call.callee);
+                   !template_variants.empty()) {
             ast::EnumDecl* selected_template = nullptr;
             std::size_t selected_variant_index = 0;
             TypeBindings selected_bindings;
 
             for (const auto& [candidate_decl, candidate_variant_index] :
-                 template_variant_it->second) {
+                 template_variants) {
                 const auto& candidate_variant =
                     candidate_decl->variants[candidate_variant_index];
                 const auto expected_arguments =

@@ -1,0 +1,34 @@
+import /std.cstr as cstr;
+import /std.heap as heap;
+import /std.mem as mem;
+
+i64 main() {
+    char[5] text = "cyan";
+    char[5] scratch = ['x', 'x', 'x', 'x', '\0'];
+
+    mem.memset(&mut scratch[0], '!' as u8, 4);
+    mem.memcpy(&mut scratch[0], &text[0], 5);
+    if (mem.memcmp(&scratch[0], &text[0], 5) != 0) {
+        return 1;
+    }
+    if (cstr.strlen(&scratch[0]) != 4) {
+        return 2;
+    }
+    if (cstr.strcmp(&scratch[0], "cyan") != 0) {
+        return 3;
+    }
+
+    char* heap_text = heap.malloc_array<char>(5);
+    mem.fill(heap_text, 0 as u8, 5);
+    mem.copy(heap_text, &text[0], 5);
+    if (cstr.strcmp(heap_text, "cyan") != 0) {
+        return 4;
+    }
+
+    char* grown = heap.realloc_array<char>(heap_text, 8);
+    if (cstr.strcmp(grown, "cyan") != 0) {
+        return 5;
+    }
+    heap.free_ptr(grown);
+    return 0;
+}

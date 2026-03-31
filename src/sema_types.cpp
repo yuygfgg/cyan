@@ -309,9 +309,8 @@ auto SemanticAnalyzer::resolveType(ast::TypeSyntax& type)
                 return unexpected_result<const Type*>(
                     "unknown type '" + type.name + "'", type.range);
             }
-            const auto& scope = visibleScopeFor(*active_module);
-            if (scope.struct_templates.contains(type.name) ||
-                scope.enum_templates.contains(type.name)) {
+            if (findVisibleStructTemplate(type.name) != nullptr ||
+                findVisibleEnumTemplate(type.name) != nullptr) {
                 return unexpected_result<const Type*>(
                     "generic type '" + type.name +
                         "' requires explicit type arguments",
@@ -335,17 +334,15 @@ auto SemanticAnalyzer::resolveType(ast::TypeSyntax& type)
             return unexpected_result<const Type*>(
                 "type '" + type.name + "' is not generic", type.range);
         }
-        const auto& scope = visibleScopeFor(*active_module);
-        if (const auto struct_it = scope.struct_templates.find(type.name);
-            struct_it != scope.struct_templates.end()) {
-            if (struct_it->second->type_parameters.size() !=
-                type_arguments.size()) {
+        if (auto* struct_decl = findVisibleStructTemplate(type.name);
+            struct_decl != nullptr) {
+            if (struct_decl->type_parameters.size() != type_arguments.size()) {
                 return unexpected_result<const Type*>(
                     "wrong number of type arguments for '" + type.name + "'",
                     type.range);
             }
             auto instantiated =
-                instantiateStructTemplate(*struct_it->second, type_arguments);
+                instantiateStructTemplate(*struct_decl, type_arguments);
             if (!instantiated) {
                 return std::unexpected(instantiated.error());
             }
@@ -357,16 +354,15 @@ auto SemanticAnalyzer::resolveType(ast::TypeSyntax& type)
             return apply_const((*instantiated)->resolved_type);
         }
 
-        if (const auto enum_it = scope.enum_templates.find(type.name);
-            enum_it != scope.enum_templates.end()) {
-            if (enum_it->second->type_parameters.size() !=
-                type_arguments.size()) {
+        if (auto* enum_decl = findVisibleEnumTemplate(type.name);
+            enum_decl != nullptr) {
+            if (enum_decl->type_parameters.size() != type_arguments.size()) {
                 return unexpected_result<const Type*>(
                     "wrong number of type arguments for '" + type.name + "'",
                     type.range);
             }
             auto instantiated =
-                instantiateEnumTemplate(*enum_it->second, type_arguments);
+                instantiateEnumTemplate(*enum_decl, type_arguments);
             if (!instantiated) {
                 return std::unexpected(instantiated.error());
             }
@@ -908,17 +904,8 @@ auto SemanticAnalyzer::matchTypePattern(
         }
 
         if (pattern.type_arguments.empty()) {
-            const auto* named_type = types.findNamed(pattern.name);
-            if (named_type == nullptr) {
-                const auto& scope = visibleScopeFor(owner_module);
-                if (const auto struct_it = scope.structs.find(pattern.name);
-                    struct_it != scope.structs.end()) {
-                    named_type = struct_it->second->resolved_type;
-                } else if (const auto enum_it = scope.enums.find(pattern.name);
-                           enum_it != scope.enums.end()) {
-                    named_type = enum_it->second->resolved_type;
-                }
-            }
+            const auto* named_type =
+                findNamedTypeInModule(owner_module, pattern.name);
             if (named_type != nullptr && pattern.is_const) {
                 named_type = types.getConst(named_type);
             }
@@ -931,13 +918,14 @@ auto SemanticAnalyzer::matchTypePattern(
         }
 
         std::string expected_base_name;
-        const auto& scope = visibleScopeFor(owner_module);
-        if (const auto struct_it = scope.struct_templates.find(pattern.name);
-            struct_it != scope.struct_templates.end()) {
-            expected_base_name = struct_it->second->linkage_name;
-        } else if (const auto enum_it = scope.enum_templates.find(pattern.name);
-                   enum_it != scope.enum_templates.end()) {
-            expected_base_name = enum_it->second->linkage_name;
+        if (const auto* struct_decl =
+                findStructTemplateInModule(owner_module, pattern.name);
+            struct_decl != nullptr) {
+            expected_base_name = struct_decl->linkage_name;
+        } else if (const auto* enum_decl =
+                       findEnumTemplateInModule(owner_module, pattern.name);
+                   enum_decl != nullptr) {
+            expected_base_name = enum_decl->linkage_name;
         } else {
             return make_error("generic argument does not match parameter type",
                               pattern.range);
@@ -1043,10 +1031,12 @@ auto SemanticAnalyzer::inferTypeBindings(
     for (std::size_t index = 0; index < arguments.size(); ++index) {
         auto* argument = arguments[index];
         const Type* expected_argument_type = nullptr;
-        if (!type_syntax_mentions_parameters(*decl.parameters[index].type,
+        auto instantiated_parameter_type =
+            clone_type_syntax(*decl.parameters[index].type, type_bindings);
+        if (!type_syntax_mentions_parameters(*instantiated_parameter_type,
                                              decl.type_parameters)) {
             auto resolved_parameter_type =
-                resolveType(*decl.parameters[index].type);
+                resolveType(*instantiated_parameter_type);
             if (!resolved_parameter_type) {
                 return std::unexpected(resolved_parameter_type.error());
             }

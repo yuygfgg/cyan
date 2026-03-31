@@ -1,0 +1,9 @@
+import reexports.lib;
+import reexports.lib as lib;
+
+i64 main() {
+    if (answer() == 42 && leaf.answer() == 42 && lib.leaf.answer() == 42) {
+        return 0;
+    }
+    return 1;
+}

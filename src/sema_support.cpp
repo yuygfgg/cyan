@@ -4,11 +4,103 @@ namespace cyan {
 
 using namespace detail;
 
+namespace {
+
+struct NormalizedImportBinding {
+    ast::Module* imported_module = nullptr;
+    std::optional<std::string> alias;
+    SourceRange range;
+    bool is_export = false;
+    std::string key;
+};
+
+auto describe_import_path(const ast::ImportDecl& import_decl) -> std::string {
+    std::string path;
+    if (import_decl.is_builtin) {
+        path.push_back('/');
+    } else {
+        for (std::size_t index = 0; index < import_decl.parent_depth; ++index) {
+            path += "..";
+        }
+    }
+    path += import_decl.module_name;
+    return path;
+}
+
+auto decl_range(const ast::Decl& decl) -> SourceRange {
+    return std::visit([](const auto& inner) { return inner.range; }, decl);
+}
+
+auto normalize_import_bindings(const std::vector<ast::ImportDecl>& imports)
+    -> std::vector<NormalizedImportBinding> {
+    std::vector<NormalizedImportBinding> bindings;
+    std::unordered_map<std::string, std::size_t> binding_indices;
+
+    for (const auto& import_decl : imports) {
+        if (import_decl.imported_module == nullptr) {
+            continue;
+        }
+
+        std::string key = import_decl.imported_module->module_name;
+        key += '|';
+        key += import_decl.alias.has_value() ? *import_decl.alias : "*";
+
+        if (const auto it = binding_indices.find(key);
+            it != binding_indices.end()) {
+            auto& binding = bindings[it->second];
+            const auto was_exported = binding.is_export;
+            binding.is_export = binding.is_export || import_decl.is_export;
+            if (!was_exported && import_decl.is_export) {
+                binding.range = import_decl.range;
+            }
+            continue;
+        }
+
+        binding_indices.emplace(key, bindings.size());
+        bindings.push_back(NormalizedImportBinding{
+            .imported_module = import_decl.imported_module,
+            .alias = import_decl.alias,
+            .range = import_decl.range,
+            .is_export = import_decl.is_export,
+            .key = std::move(key),
+        });
+    }
+
+    std::ranges::sort(bindings, [](const auto& lhs, const auto& rhs) {
+        return lhs.key < rhs.key;
+    });
+    return bindings;
+}
+
+auto split_qualified_name(std::string_view name) -> std::vector<std::string> {
+    std::vector<std::string> parts;
+    std::string current;
+    for (const auto ch : name) {
+        if (ch == '.') {
+            if (!current.empty()) {
+                parts.push_back(current);
+                current.clear();
+            }
+            continue;
+        }
+        current.push_back(ch);
+    }
+    if (!current.empty()) {
+        parts.push_back(std::move(current));
+    }
+    return parts;
+}
+
+} // namespace
+
 SemanticAnalyzer::SemanticAnalyzer(TypeContext& types) : types(types) {}
 
 auto SemanticAnalyzer::exportScope(const ModuleScope& scope) const
     -> SemanticScope {
     SemanticScope exported;
+    for (const auto& [name, module] : scope.import_namespaces) {
+        exported.import_namespaces.emplace(name, module);
+    }
     for (const auto& [name, decl] : scope.structs) {
         exported.structs.emplace(name, decl);
     }
@@ -207,7 +299,10 @@ auto SemanticAnalyzer::analyze(ast::Package& package) -> SemanticAnalysis {
     active_module = nullptr;
     diagnostics.clear();
     local_scopes.clear();
+    export_scopes.clear();
     visible_scopes.clear();
+    building_export_scopes.clear();
+    building_visible_scopes.clear();
     package_impls.clear();
     instantiated_structs.clear();
     instantiated_enums.clear();
@@ -285,6 +380,19 @@ auto SemanticAnalyzer::analyze(ast::Package& package) -> SemanticAnalysis {
     }
 
     for (const auto& module : package.modules) {
+        for (const auto& decl : module->declarations) {
+            auto* function = std::get_if<ast::FunctionDecl>(&decl);
+            if (function == nullptr || !function->is_extern) {
+                continue;
+            }
+            auto validated_extern = validateExternSignature(*function);
+            if (!validated_extern) {
+                report(validated_extern.error());
+            }
+        }
+    }
+
+    for (const auto& module : package.modules) {
         for (auto& decl : module->declarations) {
             auto* function = std::get_if<ast::FunctionDecl>(&decl);
             if (function == nullptr || !function->type_parameters.empty()) {
@@ -322,6 +430,14 @@ auto SemanticAnalyzer::analyze(ast::Package& package) -> SemanticAnalysis {
             if (!validated_dependency) {
                 report(validated_dependency.error());
                 continue;
+            }
+
+            if (function->is_extern) {
+                auto validated_extern = validateExternSignature(*function);
+                if (!validated_extern) {
+                    report(validated_extern.error());
+                    continue;
+                }
             }
 
             if (function->impl_target_kind != ast::ImplTargetKind::None) {
@@ -467,56 +583,166 @@ auto SemanticAnalyzer::collectDeclarations(ast::Package& package)
 
 auto SemanticAnalyzer::buildVisibleScopes(ast::Package& package)
     -> std::expected<void, Diagnostic> {
-    visible_scopes = local_scopes;
     for (const auto& module : package.modules) {
-        auto& visible_scope = visible_scopes[module.get()];
         for (const auto& import_decl : module->imports) {
             if (import_decl.imported_module == nullptr) {
                 report(Diagnostic("unresolved import '" +
-                                      import_decl.module_name + "'",
+                                      describe_import_path(import_decl) + "'",
                                   import_decl.range));
-                continue;
-            }
-            for (auto& decl : import_decl.imported_module->declarations) {
-                auto* struct_decl = std::get_if<ast::StructDecl>(&decl);
-                if (struct_decl != nullptr && struct_decl->is_export) {
-                    auto registered = registerVisibleDecl(visible_scope, decl,
-                                                          import_decl.range);
-                    if (!registered) {
-                        report(registered.error());
-                    }
-                    continue;
-                }
-                auto* enum_decl = std::get_if<ast::EnumDecl>(&decl);
-                if (enum_decl != nullptr && enum_decl->is_export) {
-                    auto registered = registerVisibleDecl(visible_scope, decl,
-                                                          import_decl.range);
-                    if (!registered) {
-                        report(registered.error());
-                    }
-                    continue;
-                }
-                auto* interface_decl = std::get_if<ast::InterfaceDecl>(&decl);
-                if (interface_decl != nullptr && interface_decl->is_export) {
-                    auto registered = registerVisibleDecl(visible_scope, decl,
-                                                          import_decl.range);
-                    if (!registered) {
-                        report(registered.error());
-                    }
-                    continue;
-                }
-                auto* function_decl = std::get_if<ast::FunctionDecl>(&decl);
-                if (function_decl != nullptr && function_decl->is_export) {
-                    auto registered = registerVisibleDecl(visible_scope, decl,
-                                                          import_decl.range);
-                    if (!registered) {
-                        report(registered.error());
-                    }
-                }
             }
         }
     }
+
+    for (const auto& module : package.modules) {
+        auto visible_scope = buildVisibleScope(*module);
+        if (!visible_scope) {
+            report(visible_scope.error());
+        }
+    }
     return {};
+}
+
+auto SemanticAnalyzer::buildExportScope(const ast::Module& module)
+    -> std::expected<const ModuleScope*, Diagnostic> {
+    if (const auto it = export_scopes.find(&module);
+        it != export_scopes.end()) {
+        return &it->second;
+    }
+    if (building_export_scopes[&module]) {
+        return std::unexpected(Diagnostic(
+            "re-export cycle involving module '" + module.module_name + "'",
+            module.source != nullptr ? module.source->range(0, 0)
+                                     : SourceRange{}));
+    }
+
+    building_export_scopes[&module] = true;
+    auto& scope = export_scopes[&module];
+
+    for (auto& decl : module.declarations) {
+        bool is_exported = false;
+        std::visit(Overloaded{
+                       [&](const ast::StructDecl& struct_decl) {
+                           is_exported = struct_decl.is_export;
+                       },
+                       [&](const ast::EnumDecl& enum_decl) {
+                           is_exported = enum_decl.is_export;
+                       },
+                       [&](const ast::InterfaceDecl& interface_decl) {
+                           is_exported = interface_decl.is_export;
+                       },
+                       [&](const ast::FunctionDecl& function_decl) {
+                           is_exported = function_decl.is_export;
+                       },
+                   },
+                   decl);
+        if (!is_exported) {
+            continue;
+        }
+        auto& exported_decl = const_cast<ast::Decl&>(decl);
+        auto registered =
+            registerVisibleDecl(scope, exported_decl, decl_range(decl));
+        if (!registered) {
+            building_export_scopes[&module] = false;
+            return std::unexpected(registered.error());
+        }
+    }
+
+    for (const auto& binding : normalize_import_bindings(module.imports)) {
+        if (!binding.is_export) {
+            continue;
+        }
+        if (binding.imported_module == nullptr) {
+            continue;
+        }
+        if (binding.alias.has_value()) {
+            auto imported_scope = buildExportScope(*binding.imported_module);
+            if (!imported_scope) {
+                building_export_scopes[&module] = false;
+                return std::unexpected(imported_scope.error());
+            }
+            auto registered = registerImportNamespace(
+                scope, *binding.alias, binding.imported_module, binding.range);
+            if (!registered) {
+                building_export_scopes[&module] = false;
+                return std::unexpected(registered.error());
+            }
+            continue;
+        }
+        if (building_export_scopes[binding.imported_module]) {
+            building_export_scopes[&module] = false;
+            return std::unexpected(
+                Diagnostic("re-export cycle involving module '" +
+                               binding.imported_module->module_name + "'",
+                           binding.range));
+        }
+        auto imported_scope = buildExportScope(*binding.imported_module);
+        if (!imported_scope) {
+            building_export_scopes[&module] = false;
+            return std::unexpected(imported_scope.error());
+        }
+        auto merged =
+            mergeImportedScope(scope, **imported_scope, binding.range);
+        if (!merged) {
+            building_export_scopes[&module] = false;
+            return std::unexpected(merged.error());
+        }
+    }
+
+    building_export_scopes[&module] = false;
+    return &scope;
+}
+
+auto SemanticAnalyzer::buildVisibleScope(const ast::Module& module)
+    -> std::expected<const ModuleScope*, Diagnostic> {
+    if (const auto it = visible_scopes.find(&module);
+        it != visible_scopes.end()) {
+        return &it->second;
+    }
+    if (building_visible_scopes[&module]) {
+        return std::unexpected(Diagnostic(
+            "visible scope cycle involving module '" + module.module_name + "'",
+            module.source != nullptr ? module.source->range(0, 0)
+                                     : SourceRange{}));
+    }
+
+    building_visible_scopes[&module] = true;
+    auto scope = localScopeFor(module);
+
+    for (const auto& binding : normalize_import_bindings(module.imports)) {
+        if (binding.imported_module == nullptr) {
+            continue;
+        }
+        if (binding.alias.has_value()) {
+            auto imported_scope = buildExportScope(*binding.imported_module);
+            if (!imported_scope) {
+                building_visible_scopes[&module] = false;
+                return std::unexpected(imported_scope.error());
+            }
+            auto registered = registerImportNamespace(
+                scope, *binding.alias, binding.imported_module, binding.range);
+            if (!registered) {
+                building_visible_scopes[&module] = false;
+                return std::unexpected(registered.error());
+            }
+            continue;
+        }
+
+        auto imported_scope = buildExportScope(*binding.imported_module);
+        if (!imported_scope) {
+            building_visible_scopes[&module] = false;
+            return std::unexpected(imported_scope.error());
+        }
+        auto merged =
+            mergeImportedScope(scope, **imported_scope, binding.range);
+        if (!merged) {
+            building_visible_scopes[&module] = false;
+            return std::unexpected(merged.error());
+        }
+    }
+
+    auto [it, _] = visible_scopes.emplace(&module, std::move(scope));
+    building_visible_scopes[&module] = false;
+    return &it->second;
 }
 
 auto SemanticAnalyzer::registerImplDeclarations(ast::Package& package)
@@ -565,20 +791,15 @@ auto SemanticAnalyzer::registerImplDeclarations(ast::Package& package)
         case ast::TypeSyntax::Kind::Named: {
             PatternTerm term;
             term.kind = PatternTerm::Kind::Named;
-            const auto& scope = visibleScopeFor(owner_module);
             if (syntax.type_arguments.empty()) {
-                if (const auto* builtin = types.findNamed(syntax.name);
-                    builtin != nullptr) {
-                    term.id = builtin->linkage_name;
-                } else if (const auto struct_it =
-                               scope.structs.find(syntax.name);
-                           struct_it != scope.structs.end()) {
-                    term.id = struct_it->second->linkage_name;
-                } else if (const auto enum_it = scope.enums.find(syntax.name);
-                           enum_it != scope.enums.end()) {
-                    term.id = enum_it->second->linkage_name;
-                } else if (scope.struct_templates.contains(syntax.name) ||
-                           scope.enum_templates.contains(syntax.name)) {
+                if (const auto* named =
+                        findNamedTypeInModule(owner_module, syntax.name);
+                    named != nullptr) {
+                    term.id = types.unqualify(named)->linkage_name;
+                } else if (findStructTemplateInModule(owner_module,
+                                                      syntax.name) != nullptr ||
+                           findEnumTemplateInModule(owner_module,
+                                                    syntax.name) != nullptr) {
                     return std::unexpected(
                         Diagnostic("generic type '" + syntax.name +
                                        "' requires explicit type arguments",
@@ -590,16 +811,16 @@ auto SemanticAnalyzer::registerImplDeclarations(ast::Package& package)
                 return term;
             }
 
-            if (const auto struct_it = scope.struct_templates.find(syntax.name);
-                struct_it != scope.struct_templates.end()) {
-                term.id = struct_it->second->linkage_name;
-            } else if (const auto enum_it =
-                           scope.enum_templates.find(syntax.name);
-                       enum_it != scope.enum_templates.end()) {
-                term.id = enum_it->second->linkage_name;
-            } else if (types.findNamed(syntax.name) != nullptr ||
-                       scope.structs.contains(syntax.name) ||
-                       scope.enums.contains(syntax.name)) {
+            if (const auto* struct_decl =
+                    findStructTemplateInModule(owner_module, syntax.name);
+                struct_decl != nullptr) {
+                term.id = struct_decl->linkage_name;
+            } else if (const auto* enum_decl =
+                           findEnumTemplateInModule(owner_module, syntax.name);
+                       enum_decl != nullptr) {
+                term.id = enum_decl->linkage_name;
+            } else if (findNamedTypeInModule(owner_module, syntax.name) !=
+                       nullptr) {
                 return std::unexpected(Diagnostic(
                     "type '" + syntax.name + "' is not generic", syntax.range));
             } else {
@@ -822,15 +1043,25 @@ auto SemanticAnalyzer::registerImplDeclarations(ast::Package& package)
                                receiver_pattern->range));
             }
 
-            const auto& scope = visibleScopeFor(*function->owner_module);
             if (receiver_pattern->kind == ast::TypeSyntax::Kind::Named) {
-                const auto has_nominal_target_type =
-                    scope.structs.contains(receiver_pattern->name) ||
-                    scope.struct_templates.contains(receiver_pattern->name) ||
-                    scope.enums.contains(receiver_pattern->name) ||
-                    scope.enum_templates.contains(receiver_pattern->name);
-                const auto is_builtin_target =
-                    types.findNamed(receiver_pattern->name) != nullptr;
+                bool has_nominal_target_type = false;
+                bool is_builtin_target = false;
+                if (const auto* named = findNamedTypeInModule(
+                        *function->owner_module, receiver_pattern->name);
+                    named != nullptr) {
+                    const auto* unqualified = types.unqualify(named);
+                    has_nominal_target_type =
+                        unqualified->kind == TypeKind::Struct ||
+                        unqualified->kind == TypeKind::Enum;
+                    is_builtin_target = !has_nominal_target_type;
+                }
+                has_nominal_target_type =
+                    has_nominal_target_type ||
+                    findStructTemplateInModule(*function->owner_module,
+                                               receiver_pattern->name) !=
+                        nullptr ||
+                    findEnumTemplateInModule(*function->owner_module,
+                                             receiver_pattern->name) != nullptr;
                 if (!has_nominal_target_type && !is_builtin_target) {
                     return std::unexpected(
                         Diagnostic("unknown impl target type '" +
@@ -887,7 +1118,8 @@ auto SemanticAnalyzer::registerVisibleDecl(ModuleScope& scope, ast::Decl& decl,
                                            SourceRange conflict_range)
     -> std::expected<void, Diagnostic> {
     auto has_type_conflict = [&](std::string_view name) {
-        return scope.structs.contains(std::string(name)) ||
+        return scope.import_namespaces.contains(std::string(name)) ||
+               scope.structs.contains(std::string(name)) ||
                scope.struct_templates.contains(std::string(name)) ||
                scope.enums.contains(std::string(name)) ||
                scope.enum_templates.contains(std::string(name)) ||
@@ -987,6 +1219,117 @@ auto SemanticAnalyzer::registerVisibleDecl(ModuleScope& scope, ast::Decl& decl,
     return {};
 }
 
+auto SemanticAnalyzer::registerImportNamespace(ModuleScope& scope,
+                                               std::string name,
+                                               ast::Module* module,
+                                               SourceRange conflict_range)
+    -> std::expected<void, Diagnostic> {
+    if (scope.import_namespaces.contains(name) ||
+        scope.structs.contains(name) || scope.struct_templates.contains(name) ||
+        scope.enums.contains(name) || scope.enum_templates.contains(name) ||
+        scope.interfaces.contains(name) || scope.functions.contains(name) ||
+        scope.function_templates.contains(name)) {
+        return make_error("duplicate declaration for '" + name + "'",
+                          conflict_range);
+    }
+    scope.import_namespaces.emplace(std::move(name), module);
+    return {};
+}
+
+auto SemanticAnalyzer::mergeImportedScope(ModuleScope& target,
+                                          const ModuleScope& source,
+                                          SourceRange conflict_range)
+    -> std::expected<void, Diagnostic> {
+    for (const auto& [name, module] : source.import_namespaces) {
+        auto registered =
+            registerImportNamespace(target, name, module, conflict_range);
+        if (!registered) {
+            return std::unexpected(registered.error());
+        }
+    }
+
+    auto has_type_conflict = [&](std::string_view name) {
+        return target.import_namespaces.contains(std::string(name)) ||
+               target.structs.contains(std::string(name)) ||
+               target.struct_templates.contains(std::string(name)) ||
+               target.enums.contains(std::string(name)) ||
+               target.enum_templates.contains(std::string(name)) ||
+               target.interfaces.contains(std::string(name)) ||
+               target.functions.contains(std::string(name)) ||
+               target.function_templates.contains(std::string(name));
+    };
+
+    for (const auto& [name, decl] : source.structs) {
+        if (has_type_conflict(name)) {
+            return make_error("duplicate declaration for '" + name + "'",
+                              conflict_range);
+        }
+        target.structs.emplace(name, decl);
+    }
+    for (const auto& [name, decl] : source.struct_templates) {
+        if (has_type_conflict(name)) {
+            return make_error("duplicate declaration for '" + name + "'",
+                              conflict_range);
+        }
+        target.struct_templates.emplace(name, decl);
+    }
+    for (const auto& [name, decl] : source.enums) {
+        if (has_type_conflict(name)) {
+            return make_error("duplicate declaration for '" + name + "'",
+                              conflict_range);
+        }
+        target.enums.emplace(name, decl);
+    }
+    for (const auto& [name, decl] : source.enum_templates) {
+        if (has_type_conflict(name)) {
+            return make_error("duplicate declaration for '" + name + "'",
+                              conflict_range);
+        }
+        target.enum_templates.emplace(name, decl);
+    }
+    for (const auto& [name, decl] : source.interfaces) {
+        if (has_type_conflict(name)) {
+            return make_error("duplicate declaration for '" + name + "'",
+                              conflict_range);
+        }
+        target.interfaces.emplace(name, decl);
+    }
+    for (const auto& [name, decl] : source.functions) {
+        if (has_type_conflict(name)) {
+            return make_error("duplicate declaration for '" + name + "'",
+                              conflict_range);
+        }
+        target.functions.emplace(name, decl);
+    }
+    for (const auto& [name, decl] : source.function_templates) {
+        if (has_type_conflict(name)) {
+            return make_error("duplicate declaration for '" + name + "'",
+                              conflict_range);
+        }
+        target.function_templates.emplace(name, decl);
+    }
+
+    for (const auto& [name, variant] : source.variants) {
+        if (target.variants.contains(name) ||
+            target.template_variants.contains(name)) {
+            return make_error("duplicate enum variant '" + name + "'",
+                              conflict_range);
+        }
+        target.variants.emplace(name, variant);
+    }
+    for (const auto& [name, variants] : source.template_variants) {
+        if (target.variants.contains(name)) {
+            return make_error("duplicate enum variant '" + name + "'",
+                              conflict_range);
+        }
+        auto& target_variants = target.template_variants[name];
+        target_variants.insert(target_variants.end(), variants.begin(),
+                               variants.end());
+    }
+
+    return {};
+}
+
 auto SemanticAnalyzer::visibleScopeFor(const ast::Module& module) const
     -> const ModuleScope& {
     return visible_scopes.at(&module);
@@ -997,25 +1340,272 @@ auto SemanticAnalyzer::localScopeFor(const ast::Module& module) const
     return local_scopes.at(&module);
 }
 
-auto SemanticAnalyzer::findVisibleNamedType(std::string_view name) const
+auto SemanticAnalyzer::exportScopeFor(const ast::Module& module) const
+    -> const ModuleScope& {
+    return export_scopes.at(&module);
+}
+
+auto SemanticAnalyzer::findNamedTypeInModule(const ast::Module& module,
+                                             std::string_view name) const
     -> const Type* {
-    if (const auto* builtin = types.findNamed(name); builtin != nullptr) {
-        return builtin;
+    if (name.find('.') == std::string_view::npos) {
+        if (const auto* builtin = types.findNamed(name); builtin != nullptr) {
+            return builtin;
+        }
     }
 
+    const auto parts = split_qualified_name(name);
+    if (parts.empty()) {
+        return nullptr;
+    }
+
+    std::function<const Type*(const ModuleScope&, std::size_t)> resolve =
+        [&](const ModuleScope& scope, std::size_t index) -> const Type* {
+        if (index + 1 == parts.size()) {
+            if (const auto struct_it = scope.structs.find(parts[index]);
+                struct_it != scope.structs.end()) {
+                return struct_it->second->resolved_type;
+            }
+            if (const auto enum_it = scope.enums.find(parts[index]);
+                enum_it != scope.enums.end()) {
+                return enum_it->second->resolved_type;
+            }
+            return nullptr;
+        }
+
+        const auto namespace_it = scope.import_namespaces.find(parts[index]);
+        if (namespace_it == scope.import_namespaces.end()) {
+            return nullptr;
+        }
+        return resolve(exportScopeFor(*namespace_it->second), index + 1);
+    };
+
+    return resolve(visibleScopeFor(module), 0);
+}
+
+auto SemanticAnalyzer::findStructTemplateInModule(const ast::Module& module,
+                                                  std::string_view name) const
+    -> ast::StructDecl* {
+    const auto parts = split_qualified_name(name);
+    if (parts.empty()) {
+        return nullptr;
+    }
+
+    std::function<ast::StructDecl*(const ModuleScope&, std::size_t)> resolve =
+        [&](const ModuleScope& scope, std::size_t index) -> ast::StructDecl* {
+        if (index + 1 == parts.size()) {
+            if (const auto it = scope.struct_templates.find(parts[index]);
+                it != scope.struct_templates.end()) {
+                return it->second;
+            }
+            return nullptr;
+        }
+
+        const auto namespace_it = scope.import_namespaces.find(parts[index]);
+        if (namespace_it == scope.import_namespaces.end()) {
+            return nullptr;
+        }
+        return resolve(exportScopeFor(*namespace_it->second), index + 1);
+    };
+
+    return resolve(visibleScopeFor(module), 0);
+}
+
+auto SemanticAnalyzer::findEnumTemplateInModule(const ast::Module& module,
+                                                std::string_view name) const
+    -> ast::EnumDecl* {
+    const auto parts = split_qualified_name(name);
+    if (parts.empty()) {
+        return nullptr;
+    }
+
+    std::function<ast::EnumDecl*(const ModuleScope&, std::size_t)> resolve =
+        [&](const ModuleScope& scope, std::size_t index) -> ast::EnumDecl* {
+        if (index + 1 == parts.size()) {
+            if (const auto it = scope.enum_templates.find(parts[index]);
+                it != scope.enum_templates.end()) {
+                return it->second;
+            }
+            return nullptr;
+        }
+
+        const auto namespace_it = scope.import_namespaces.find(parts[index]);
+        if (namespace_it == scope.import_namespaces.end()) {
+            return nullptr;
+        }
+        return resolve(exportScopeFor(*namespace_it->second), index + 1);
+    };
+
+    return resolve(visibleScopeFor(module), 0);
+}
+
+auto SemanticAnalyzer::findInterfaceInModule(const ast::Module& module,
+                                             std::string_view name) const
+    -> const ast::InterfaceDecl* {
+    const auto parts = split_qualified_name(name);
+    if (parts.empty()) {
+        return nullptr;
+    }
+
+    std::function<const ast::InterfaceDecl*(const ModuleScope&, std::size_t)>
+        resolve = [&](const ModuleScope& scope,
+                      std::size_t index) -> const ast::InterfaceDecl* {
+        if (index + 1 == parts.size()) {
+            if (const auto it = scope.interfaces.find(parts[index]);
+                it != scope.interfaces.end()) {
+                return it->second;
+            }
+            return nullptr;
+        }
+
+        const auto namespace_it = scope.import_namespaces.find(parts[index]);
+        if (namespace_it == scope.import_namespaces.end()) {
+            return nullptr;
+        }
+        return resolve(exportScopeFor(*namespace_it->second), index + 1);
+    };
+
+    return resolve(visibleScopeFor(module), 0);
+}
+
+auto SemanticAnalyzer::findFunctionInModule(const ast::Module& module,
+                                            std::string_view name) const
+    -> ast::FunctionDecl* {
+    const auto parts = split_qualified_name(name);
+    if (parts.empty()) {
+        return nullptr;
+    }
+
+    std::function<ast::FunctionDecl*(const ModuleScope&, std::size_t)> resolve =
+        [&](const ModuleScope& scope, std::size_t index) -> ast::FunctionDecl* {
+        if (index + 1 == parts.size()) {
+            if (const auto it = scope.functions.find(parts[index]);
+                it != scope.functions.end()) {
+                return it->second;
+            }
+            return nullptr;
+        }
+
+        const auto namespace_it = scope.import_namespaces.find(parts[index]);
+        if (namespace_it == scope.import_namespaces.end()) {
+            return nullptr;
+        }
+        return resolve(exportScopeFor(*namespace_it->second), index + 1);
+    };
+
+    return resolve(visibleScopeFor(module), 0);
+}
+
+auto SemanticAnalyzer::findFunctionTemplateInModule(const ast::Module& module,
+                                                    std::string_view name) const
+    -> ast::FunctionDecl* {
+    const auto parts = split_qualified_name(name);
+    if (parts.empty()) {
+        return nullptr;
+    }
+
+    std::function<ast::FunctionDecl*(const ModuleScope&, std::size_t)> resolve =
+        [&](const ModuleScope& scope, std::size_t index) -> ast::FunctionDecl* {
+        if (index + 1 == parts.size()) {
+            if (const auto it = scope.function_templates.find(parts[index]);
+                it != scope.function_templates.end()) {
+                return it->second;
+            }
+            return nullptr;
+        }
+
+        const auto namespace_it = scope.import_namespaces.find(parts[index]);
+        if (namespace_it == scope.import_namespaces.end()) {
+            return nullptr;
+        }
+        return resolve(exportScopeFor(*namespace_it->second), index + 1);
+    };
+
+    return resolve(visibleScopeFor(module), 0);
+}
+
+auto SemanticAnalyzer::findEnumVariantInModule(const ast::Module& module,
+                                               std::string_view name) const
+    -> std::optional<std::pair<ast::EnumDecl*, std::size_t>> {
+    const auto parts = split_qualified_name(name);
+    if (parts.empty()) {
+        return std::nullopt;
+    }
+
+    std::function<std::optional<std::pair<ast::EnumDecl*, std::size_t>>(
+        const ModuleScope&, std::size_t)>
+        resolve = [&](const ModuleScope& scope, std::size_t index)
+        -> std::optional<std::pair<ast::EnumDecl*, std::size_t>> {
+        if (index + 1 == parts.size()) {
+            if (const auto it = scope.variants.find(parts[index]);
+                it != scope.variants.end()) {
+                return it->second;
+            }
+            return std::nullopt;
+        }
+
+        const auto namespace_it = scope.import_namespaces.find(parts[index]);
+        if (namespace_it == scope.import_namespaces.end()) {
+            return std::nullopt;
+        }
+        return resolve(exportScopeFor(*namespace_it->second), index + 1);
+    };
+
+    return resolve(visibleScopeFor(module), 0);
+}
+
+auto SemanticAnalyzer::findTemplateEnumVariantsInModule(
+    const ast::Module& module, std::string_view name) const
+    -> std::vector<std::pair<ast::EnumDecl*, std::size_t>> {
+    const auto parts = split_qualified_name(name);
+    if (parts.empty()) {
+        return {};
+    }
+
+    std::function<std::vector<std::pair<ast::EnumDecl*, std::size_t>>(
+        const ModuleScope&, std::size_t)>
+        resolve = [&](const ModuleScope& scope, std::size_t index) {
+            if (index + 1 == parts.size()) {
+                if (const auto it = scope.template_variants.find(parts[index]);
+                    it != scope.template_variants.end()) {
+                    return it->second;
+                }
+                return std::vector<std::pair<ast::EnumDecl*, std::size_t>>{};
+            }
+
+            const auto namespace_it =
+                scope.import_namespaces.find(parts[index]);
+            if (namespace_it == scope.import_namespaces.end()) {
+                return std::vector<std::pair<ast::EnumDecl*, std::size_t>>{};
+            }
+            return resolve(exportScopeFor(*namespace_it->second), index + 1);
+        };
+
+    return resolve(visibleScopeFor(module), 0);
+}
+
+auto SemanticAnalyzer::findVisibleNamedType(std::string_view name) const
+    -> const Type* {
     if (active_module == nullptr) {
         return nullptr;
     }
-    const auto& scope = visibleScopeFor(*active_module);
-    if (const auto struct_it = scope.structs.find(std::string(name));
-        struct_it != scope.structs.end()) {
-        return struct_it->second->resolved_type;
+    return findNamedTypeInModule(*active_module, name);
+}
+
+auto SemanticAnalyzer::findVisibleStructTemplate(std::string_view name) const
+    -> ast::StructDecl* {
+    if (active_module == nullptr) {
+        return nullptr;
     }
-    if (const auto enum_it = scope.enums.find(std::string(name));
-        enum_it != scope.enums.end()) {
-        return enum_it->second->resolved_type;
+    return findStructTemplateInModule(*active_module, name);
+}
+
+auto SemanticAnalyzer::findVisibleEnumTemplate(std::string_view name) const
+    -> ast::EnumDecl* {
+    if (active_module == nullptr) {
+        return nullptr;
     }
-    return nullptr;
+    return findEnumTemplateInModule(*active_module, name);
 }
 
 auto SemanticAnalyzer::findVisibleInterface(std::string_view name) const
@@ -1023,12 +1613,88 @@ auto SemanticAnalyzer::findVisibleInterface(std::string_view name) const
     if (active_module == nullptr) {
         return nullptr;
     }
-    const auto& scope = visibleScopeFor(*active_module);
-    if (const auto it = scope.interfaces.find(std::string(name));
-        it != scope.interfaces.end()) {
-        return it->second;
+    return findInterfaceInModule(*active_module, name);
+}
+
+auto SemanticAnalyzer::findVisibleFunction(std::string_view name) const
+    -> ast::FunctionDecl* {
+    if (active_module == nullptr) {
+        return nullptr;
     }
-    return nullptr;
+    return findFunctionInModule(*active_module, name);
+}
+
+auto SemanticAnalyzer::findVisibleFunctionTemplate(std::string_view name) const
+    -> ast::FunctionDecl* {
+    if (active_module == nullptr) {
+        return nullptr;
+    }
+    return findFunctionTemplateInModule(*active_module, name);
+}
+
+auto SemanticAnalyzer::findVisibleEnumVariant(std::string_view name) const
+    -> std::optional<std::pair<ast::EnumDecl*, std::size_t>> {
+    if (active_module == nullptr) {
+        return std::nullopt;
+    }
+    return findEnumVariantInModule(*active_module, name);
+}
+
+auto SemanticAnalyzer::findVisibleTemplateEnumVariants(std::string_view name)
+    const -> std::vector<std::pair<ast::EnumDecl*, std::size_t>> {
+    if (active_module == nullptr) {
+        return {};
+    }
+    return findTemplateEnumVariantsInModule(*active_module, name);
+}
+
+auto SemanticAnalyzer::validateExternSignature(const ast::FunctionDecl& decl)
+    -> std::expected<void, Diagnostic> {
+    if (!decl.is_extern) {
+        return {};
+    }
+    if (!decl.type_parameters.empty()) {
+        return std::unexpected(Diagnostic(
+            "extern functions do not support type parameters", decl.range));
+    }
+    if (!decl.declared_return_dependencies.empty()) {
+        return std::unexpected(Diagnostic(
+            "extern functions do not support depends clauses", decl.range));
+    }
+    if (decl.resolved_return_type == nullptr ||
+        std::ranges::any_of(decl.parameters, [](const auto& parameter) {
+            return parameter.resolved_type == nullptr;
+        })) {
+        return {};
+    }
+
+    const auto is_ffi_scalar = [&](const Type* type) {
+        type = types.unqualify(type);
+        return type->kind == TypeKind::Integer || type->kind == TypeKind::Float;
+    };
+    const auto is_ffi_type = [&](const Type* type) {
+        type = types.unqualify(type);
+        return type == types.voidType() || is_ffi_scalar(type) ||
+               type->kind == TypeKind::Pointer;
+    };
+
+    if (!is_ffi_type(decl.resolved_return_type)) {
+        return std::unexpected(Diagnostic(
+            "extern return types are limited to void, integers, floats, and "
+            "raw pointers",
+            decl.return_type != nullptr ? decl.return_type->range
+                                        : decl.range));
+    }
+    for (const auto& parameter : decl.parameters) {
+        if (!is_ffi_type(parameter.resolved_type) ||
+            types.unqualify(parameter.resolved_type) == types.voidType()) {
+            return std::unexpected(Diagnostic(
+                "extern parameter types are limited to integers, floats, and "
+                "raw pointers",
+                parameter.range));
+        }
+    }
+    return {};
 }
 
 auto SemanticAnalyzer::implReceiverPattern(const ast::FunctionDecl& decl) const
