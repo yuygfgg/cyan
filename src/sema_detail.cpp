@@ -445,11 +445,39 @@ auto make_type_syntax_from_type(const Type* type) -> ast::TypeSyntaxPtr {
     case TypeKind::Float:
     case TypeKind::Char:
     case TypeKind::Bool:
-    case TypeKind::Struct:
-    case TypeKind::Enum:
         syntax->kind = ast::TypeSyntax::Kind::Named;
         syntax->name = type->name;
         break;
+    case TypeKind::Struct: {
+        syntax->kind = ast::TypeSyntax::Kind::Named;
+        const auto* decl = type->struct_decl;
+        if (decl != nullptr && decl->template_decl != nullptr) {
+            syntax->name = decl->template_decl->name;
+            syntax->type_arguments.reserve(decl->type_arguments.size());
+            for (const auto* type_argument : decl->type_arguments) {
+                syntax->type_arguments.push_back(
+                    make_type_syntax_from_type(type_argument));
+            }
+        } else {
+            syntax->name = type->name;
+        }
+        break;
+    }
+    case TypeKind::Enum: {
+        syntax->kind = ast::TypeSyntax::Kind::Named;
+        const auto* decl = type->enum_decl;
+        if (decl != nullptr && decl->template_decl != nullptr) {
+            syntax->name = decl->template_decl->name;
+            syntax->type_arguments.reserve(decl->type_arguments.size());
+            for (const auto* type_argument : decl->type_arguments) {
+                syntax->type_arguments.push_back(
+                    make_type_syntax_from_type(type_argument));
+            }
+        } else {
+            syntax->name = type->name;
+        }
+        break;
+    }
     case TypeKind::Interface:
         syntax->kind = ast::TypeSyntax::Kind::Borrow;
         syntax->element_type = std::make_unique<ast::TypeSyntax>();

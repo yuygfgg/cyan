@@ -1,0 +1,16 @@
+struct MutRef<T> {
+    &mut T value;
+};
+
+MutRef<T> make_mut_ref<T>(&mut T value) depends(return.value on value) {
+    return {value};
+}
+
+int main() {
+    int x = 0;
+    {
+        MutRef<int> wrapped = make_mut_ref(&mut x);
+        *wrapped.value = 3;
+    }
+    return x - 3;
+}

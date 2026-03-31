@@ -1,0 +1,18 @@
+struct RefBox {
+    &int value;
+};
+
+&int pick(&mut RefBox box) depends(return on box.value) {
+    return box.value;
+}
+
+int read(&int value) {
+    return *value;
+}
+
+int main() {
+    int x = 7;
+    RefBox box = {&x};
+    &int out = pick(&mut box);
+    return read(out) - 7;
+}

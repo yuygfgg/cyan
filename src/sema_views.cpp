@@ -15,6 +15,13 @@ auto append_projected_path(std::vector<ast::ResolvedPlace> sources,
     return sources;
 }
 
+auto append_unique_place(std::vector<ast::ResolvedPlace>& places,
+                         const ast::ResolvedPlace& place) -> void {
+    if (std::ranges::find(places, place) == places.end()) {
+        places.push_back(place);
+    }
+}
+
 } // namespace
 
 auto SemanticAnalyzer::typeContainsViews(const Type* type) const -> bool {
@@ -283,6 +290,48 @@ auto SemanticAnalyzer::collectSlotBindings(FunctionState& state,
             .element_sources = slot.element_origins,
             .type = leaf.type,
         });
+    }
+    return bindings;
+}
+
+auto SemanticAnalyzer::collectProjectedViewBindings(
+    FunctionState& state, const std::vector<ast::ResolvedPlace>& base_places,
+    const Type* type)
+    -> std::expected<std::vector<ViewLeafBinding>, Diagnostic> {
+    std::vector<ViewLeafBinding> bindings;
+    auto merge_binding = [&](ViewLeafBinding next_binding) -> void {
+        const auto existing_it =
+            std::ranges::find_if(bindings, [&](const ViewLeafBinding& binding) {
+                return binding.path == next_binding.path;
+            });
+        if (existing_it == bindings.end()) {
+            bindings.push_back(std::move(next_binding));
+            return;
+        }
+
+        for (const auto& place : next_binding.source_places) {
+            append_unique_place(existing_it->source_places, place);
+        }
+        for (const auto& place : next_binding.element_sources) {
+            append_unique_place(existing_it->element_sources, place);
+        }
+        if (!existing_it->source_local_id.has_value()) {
+            existing_it->source_local_id = next_binding.source_local_id;
+        } else if (next_binding.source_local_id.has_value() &&
+                   existing_it->source_local_id !=
+                       next_binding.source_local_id) {
+            existing_it->source_local_id.reset();
+        }
+    };
+
+    for (const auto& base_place : base_places) {
+        auto projected_bindings = collectSlotBindings(state, base_place, type);
+        if (!projected_bindings) {
+            return std::unexpected(projected_bindings.error());
+        }
+        for (auto& binding : *projected_bindings) {
+            merge_binding(std::move(binding));
+        }
     }
     return bindings;
 }
@@ -611,6 +660,18 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
             std::vector<std::vector<ViewLeafBinding>> cached_arguments(
                 call->arguments.size());
             std::vector<bool> argument_ready(call->arguments.size(), false);
+            std::vector<bool> include_projected_argument_bindings(
+                call->arguments.size(), false);
+            for (const auto& dependency : call->function->return_dependencies) {
+                if (!dependency.target.is_return ||
+                    !dependency.source.parameter_index.has_value() ||
+                    dependency.source.resolved_path.empty()) {
+                    continue;
+                }
+                include_projected_argument_bindings[*dependency.source
+                                                         .parameter_index] =
+                    true;
+            }
             auto find_binding =
                 [](std::vector<ViewLeafBinding>& candidates,
                    const std::vector<std::uint32_t>& path) -> ViewLeafBinding* {
@@ -634,6 +695,41 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                         state, *call->arguments[parameter_index]);
                     if (!argument_bindings) {
                         return std::unexpected(argument_bindings.error());
+                    }
+                    if (include_projected_argument_bindings[parameter_index]) {
+                        const auto* parameter_type =
+                            call->function->parameters[parameter_index]
+                                .resolved_type;
+                        if (parameter_type != nullptr &&
+                            parameter_type->kind == TypeKind::Borrow &&
+                            parameter_type->element_type != nullptr) {
+                            const auto top_level_it = std::ranges::find_if(
+                                *argument_bindings,
+                                [](const ViewLeafBinding& binding) {
+                                    return binding.path.empty();
+                                });
+                            if (top_level_it == argument_bindings->end()) {
+                                return unexpected_result<
+                                    std::vector<ViewLeafBinding>>(
+                                    "call dependency source is missing a "
+                                    "tracked borrow or slice leaf",
+                                    expr.range);
+                            }
+                            auto projected_bindings =
+                                collectProjectedViewBindings(
+                                    state, top_level_it->source_places,
+                                    parameter_type->element_type);
+                            if (!projected_bindings) {
+                                return std::unexpected(
+                                    projected_bindings.error());
+                            }
+                            argument_bindings->insert(
+                                argument_bindings->end(),
+                                std::make_move_iterator(
+                                    projected_bindings->begin()),
+                                std::make_move_iterator(
+                                    projected_bindings->end()));
+                        }
                     }
                     cached_arguments[parameter_index] =
                         std::move(*argument_bindings);

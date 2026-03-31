@@ -538,27 +538,105 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                 }
 
                 std::vector<ast::CachedViewBinding> cached_bindings;
+                auto move_existing_borrow_value = [&](ast::Expr& value_expr,
+                                                      const Type* borrow_type)
+                    -> std::expected<void, Diagnostic> {
+                    if (types.isCopy(borrow_type)) {
+                        return {};
+                    }
+                    auto source_local_id =
+                        borrowSourceLocalId(state, value_expr);
+                    if (!source_local_id) {
+                        return std::unexpected(source_local_id.error());
+                    }
+                    if (!source_local_id->has_value()) {
+                        return {};
+                    }
+                    const auto local_index =
+                        findLocalById(state, **source_local_id);
+                    if (!local_index.has_value()) {
+                        return {};
+                    }
+                    auto& local = state.locals[*local_index];
+                    if (local.type == nullptr ||
+                        !types.isSame(local.type, borrow_type)) {
+                        return {};
+                    }
+                    if (local.type->is_mut) {
+                        for (const auto& origin_place :
+                             topLevelOrigins(local)) {
+                            auto borrow = ensureCanBorrow(
+                                state, origin_place, true, value_expr.range,
+                                local.unique_id);
+                            if (!borrow) {
+                                return std::unexpected(borrow.error());
+                            }
+                        }
+                    }
+                    releaseReborrowParent(state, local);
+                    local.status = LocalState::Status::Moved;
+                    markAggregateViewSlots(state, localPlace(local.unique_id),
+                                           local.type,
+                                           LocalState::Status::Moved);
+                    return {};
+                };
                 for (std::size_t index = 0; index < init_list.elements.size();
                      ++index) {
                     auto& element_expr = *init_list.elements[index];
-                    const auto borrow_field_already_checked =
-                        fields[index].resolved_type->kind == TypeKind::Borrow &&
-                        element_expr.resolved_type != nullptr &&
-                        types.isSame(element_expr.resolved_type,
-                                     fields[index].resolved_type);
-                    if (fields[index].resolved_type->kind == TypeKind::Borrow &&
-                        !borrow_field_already_checked) {
-                        auto borrowed = borrowFromExpr(
-                            state, element_expr,
-                            fields[index].resolved_type->is_mut, true);
-                        if (!borrowed) {
-                            return std::unexpected(borrowed.error());
+                    const auto* field_type = fields[index].resolved_type;
+                    bool move_existing_borrow = false;
+
+                    if (field_type->kind == TypeKind::Borrow) {
+                        auto analyzed =
+                            analyzeExpr(state, element_expr, field_type);
+                        if (!analyzed) {
+                            return std::unexpected(analyzed.error());
                         }
+                        auto source_local_id =
+                            borrowSourceLocalId(state, element_expr);
+                        if (!source_local_id) {
+                            return std::unexpected(source_local_id.error());
+                        }
+                        const auto* unary =
+                            std::get_if<ast::UnaryExpr>(&element_expr.node);
+                        const auto explicit_borrow_syntax =
+                            unary != nullptr &&
+                            (unary->op == ast::UnaryOp::Borrow ||
+                             unary->op == ast::UnaryOp::BorrowMut);
+                        const auto existing_borrow_value =
+                            types.isSame(*analyzed, field_type) &&
+                            !explicit_borrow_syntax &&
+                            (source_local_id->has_value() ||
+                             element_expr.cached_view_bindings.has_value() ||
+                             (element_expr.resolved_place.has_value() &&
+                              element_expr.resolved_place->owner_local_id
+                                  .has_value()));
+                        if (!types.isSame(*analyzed, field_type) ||
+                            !existing_borrow_value) {
+                            auto borrowed = borrowFromExpr(
+                                state, element_expr, field_type->is_mut, true);
+                            if (!borrowed) {
+                                return std::unexpected(borrowed.error());
+                            }
+                            analyzed =
+                                analyzeExpr(state, element_expr, field_type);
+                            if (!analyzed) {
+                                return std::unexpected(analyzed.error());
+                            }
+                        }
+                        if (!types.isSame(element_expr.resolved_type,
+                                          field_type)) {
+                            return unexpected_result<const Type*>(
+                                "initializer field type does not match",
+                                element_expr.range);
+                        }
+                        move_existing_borrow =
+                            existing_borrow_value && !types.isCopy(field_type);
                     }
 
-                    if (typeContainsViews(fields[index].resolved_type)) {
-                        auto analyzed = analyzeExpr(
-                            state, element_expr, fields[index].resolved_type);
+                    if (typeContainsViews(field_type)) {
+                        auto analyzed =
+                            analyzeExpr(state, element_expr, field_type);
                         if (!analyzed) {
                             return std::unexpected(analyzed.error());
                         }
@@ -581,18 +659,17 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                         }
                     }
 
-                    if (fields[index].resolved_type->kind == TypeKind::Borrow) {
-                        if (!types.isSame(element_expr.resolved_type,
-                                          fields[index].resolved_type)) {
-                            return unexpected_result<const Type*>(
-                                "initializer field type does not match",
-                                element_expr.range);
-                        }
-                    } else {
-                        auto element = consumeValue(
-                            state, element_expr, fields[index].resolved_type);
+                    if (field_type->kind != TypeKind::Borrow) {
+                        auto element =
+                            consumeValue(state, element_expr, field_type);
                         if (!element) {
                             return std::unexpected(element.error());
+                        }
+                    } else if (move_existing_borrow) {
+                        auto moved = move_existing_borrow_value(element_expr,
+                                                                field_type);
+                        if (!moved) {
+                            return std::unexpected(moved.error());
                         }
                     }
                 }
@@ -1504,29 +1581,15 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
 
     std::unordered_map<std::size_t, std::vector<ViewLeafBinding>>
         dependency_argument_bindings;
-    if (!resolved_function.return_dependencies.empty()) {
-        for (const auto& dependency : resolved_function.return_dependencies) {
-            if (!dependency.source.parameter_index.has_value()) {
-                continue;
-            }
-            const auto parameter_index = *dependency.source.parameter_index;
-            if (dependency_argument_bindings.contains(parameter_index)) {
-                continue;
-            }
-            auto analyzed_argument = analyzeExpr(
-                state, *call.arguments[parameter_index],
-                resolved_function.parameters[parameter_index].resolved_type);
-            if (!analyzed_argument) {
-                return std::unexpected(analyzed_argument.error());
-            }
-            auto bindings = collectExprViewBindings(
-                state, *call.arguments[parameter_index]);
-            if (!bindings) {
-                return std::unexpected(bindings.error());
-            }
-            dependency_argument_bindings.emplace(parameter_index,
-                                                 std::move(*bindings));
+    std::vector<bool> include_projected_argument_bindings(call.arguments.size(),
+                                                          false);
+    for (const auto& dependency : resolved_function.return_dependencies) {
+        if (!dependency.source.parameter_index.has_value() ||
+            dependency.source.resolved_path.empty()) {
+            continue;
         }
+        include_projected_argument_bindings[*dependency.source
+                                                 .parameter_index] = true;
     }
 
     auto build_dependency_bindings =
@@ -1583,6 +1646,64 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         }
         return bindings;
     };
+
+    if (!resolved_function.return_dependencies.empty()) {
+        for (const auto& dependency : resolved_function.return_dependencies) {
+            if (!dependency.source.parameter_index.has_value()) {
+                continue;
+            }
+            const auto parameter_index = *dependency.source.parameter_index;
+            if (dependency_argument_bindings.contains(parameter_index)) {
+                continue;
+            }
+            auto analyzed_dependency_argument = analyzeExpr(
+                state, *call.arguments[parameter_index],
+                resolved_function.parameters[parameter_index].resolved_type);
+            if (!analyzed_dependency_argument) {
+                return std::unexpected(analyzed_dependency_argument.error());
+            }
+            auto bindings = collectExprViewBindings(
+                state, *call.arguments[parameter_index]);
+            if (!bindings) {
+                return std::unexpected(bindings.error());
+            }
+            if (include_projected_argument_bindings[parameter_index]) {
+                const auto* parameter_type =
+                    resolved_function.parameters[parameter_index].resolved_type;
+                if (parameter_type != nullptr &&
+                    parameter_type->kind == TypeKind::Borrow &&
+                    parameter_type->element_type != nullptr) {
+                    const auto top_level_it = std::ranges::find_if(
+                        *bindings, [](const ViewLeafBinding& binding) {
+                            return binding.path.empty();
+                        });
+                    if (top_level_it == bindings->end()) {
+                        return unexpected_result<const Type*>(
+                            "call dependency source is missing a tracked "
+                            "borrow or slice leaf",
+                            expr.range);
+                    }
+                    auto projected_bindings = collectProjectedViewBindings(
+                        state, top_level_it->source_places,
+                        parameter_type->element_type);
+                    if (!projected_bindings) {
+                        return std::unexpected(projected_bindings.error());
+                    }
+                    if (parameter_type->is_mut) {
+                        for (auto& binding : *projected_bindings) {
+                            binding.source_local_id.reset();
+                        }
+                    }
+                    bindings->insert(
+                        bindings->end(),
+                        std::make_move_iterator(projected_bindings->begin()),
+                        std::make_move_iterator(projected_bindings->end()));
+                }
+            }
+            dependency_argument_bindings.emplace(parameter_index,
+                                                 std::move(*bindings));
+        }
+    }
 
     for (std::size_t index = 0; index < call.arguments.size(); ++index) {
         auto analyzed_argument =

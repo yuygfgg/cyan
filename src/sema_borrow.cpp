@@ -535,9 +535,22 @@ auto SemanticAnalyzer::requireReadable(FunctionState& state, ast::Expr& expr,
 auto SemanticAnalyzer::consumeValue(FunctionState& state, ast::Expr& expr,
                                     const Type* expected_type)
     -> std::expected<const Type*, Diagnostic> {
-    auto expr_type = requireReadable(state, expr, expected_type);
-    if (!expr_type) {
-        return std::unexpected(expr_type.error());
+    std::expected<const Type*, Diagnostic> expr_type =
+        std::unexpected(Diagnostic("", expr.range));
+    const auto cached_pointer_compatible =
+        expr.resolved_type != nullptr && expected_type != nullptr &&
+        expr.resolved_type->kind == TypeKind::Pointer &&
+        expected_type->kind == TypeKind::Pointer && state.unchecked_depth > 0;
+    if (expr.resolved_type != nullptr && !expr.resolved_place.has_value() &&
+        (expected_type == nullptr ||
+         can_consume_value_type(types, expr.resolved_type, expected_type) ||
+         cached_pointer_compatible)) {
+        expr_type = expr.resolved_type;
+    } else {
+        expr_type = requireReadable(state, expr, expected_type);
+        if (!expr_type) {
+            return std::unexpected(expr_type.error());
+        }
     }
     if (!can_consume_value_type(types, *expr_type, expected_type)) {
         if ((*expr_type)->kind == TypeKind::Pointer &&

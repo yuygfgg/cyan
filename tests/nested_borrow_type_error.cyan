@@ -1,0 +1,6 @@
+int main() {
+    int value = 1;
+    &int p = &value;
+    &(&int) q = &p;
+    return 0;
+}

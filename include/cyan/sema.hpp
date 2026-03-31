@@ -304,6 +304,10 @@ class SemanticAnalyzer {
                              const ast::ResolvedPlace& base_place,
                              const Type* type)
         -> std::expected<std::vector<ViewLeafBinding>, Diagnostic>;
+    auto collectProjectedViewBindings(
+        FunctionState& state,
+        const std::vector<ast::ResolvedPlace>& base_places, const Type* type)
+        -> std::expected<std::vector<ViewLeafBinding>, Diagnostic>;
     auto collectExprViewBindings(FunctionState& state, ast::Expr& expr)
         -> std::expected<std::vector<ViewLeafBinding>, Diagnostic>;
     auto setAggregateViewSlots(FunctionState& state,

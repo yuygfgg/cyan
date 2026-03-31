@@ -1,0 +1,18 @@
+struct Wrap<T> {
+    T value;
+};
+
+struct Box<T> {
+    T value;
+};
+
+&T get_ref<T>(&Box<T> box) {
+    return &box.value;
+}
+
+int main() {
+    Wrap<int> wrapped = {7};
+    Box<Wrap<int>> box = {wrapped};
+    &Wrap<int> slot = get_ref(&box);
+    return slot.value - 7;
+}

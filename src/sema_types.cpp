@@ -386,6 +386,11 @@ auto SemanticAnalyzer::resolveType(ast::TypeSyntax& type)
             return unexpected_result<const Type*>(
                 "borrow types do not support const qualifiers", type.range);
         }
+        if (type.element_type != nullptr &&
+            type.element_type->kind == ast::TypeSyntax::Kind::Borrow) {
+            return unexpected_result<const Type*>(
+                "nested borrow types are not supported", type.range);
+        }
         if (type.is_mut && type.element_type != nullptr &&
             type.element_type->kind == ast::TypeSyntax::Kind::Named &&
             findVisibleInterface(type.element_type->name) != nullptr) {
