@@ -1,6 +1,6 @@
-int main() {
-    int value = 0;
-    &int alias = &value;
+i64 main() {
+    i64 value = 0;
+    &i64 alias = &value;
     *alias = 3;
     return value;
 }

@@ -1,14 +1,14 @@
 struct Holder {
-    &mut int view;
+    &mut i64 view;
 };
 
-void write_both(Holder holder, &mut int value) {
+void write_both(Holder holder, &mut i64 value) {
     *holder.view = 1;
     *value = 2;
 }
 
-int main() {
-    int x = 0;
+i64 main() {
+    i64 x = 0;
     Holder holder = {&mut x};
     write_both(holder, &mut x);
     return 0;

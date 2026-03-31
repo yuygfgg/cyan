@@ -1,4 +1,4 @@
-int bad() {
+i64 bad() {
     continue;
     return 0;
 }

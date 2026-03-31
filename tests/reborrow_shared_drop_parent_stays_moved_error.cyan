@@ -1,10 +1,10 @@
-int main() {
-    int x = 0;
-    &mut int p = &mut x;
+i64 main() {
+    i64 x = 0;
+    &mut i64 p = &mut x;
     {
-        &int s = p;
+        &i64 s = p;
         drop(p);
     }
-    &mut int again = p;
+    &mut i64 again = p;
     return 0;
 }

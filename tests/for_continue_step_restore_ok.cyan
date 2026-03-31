@@ -1,20 +1,20 @@
 struct Token {
-    int value;
+    i64 value;
 };
 
 impl drop(&mut Token token) {}
 
-Token make(int value) {
+Token make(i64 value) {
     Token token = {value};
     return token;
 }
 
-int consume(Token token) {
+i64 consume(Token token) {
     return token.value;
 }
 
-int main() {
-    int sum = 0;
+i64 main() {
+    i64 sum = 0;
 
     for (Token token = make(1); sum < 3; token = make(sum + 2)) {
         sum = sum + consume(token);

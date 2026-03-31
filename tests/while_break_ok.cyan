@@ -1,4 +1,4 @@
-int exit_loop() {
+i64 exit_loop() {
     while (true) {
         break;
     }

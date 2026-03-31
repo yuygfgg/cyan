@@ -1,17 +1,17 @@
 struct Pair {
-    &int first;
-    &int second;
+    &i64 first;
+    &i64 second;
 };
 
-int read_first(Pair pair) {
+i64 read_first(Pair pair) {
     return *pair.first;
 }
 
-int main() {
-    int a = 4;
-    int b = 5;
-    int c = 7;
-    int d = 8;
+i64 main() {
+    i64 a = 4;
+    i64 b = 5;
+    i64 c = 7;
+    i64 d = 8;
     Pair pair = {&a, &b};
     if (a < c) {
         pair = {&a, &b};

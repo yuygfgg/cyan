@@ -1,10 +1,10 @@
 struct Holder {
-    &int ptr;
+    &i64 ptr;
 };
 
-int main() {
-    int left = 4;
-    int right = 8;
+i64 main() {
+    i64 left = 4;
+    i64 right = 8;
     []Holder values = [{&left}, {&right}];
     return 0;
 }

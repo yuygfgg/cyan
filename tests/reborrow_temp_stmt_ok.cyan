@@ -1,12 +1,12 @@
-int take(&mut int value) {
+i64 take(&mut i64 value) {
     *value = 5;
     return *value;
 }
 
-int main() {
-    int value = 0;
+i64 main() {
+    i64 value = 0;
     {
-        &mut int borrow = &value;
+        &mut i64 borrow = &value;
         take(&mut *borrow);
         *borrow = 2;
     }

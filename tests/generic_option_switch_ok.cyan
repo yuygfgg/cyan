@@ -3,8 +3,8 @@ enum Option<T> {
     Some(T),
 };
 
-int main() {
-    Option<int> value = Some(9);
+i64 main() {
+    Option<i64> value = Some(9);
     switch (move value) {
         case None:
             return 0;

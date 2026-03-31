@@ -1,7 +1,7 @@
-[]&int bad(&int x, &int y) depends(return on x) {
+[]&i64 bad(&i64 x, &i64 y) depends(return on x) {
     return [x, y];
 }
 
-int main() {
+i64 main() {
     return 0;
 }

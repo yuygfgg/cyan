@@ -1,12 +1,12 @@
-&int first(&int x) {
+&i64 first(&i64 x) {
     return x;
 }
 
-int read(&int x) {
+i64 read(&i64 x) {
     return *x;
 }
 
-int main() {
-    int value = 6;
+i64 main() {
+    i64 value = 6;
     return read(first(&value));
 }

@@ -379,21 +379,23 @@ class LLVMCodegen {
         switch (type->kind) {
         case TypeKind::Void:
             return nullptr;
-        case TypeKind::Int: {
+        case TypeKind::Integer: {
             auto* debug_type = di_builder->createBasicType(
-                "int", 64, llvm::dwarf::DW_ATE_signed);
+                type->name, type->bit_width,
+                type->is_signed ? llvm::dwarf::DW_ATE_signed
+                                : llvm::dwarf::DW_ATE_unsigned);
             debug_types.emplace(type, debug_type);
             return debug_type;
         }
         case TypeKind::Float: {
             auto* debug_type = di_builder->createBasicType(
-                "float", 64, llvm::dwarf::DW_ATE_float);
+                type->name, type->bit_width, llvm::dwarf::DW_ATE_float);
             debug_types.emplace(type, debug_type);
             return debug_type;
         }
         case TypeKind::Char: {
             auto* debug_type = di_builder->createBasicType(
-                "char", 8, llvm::dwarf::DW_ATE_signed_char);
+                "char", 8, llvm::dwarf::DW_ATE_unsigned_char);
             debug_types.emplace(type, debug_type);
             return debug_type;
         }
@@ -442,7 +444,7 @@ class LLVMCodegen {
 
             auto* pointer_type =
                 getDebugType(types.getPointer(type->element_type));
-            auto* length_type = getDebugType(types.intType());
+            auto* length_type = getDebugType(types.i64Type());
             auto* layout = llvm::cast<llvm::StructType>(lowerType(type));
             const auto* struct_layout = data_layout.getStructLayout(layout);
             std::array<llvm::Metadata*, 2> elements = {
@@ -602,7 +604,7 @@ class LLVMCodegen {
                         .value() *
                     8),
                 struct_layout->getElementOffsetInBits(0),
-                llvm::DINode::FlagZero, getDebugType(types.intType())));
+                llvm::DINode::FlagZero, getDebugType(types.i64Type())));
             if (layout.payload_padding != 0) {
                 auto* padding_type = getDebugType(
                     types.getArray(types.charType(), layout.payload_padding));
@@ -1064,21 +1066,19 @@ class LLVMCodegen {
                     auto* current_value = builder.CreateLoad(
                         lowerType(target_type), address, "update.current");
                     llvm::Value* next_value = nullptr;
-                    if (target_type == types.floatType()) {
+                    if (types.isFloat(target_type)) {
                         const auto delta = update.is_increment ? 1.0 : -1.0;
                         next_value = builder.CreateFAdd(
                             current_value,
-                            llvm::ConstantFP::get(
-                                llvm::Type::getDoubleTy(context), delta),
+                            llvm::ConstantFP::get(lowerType(target_type),
+                                                  delta),
                             "update.next");
-                    } else if (target_type == types.intType()) {
+                    } else if (types.isInteger(target_type)) {
                         const auto delta = update.is_increment
                                                ? std::int64_t{1}
                                                : std::int64_t{-1};
                         next_value = builder.CreateAdd(
-                            current_value,
-                            llvm::ConstantInt::getSigned(
-                                llvm::Type::getInt64Ty(context), delta),
+                            current_value, integerConstant(target_type, delta),
                             "update.next");
                     } else if (target_type->kind == TypeKind::Pointer) {
                         const auto delta = update.is_increment
@@ -1498,7 +1498,7 @@ class LLVMCodegen {
     auto sliceStorageType() -> llvm::StructType* {
         auto* pointer_type = llvm::PointerType::get(context, 0);
         return llvm::StructType::get(
-            context, {pointer_type, llvm::Type::getInt64Ty(context)});
+            context, {pointer_type, lowerType(types.i64Type())});
     }
 
     auto emitInterfaceCoercion(ast::Expr& expr) -> llvm::Value* {
@@ -1525,7 +1525,8 @@ class LLVMCodegen {
                         root_it != frame.locals.end()) {
                         data_pointer = builder.CreateLoad(
                             lowerType(expr.interface_source_type),
-                            root_it->second.address, name->name + ".iface.data");
+                            root_it->second.address,
+                            name->name + ".iface.data");
                     }
                 }
             } else if (const auto* unary =
@@ -1636,9 +1637,7 @@ class LLVMCodegen {
         slice_value = builder.CreateInsertValue(slice_value, data_pointer, {0},
                                                 "slice.ptr");
         slice_value = builder.CreateInsertValue(
-            slice_value,
-            llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), length),
-            {1}, "slice.len");
+            slice_value, lengthConstant(length), {1}, "slice.len");
         return slice_value;
     }
 
@@ -1674,8 +1673,7 @@ class LLVMCodegen {
 
         if (source_base->kind == TypeKind::Array) {
             element_type = source_base->element_type;
-            source_length = llvm::ConstantInt::get(
-                llvm::Type::getInt64Ty(context), source_base->array_size);
+            source_length = lengthConstant(source_base->array_size);
             if (const auto* literal = std::get_if<ast::StringLiteralExpr>(
                     &call.arguments.front()->node);
                 literal != nullptr) {
@@ -1701,8 +1699,7 @@ class LLVMCodegen {
                        TypeKind::Array) {
             const auto* array_type = types.unqualify(source_base->element_type);
             element_type = array_type->element_type;
-            source_length = llvm::ConstantInt::get(
-                llvm::Type::getInt64Ty(context), array_type->array_size);
+            source_length = lengthConstant(array_type->array_size);
             auto* array_pointer = emitExpr(*call.arguments.front());
             if (array_pointer != nullptr && array_type->array_size != 0) {
                 auto* zero =
@@ -1739,8 +1736,12 @@ class LLVMCodegen {
         if (start == nullptr || count == nullptr) {
             return nullptr;
         }
+        start = extendOrTruncateInteger(start, call.arguments[1]->resolved_type,
+                                        types.i64Type());
+        count = extendOrTruncateInteger(count, call.arguments[2]->resolved_type,
+                                        types.i64Type());
 
-        auto* zero = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context), 0);
+        auto* zero = lengthConstant(0);
         auto* start_too_big =
             builder.CreateICmpUGT(start, source_length, "subslice.start.oob");
         auto* remaining = builder.CreateSelect(
@@ -1777,12 +1778,11 @@ class LLVMCodegen {
         return std::visit(
             Overloaded{
                 [&](ast::IntegerLiteralExpr& literal) -> llvm::Value* {
-                    return llvm::ConstantInt::getSigned(
-                        llvm::Type::getInt64Ty(context), literal.value);
+                    return integerConstant(expr.resolved_type, literal.value);
                 },
                 [&](ast::FloatLiteralExpr& literal) -> llvm::Value* {
-                    return llvm::ConstantFP::get(
-                        llvm::Type::getDoubleTy(context), literal.value);
+                    return llvm::ConstantFP::get(lowerType(expr.resolved_type),
+                                                 literal.value);
                 },
                 [&](ast::CharLiteralExpr& literal) -> llvm::Value* {
                     return llvm::ConstantInt::get(
@@ -1828,8 +1828,7 @@ class LLVMCodegen {
                 [&](ast::UnaryExpr& unary) -> llvm::Value* {
                     switch (unary.op) {
                     case ast::UnaryOp::Negate:
-                        if (types.unqualify(expr.resolved_type) ==
-                            types.floatType()) {
+                        if (types.isFloat(expr.resolved_type)) {
                             return builder.CreateFNeg(emitExpr(*unary.operand),
                                                       "fnegtmp");
                         }
@@ -1857,8 +1856,11 @@ class LLVMCodegen {
                         types.unqualify(binary.lhs->resolved_type);
                     const auto* rhs_type =
                         types.unqualify(binary.rhs->resolved_type);
-                    const auto is_float = lhs_type == types.floatType() &&
-                                          rhs_type == types.floatType();
+                    const auto is_float =
+                        types.isFloat(lhs_type) && lhs_type == rhs_type;
+                    const auto is_unsigned_integer =
+                        types.isUnsignedInteger(lhs_type) &&
+                        lhs_type == rhs_type;
                     const auto lhs_is_pointer =
                         lhs_type != nullptr &&
                         lhs_type->kind == TypeKind::Pointer;
@@ -1902,30 +1904,48 @@ class LLVMCodegen {
                         if (is_float) {
                             return builder.CreateFDiv(lhs, rhs, "fdivtmp");
                         }
+                        if (is_unsigned_integer) {
+                            return builder.CreateUDiv(lhs, rhs, "divtmp");
+                        }
                         return builder.CreateSDiv(lhs, rhs, "divtmp");
                     case ast::BinaryOp::Remainder:
                         if (is_float) {
                             return builder.CreateFRem(lhs, rhs, "fmodtmp");
+                        }
+                        if (is_unsigned_integer) {
+                            return builder.CreateURem(lhs, rhs, "modtmp");
                         }
                         return builder.CreateSRem(lhs, rhs, "modtmp");
                     case ast::BinaryOp::Less:
                         if (is_float) {
                             return builder.CreateFCmpOLT(lhs, rhs, "fcmptmp");
                         }
+                        if (is_unsigned_integer) {
+                            return builder.CreateICmpULT(lhs, rhs, "cmptmp");
+                        }
                         return builder.CreateICmpSLT(lhs, rhs, "cmptmp");
                     case ast::BinaryOp::LessEqual:
                         if (is_float) {
                             return builder.CreateFCmpOLE(lhs, rhs, "fcmptmp");
+                        }
+                        if (is_unsigned_integer) {
+                            return builder.CreateICmpULE(lhs, rhs, "cmptmp");
                         }
                         return builder.CreateICmpSLE(lhs, rhs, "cmptmp");
                     case ast::BinaryOp::Greater:
                         if (is_float) {
                             return builder.CreateFCmpOGT(lhs, rhs, "fcmptmp");
                         }
+                        if (is_unsigned_integer) {
+                            return builder.CreateICmpUGT(lhs, rhs, "cmptmp");
+                        }
                         return builder.CreateICmpSGT(lhs, rhs, "cmptmp");
                     case ast::BinaryOp::GreaterEqual:
                         if (is_float) {
                             return builder.CreateFCmpOGE(lhs, rhs, "fcmptmp");
+                        }
+                        if (is_unsigned_integer) {
+                            return builder.CreateICmpUGE(lhs, rhs, "cmptmp");
                         }
                         return builder.CreateICmpSGE(lhs, rhs, "cmptmp");
                     case ast::BinaryOp::Equal:
@@ -2248,38 +2268,54 @@ class LLVMCodegen {
                             operand, lowerType(expr.resolved_type),
                             "ptrcasttmp");
                     }
-                    if (target_type == types.floatType()) {
-                        if (source_type == types.intType()) {
+                    if (types.isFloat(target_type)) {
+                        if (types.isInteger(source_type)) {
+                            if (types.isUnsignedInteger(source_type)) {
+                                return builder.CreateUIToFP(
+                                    operand, lowerType(target_type),
+                                    "uitofptmp");
+                            }
                             return builder.CreateSIToFP(
                                 operand, lowerType(target_type), "sitofptmp");
                         }
-                        auto* widened = builder.CreateSExt(
-                            operand, llvm::Type::getInt64Ty(context),
+                        auto* widened = builder.CreateZExt(
+                            operand, integerTypeFor(types.i64Type()),
                             "char.to.int");
-                        return builder.CreateSIToFP(
+                        return builder.CreateUIToFP(
                             widened, lowerType(target_type), "charfptmp");
                     }
-                    if (target_type == types.intType()) {
-                        if (source_type == types.floatType()) {
+                    if (types.isInteger(target_type)) {
+                        if (types.isFloat(source_type)) {
+                            if (types.isUnsignedInteger(target_type)) {
+                                return builder.CreateFPToUI(
+                                    operand, lowerType(target_type),
+                                    "fptouitmp");
+                            }
                             return builder.CreateFPToSI(
                                 operand, lowerType(target_type), "fptositmp");
                         }
-                        return builder.CreateSExt(
-                            operand, lowerType(target_type), "chartointtmp");
+                        if (types.isInteger(source_type)) {
+                            return extendOrTruncateInteger(operand, source_type,
+                                                           target_type);
+                        }
+                        return extendOrTruncateInteger(
+                            operand, types.charType(), target_type);
                     }
                     if (target_type == types.charType()) {
-                        if (source_type == types.floatType()) {
-                            return builder.CreateFPToSI(
+                        if (types.isFloat(source_type)) {
+                            return builder.CreateFPToUI(
                                 operand, lowerType(target_type), "fptochartmp");
                         }
-                        return builder.CreateTrunc(
-                            operand, lowerType(target_type), "inttochartmp");
+                        if (types.isInteger(source_type)) {
+                            return extendOrTruncateInteger(operand, source_type,
+                                                           target_type);
+                        }
+                        return operand;
                     }
                     return nullptr;
                 },
                 [&](ast::SizeofExpr& sizeof_expr) -> llvm::Value* {
-                    return llvm::ConstantInt::get(
-                        llvm::Type::getInt64Ty(context),
+                    return lengthConstant(
                         module.getDataLayout().getTypeAllocSize(
                             lowerType(sizeof_expr.operand_type)));
                 },
@@ -2396,14 +2432,65 @@ class LLVMCodegen {
         return emitPlaceAddress(operand);
     }
 
+    auto integerTypeFor(const Type* type) -> llvm::IntegerType* {
+        return llvm::cast<llvm::IntegerType>(lowerType(type));
+    }
+
+    auto integerConstant(const Type* type, std::int64_t value)
+        -> llvm::ConstantInt* {
+        const auto* base = types.unqualify(type);
+        const auto bit_width = base->kind == TypeKind::Integer
+                                   ? base->bit_width
+                                   : std::uint16_t{64};
+        return llvm::ConstantInt::get(
+            context,
+            llvm::APInt(bit_width, static_cast<std::uint64_t>(value), true));
+    }
+
+    auto lengthConstant(std::uint64_t value) -> llvm::ConstantInt* {
+        return llvm::ConstantInt::get(integerTypeFor(types.i64Type()), value);
+    }
+
+    auto extendOrTruncateInteger(llvm::Value* value, const Type* source_type,
+                                 const Type* target_type) -> llvm::Value* {
+        const auto* source_base = types.unqualify(source_type);
+        const auto* target_base = types.unqualify(target_type);
+        if (source_base == target_base) {
+            return value;
+        }
+
+        const auto source_width = source_base->kind == TypeKind::Char
+                                      ? std::uint16_t{8}
+                                      : source_base->bit_width;
+        const auto target_width = target_base->kind == TypeKind::Char
+                                      ? std::uint16_t{8}
+                                      : target_base->bit_width;
+        if (source_width == target_width) {
+            return value;
+        }
+        if (source_width > target_width) {
+            return builder.CreateTrunc(value, integerTypeFor(target_type),
+                                       "int.trunc");
+        }
+        if (source_base->kind == TypeKind::Integer && source_base->is_signed) {
+            return builder.CreateSExt(value, integerTypeFor(target_type),
+                                      "int.sext");
+        }
+        return builder.CreateZExt(value, integerTypeFor(target_type),
+                                  "int.zext");
+    }
+
     auto lowerType(const Type* type) -> llvm::Type* {
         type = types.unqualify(type);
         switch (type->kind) {
         case TypeKind::Void:
             return llvm::Type::getVoidTy(context);
-        case TypeKind::Int:
-            return llvm::Type::getInt64Ty(context);
+        case TypeKind::Integer:
+            return llvm::Type::getIntNTy(context, type->bit_width);
         case TypeKind::Float:
+            if (type->bit_width == 32) {
+                return llvm::Type::getFloatTy(context);
+            }
             return llvm::Type::getDoubleTy(context);
         case TypeKind::Char:
             return llvm::Type::getInt8Ty(context);
@@ -2588,7 +2675,7 @@ class LLVMCodegen {
             return {};
         }
         case TypeKind::Void:
-        case TypeKind::Int:
+        case TypeKind::Integer:
         case TypeKind::Float:
         case TypeKind::Char:
         case TypeKind::Bool:

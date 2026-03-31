@@ -1,11 +1,11 @@
-int read(&int value) {
+i64 read(&i64 value) {
     return *value;
 }
 
-int main() {
-    int left = 1;
-    int right = 2;
-    &int selected = &left;
+i64 main() {
+    i64 left = 1;
+    i64 right = 2;
+    &i64 selected = &left;
     if (left < right) {
         selected = &left;
     } else {

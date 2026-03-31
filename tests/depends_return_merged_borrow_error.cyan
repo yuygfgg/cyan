@@ -1,5 +1,5 @@
-&int choose(&int a, &int b, bool cond) depends(return on a) {
-    &int x = a;
+&i64 choose(&i64 a, &i64 b, bool cond) depends(return on a) {
+    &i64 x = a;
     if (cond) {
         x = a;
     } else {
@@ -8,8 +8,8 @@
     return x;
 }
 
-int main() {
-    int a = 1;
-    int b = 2;
+i64 main() {
+    i64 a = 1;
+    i64 b = 2;
     return *choose(&a, &b, false);
 }

@@ -5,7 +5,7 @@ impl measure(&Score score) {
     return score.id + 1;
 }
 
-int main() {
+i64 main() {
     Score score = {6};
     if (measure(score) == 7) {
         return 0;

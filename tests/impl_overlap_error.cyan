@@ -1,4 +1,4 @@
-interface<T> int measure(&T value);
+interface<T> i64 measure(&T value);
 
 struct Box<T> {
     T value;
@@ -8,11 +8,11 @@ impl measure<T>(&Box<T> box) {
     return 0;
 }
 
-impl measure(&Box<int> box) {
+impl measure(&Box<i64> box) {
     return box.value;
 }
 
-int main() {
-    Box<int> box = {1};
+i64 main() {
+    Box<i64> box = {1};
     return measure(box);
 }

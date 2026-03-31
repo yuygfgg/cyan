@@ -1,18 +1,18 @@
 struct RefBox {
-    &int value;
+    &i64 value;
 };
 
-&int pick(&mut RefBox box) depends(return on box.value) {
+&i64 pick(&mut RefBox box) depends(return on box.value) {
     return box.value;
 }
 
-int read(&int value) {
+i64 read(&i64 value) {
     return *value;
 }
 
-int main() {
-    int x = 7;
+i64 main() {
+    i64 x = 7;
     RefBox box = {&x};
-    &int out = pick(&mut box);
+    &i64 out = pick(&mut box);
     return read(out) - 7;
 }

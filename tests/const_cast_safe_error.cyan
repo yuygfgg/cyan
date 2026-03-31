@@ -1,6 +1,6 @@
-int main() {
-    int value = 7;
-    const int* read_only = &value;
-    int* writable = read_only as int*;
+i64 main() {
+    i64 value = 7;
+    const i64* read_only = &value;
+    i64* writable = read_only as i64*;
     return *writable;
 }

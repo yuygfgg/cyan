@@ -1,12 +1,12 @@
 struct Box {
-    int value;
+    i64 value;
 };
 
-int take(Box b) {
+i64 take(Box b) {
     return b.value;
 }
 
-int main() {
+i64 main() {
     Box b;
     Box other = b;
     return b.value;

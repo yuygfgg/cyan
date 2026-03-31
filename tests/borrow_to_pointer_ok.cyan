@@ -1,6 +1,6 @@
-int main() {
-    int value = 0;
-    int* ptr = &value;
+i64 main() {
+    i64 value = 0;
+    i64* ptr = &value;
     unchecked {
         *ptr = 9;
     }

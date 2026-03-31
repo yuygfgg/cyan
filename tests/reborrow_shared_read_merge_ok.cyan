@@ -1,10 +1,10 @@
-int main() {
-    int x = 1;
-    int y = 2;
-    int pick = 0;
-    &mut int pa = &mut x;
-    &mut int pb = &mut y;
-    &int s = pa;
+i64 main() {
+    i64 x = 1;
+    i64 y = 2;
+    i64 pick = 0;
+    &mut i64 pa = &mut x;
+    &mut i64 pb = &mut y;
+    &i64 s = pa;
     if (pick == 0) {
         s = pa;
     } else {

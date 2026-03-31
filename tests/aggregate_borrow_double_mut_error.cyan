@@ -1,9 +1,9 @@
 struct Holder {
-    &mut int view;
+    &mut i64 view;
 };
 
-int main() {
-    int x = 0;
+i64 main() {
+    i64 x = 0;
     Holder first = {&mut x};
     Holder second = {&mut x};
     return 0;

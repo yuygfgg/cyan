@@ -1,8 +1,8 @@
 struct Box {
-    int x;
+    i64 x;
 };
 
-int main() {
+i64 main() {
     Box b = {0};
     {
         &mut Box p = &mut b;

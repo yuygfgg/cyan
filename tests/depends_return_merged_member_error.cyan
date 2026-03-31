@@ -1,8 +1,8 @@
 struct Box {
-    int value;
+    i64 value;
 };
 
-&int choose(&Box a, &Box b, bool cond) depends(return on a) {
+&i64 choose(&Box a, &Box b, bool cond) depends(return on a) {
     &Box x = a;
     if (cond) {
         x = a;
@@ -12,7 +12,7 @@ struct Box {
     return &x.value;
 }
 
-int main() {
+i64 main() {
     Box a = {1};
     Box b = {2};
     return *choose(&a, &b, false);

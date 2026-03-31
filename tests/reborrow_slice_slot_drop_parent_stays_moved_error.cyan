@@ -1,10 +1,10 @@
-int main() {
-    int[1] arr = [0];
-    &mut int[1] whole = &mut arr;
+i64 main() {
+    i64[1] arr = [0];
+    &mut i64[1] whole = &mut arr;
     {
-        []int s = whole;
+        []i64 s = whole;
         drop(whole);
     }
-    &mut int[1] again = whole;
+    &mut i64[1] again = whole;
     return 0;
 }

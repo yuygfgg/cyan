@@ -1,9 +1,9 @@
-int main() {
-    int x = 10;
-    int y = 20;
-    []&int tail = [];
+i64 main() {
+    i64 x = 10;
+    i64 y = 20;
+    []&i64 tail = [];
     {
-        []&int views = [&x, &y];
+        []&i64 views = [&x, &y];
         tail = subslice(views, 1, 1);
     }
     y = 99;

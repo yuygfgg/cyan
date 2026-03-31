@@ -1,12 +1,12 @@
-interface<T> int measure(&T value);
+interface<T> i64 measure(&T value);
 
-impl measure(&int value) {
+impl measure(&i64 value) {
     return *value;
 }
 
-int sum([]&measure values) {
-    int i = 0;
-    int total = 0;
+i64 sum([]&measure values) {
+    i64 i = 0;
+    i64 total = 0;
     while (i < len(values)) {
         total = total + measure(values[i]);
         i++;
@@ -14,13 +14,13 @@ int sum([]&measure values) {
     return total;
 }
 
-int call_dyn(&measure value) {
+i64 call_dyn(&measure value) {
     return measure(value);
 }
 
-int main() {
-    int left = 4;
-    int right = 8;
+i64 main() {
+    i64 left = 4;
+    i64 right = 8;
     if (measure(right) != 8) {
         return 1;
     }

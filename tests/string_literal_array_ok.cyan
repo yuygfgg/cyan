@@ -1,4 +1,4 @@
-int main() {
+i64 main() {
     char[6] text = "hello";
-    return text[1] as int;
+    return text[1] as i64;
 }

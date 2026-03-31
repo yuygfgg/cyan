@@ -1,6 +1,6 @@
-int sum([]int values) {
-    int i = 0;
-    int total = 0;
+i64 sum([]i64 values) {
+    i64 i = 0;
+    i64 total = 0;
     while (i < len(values)) {
         total = total + values[i];
         i++;
@@ -8,13 +8,13 @@ int sum([]int values) {
     return total;
 }
 
-int main() {
-    int[3] values = [3, 4, 5];
+i64 main() {
+    i64[3] values = [3, 4, 5];
     if (sum(values) != 12) {
         return 1;
     }
 
-    []int view = values;
+    []i64 view = values;
     if (len(view) != 3) {
         return 1;
     }

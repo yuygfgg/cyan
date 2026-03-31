@@ -1,5 +1,5 @@
-int main() {
-    int value = 3;
+i64 main() {
+    i64 value = 3;
 
     while (value > 0) {
         value--;

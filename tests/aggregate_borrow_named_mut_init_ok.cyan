@@ -1,11 +1,11 @@
 struct Holder {
-    &mut int view;
+    &mut i64 view;
 };
 
-int main() {
-    int x = 0;
+i64 main() {
+    i64 x = 0;
     {
-        &mut int parent = &mut x;
+        &mut i64 parent = &mut x;
         {
             Holder holder = {parent};
             *holder.view = 7;

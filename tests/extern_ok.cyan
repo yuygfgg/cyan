@@ -1,7 +1,7 @@
 extern {
-    int identity(int value);
+    i64 identity(i64 value);
 }
 
-int call_identity() {
+i64 call_identity() {
     return identity(7);
 }

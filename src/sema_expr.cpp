@@ -1,5 +1,7 @@
 #include "sema_detail.hpp"
 
+#include <limits>
+
 namespace cyan {
 
 using namespace detail;
@@ -28,17 +30,86 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
         }
         return expr.resolved_type;
     }
+
+    const auto* const literal_expected_type =
+        expected_type == nullptr ? nullptr : types.unqualify(expected_type);
+    const auto resolve_integer_literal_type =
+        [&](std::int64_t value) -> std::expected<const Type*, Diagnostic> {
+        if (literal_expected_type != nullptr &&
+            literal_expected_type->kind == TypeKind::Integer) {
+            const auto fits = [&]() -> bool {
+                if (literal_expected_type->is_signed) {
+                    switch (literal_expected_type->bit_width) {
+                    case 8:
+                        return value >=
+                                   std::numeric_limits<std::int8_t>::min() &&
+                               value <= std::numeric_limits<std::int8_t>::max();
+                    case 16:
+                        return value >=
+                                   std::numeric_limits<std::int16_t>::min() &&
+                               value <=
+                                   std::numeric_limits<std::int16_t>::max();
+                    case 32:
+                        return value >=
+                                   std::numeric_limits<std::int32_t>::min() &&
+                               value <=
+                                   std::numeric_limits<std::int32_t>::max();
+                    case 64:
+                        return true;
+                    default:
+                        return false;
+                    }
+                }
+
+                if (value < 0) {
+                    return false;
+                }
+                switch (literal_expected_type->bit_width) {
+                case 8:
+                    return value <= std::numeric_limits<std::uint8_t>::max();
+                case 16:
+                    return value <= std::numeric_limits<std::uint16_t>::max();
+                case 32:
+                    return value <= std::numeric_limits<std::uint32_t>::max();
+                case 64:
+                    return true;
+                default:
+                    return false;
+                }
+            }();
+            if (!fits) {
+                return unexpected_result<const Type*>(
+                    "integer literal does not fit in expected type '" +
+                        types.describe(literal_expected_type) + "'",
+                    expr.range);
+            }
+            return literal_expected_type;
+        }
+
+        static_cast<void>(value);
+        return types.defaultIntegerType();
+    };
+
     return std::visit(
         Overloaded{
-            [&](ast::IntegerLiteralExpr&)
+            [&](ast::IntegerLiteralExpr& literal)
                 -> std::expected<const Type*, Diagnostic> {
-                expr.resolved_type = types.intType();
+                auto literal_type = resolve_integer_literal_type(literal.value);
+                if (!literal_type) {
+                    return std::unexpected(literal_type.error());
+                }
+                expr.resolved_type = *literal_type;
                 expr.resolved_place.reset();
                 return expr.resolved_type;
             },
             [&](ast::FloatLiteralExpr&)
                 -> std::expected<const Type*, Diagnostic> {
-                expr.resolved_type = types.floatType();
+                if (literal_expected_type != nullptr &&
+                    literal_expected_type->kind == TypeKind::Float) {
+                    expr.resolved_type = literal_expected_type;
+                } else {
+                    expr.resolved_type = types.defaultFloatType();
+                }
                 expr.resolved_place.reset();
                 return expr.resolved_type;
             },
@@ -158,15 +229,23 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                 -> std::expected<const Type*, Diagnostic> {
                 switch (unary.op) {
                 case ast::UnaryOp::Negate: {
-                    auto operand_type = requireReadable(state, *unary.operand);
+                    const auto* negate_expected_type =
+                        literal_expected_type != nullptr &&
+                                (types.isInteger(literal_expected_type) ||
+                                 types.isFloat(literal_expected_type))
+                            ? literal_expected_type
+                            : nullptr;
+                    auto operand_type = requireReadable(state, *unary.operand,
+                                                        negate_expected_type);
                     if (!operand_type) {
                         return std::unexpected(operand_type.error());
                     }
                     const auto* value_type = types.unqualify(*operand_type);
-                    if (value_type != types.intType() &&
-                        value_type != types.floatType()) {
+                    if (!types.isInteger(value_type) &&
+                        !types.isFloat(value_type)) {
                         return unexpected_result<const Type*>(
-                            "unary '-' requires an int or float operand",
+                            "unary '-' requires an integer or floating-point "
+                            "operand",
                             unary.operand->range);
                     }
                     expr.resolved_type = value_type;
@@ -310,13 +389,66 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
             },
             [&](ast::BinaryExpr& binary)
                 -> std::expected<const Type*, Diagnostic> {
-                auto lhs_type = requireReadable(state, *binary.lhs);
-                if (!lhs_type) {
-                    return std::unexpected(lhs_type.error());
-                }
-                auto rhs_type = requireReadable(state, *binary.rhs);
-                if (!rhs_type) {
-                    return std::unexpected(rhs_type.error());
+                const auto expected_literal_type =
+                    [&](const ast::Expr& candidate,
+                        const Type* other_type) -> const Type* {
+                    other_type = other_type == nullptr
+                                     ? nullptr
+                                     : types.unqualify(other_type);
+                    if (other_type == nullptr) {
+                        return nullptr;
+                    }
+                    if (std::holds_alternative<ast::IntegerLiteralExpr>(
+                            candidate.node) &&
+                        types.isInteger(other_type)) {
+                        return other_type;
+                    }
+                    if (std::holds_alternative<ast::FloatLiteralExpr>(
+                            candidate.node) &&
+                        types.isFloat(other_type)) {
+                        return other_type;
+                    }
+                    return nullptr;
+                };
+
+                std::expected<const Type*, Diagnostic> lhs_type =
+                    unexpected_result<const Type*>("unreachable", expr.range);
+                std::expected<const Type*, Diagnostic> rhs_type =
+                    unexpected_result<const Type*>("unreachable", expr.range);
+
+                const auto lhs_is_literal =
+                    std::holds_alternative<ast::IntegerLiteralExpr>(
+                        binary.lhs->node) ||
+                    std::holds_alternative<ast::FloatLiteralExpr>(
+                        binary.lhs->node);
+                const auto rhs_is_literal =
+                    std::holds_alternative<ast::IntegerLiteralExpr>(
+                        binary.rhs->node) ||
+                    std::holds_alternative<ast::FloatLiteralExpr>(
+                        binary.rhs->node);
+
+                if (lhs_is_literal && !rhs_is_literal) {
+                    rhs_type = requireReadable(state, *binary.rhs);
+                    if (!rhs_type) {
+                        return std::unexpected(rhs_type.error());
+                    }
+                    lhs_type = requireReadable(
+                        state, *binary.lhs,
+                        expected_literal_type(*binary.lhs, *rhs_type));
+                    if (!lhs_type) {
+                        return std::unexpected(lhs_type.error());
+                    }
+                } else {
+                    lhs_type = requireReadable(state, *binary.lhs);
+                    if (!lhs_type) {
+                        return std::unexpected(lhs_type.error());
+                    }
+                    rhs_type = requireReadable(
+                        state, *binary.rhs,
+                        expected_literal_type(*binary.rhs, *lhs_type));
+                    if (!rhs_type) {
+                        return std::unexpected(rhs_type.error());
+                    }
                 }
                 const auto* lhs_value_type = types.unqualify(*lhs_type);
                 const auto* rhs_value_type = types.unqualify(*rhs_type);
@@ -327,19 +459,19 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                 case ast::BinaryOp::Multiply:
                 case ast::BinaryOp::Divide:
                 case ast::BinaryOp::Remainder:
-                    if (lhs_value_type == types.intType() &&
-                        rhs_value_type == types.intType()) {
-                        expr.resolved_type = types.intType();
+                    if (types.isInteger(lhs_value_type) &&
+                        lhs_value_type == rhs_value_type) {
+                        expr.resolved_type = lhs_value_type;
                         break;
                     }
-                    if (lhs_value_type == types.floatType() &&
-                        rhs_value_type == types.floatType()) {
-                        expr.resolved_type = types.floatType();
+                    if (types.isFloat(lhs_value_type) &&
+                        lhs_value_type == rhs_value_type) {
+                        expr.resolved_type = lhs_value_type;
                         break;
                     }
                     if (state.unchecked_depth > 0 &&
                         lhs_value_type->kind == TypeKind::Pointer &&
-                        rhs_value_type == types.intType() &&
+                        types.isInteger(rhs_value_type) &&
                         (types.unqualify(lhs_value_type->element_type) !=
                          types.voidType()) &&
                         (binary.op == ast::BinaryOp::Add ||
@@ -348,7 +480,7 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                         break;
                     }
                     if (state.unchecked_depth > 0 &&
-                        lhs_value_type == types.intType() &&
+                        types.isInteger(lhs_value_type) &&
                         rhs_value_type->kind == TypeKind::Pointer &&
                         (types.unqualify(rhs_value_type->element_type) !=
                          types.voidType()) &&
@@ -357,20 +489,21 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                         break;
                     }
                     return unexpected_result<const Type*>(
-                        "arithmetic operators require int operands, float "
-                        "operands, or unchecked pointer arithmetic",
+                        "arithmetic operators require matching integer "
+                        "operands, matching floating-point operands, or "
+                        "unchecked pointer arithmetic",
                         expr.range);
                 case ast::BinaryOp::Less:
                 case ast::BinaryOp::LessEqual:
                 case ast::BinaryOp::Greater:
                 case ast::BinaryOp::GreaterEqual:
-                    if ((lhs_value_type != types.intType() ||
-                         rhs_value_type != types.intType()) &&
-                        (lhs_value_type != types.floatType() ||
-                         rhs_value_type != types.floatType())) {
+                    if (!((types.isInteger(lhs_value_type) &&
+                           lhs_value_type == rhs_value_type) ||
+                          (types.isFloat(lhs_value_type) &&
+                           lhs_value_type == rhs_value_type))) {
                         return unexpected_result<const Type*>(
-                            "comparison operators require int or float "
-                            "operands",
+                            "comparison operators require matching integer "
+                            "or floating-point operands",
                             expr.range);
                     }
                     expr.resolved_type = types.boolType();
@@ -421,9 +554,9 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                 if (!index_type) {
                     return std::unexpected(index_type.error());
                 }
-                if (types.unqualify(*index_type) != types.intType()) {
+                if (!types.isInteger(*index_type)) {
                     return unexpected_result<const Type*>(
-                        "index expression must have type int",
+                        "index expression must have an integer type",
                         index_expr.index->range);
                 }
                 const Type* element_type = nullptr;
@@ -814,12 +947,12 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                     return expr.resolved_type;
                 }
                 const auto source_numeric =
-                    types.unqualify(*operand_type) == types.intType() ||
-                    types.unqualify(*operand_type) == types.floatType() ||
+                    types.isInteger(*operand_type) ||
+                    types.isFloat(*operand_type) ||
                     types.unqualify(*operand_type) == types.charType();
                 const auto target_numeric =
-                    types.unqualify(*target_type) == types.intType() ||
-                    types.unqualify(*target_type) == types.floatType() ||
+                    types.isInteger(*target_type) ||
+                    types.isFloat(*target_type) ||
                     types.unqualify(*target_type) == types.charType();
                 if (source_numeric && target_numeric) {
                     cast_expr.cast_kind = ast::CastKind::Numeric;
@@ -845,7 +978,7 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                     return std::unexpected(operand_type.error());
                 }
                 sizeof_expr.operand_type = *operand_type;
-                expr.resolved_type = types.intType();
+                expr.resolved_type = types.i64Type();
                 expr.resolved_place.reset();
                 return expr.resolved_type;
             },
@@ -1136,7 +1269,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         }
 
         call.builtin_kind = ast::BuiltinCallKind::Len;
-        expr.resolved_type = types.intType();
+        expr.resolved_type = types.i64Type();
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
@@ -1238,14 +1371,13 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         }
 
         for (std::size_t index = 1; index < call.arguments.size(); ++index) {
-            auto argument_type =
-                requireReadable(state, *call.arguments[index], types.intType());
+            auto argument_type = requireReadable(state, *call.arguments[index]);
             if (!argument_type) {
                 return std::unexpected(argument_type.error());
             }
-            if (types.unqualify(*argument_type) != types.intType()) {
+            if (!types.isInteger(*argument_type)) {
                 return unexpected_result<const Type*>(
-                    "subslice() offset and length must have type int",
+                    "subslice() offset and length must have integer type",
                     call.arguments[index]->range);
             }
         }

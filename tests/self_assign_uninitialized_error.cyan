@@ -1,5 +1,5 @@
-int main() {
-    int x;
+i64 main() {
+    i64 x;
     x = x;
     return 0;
 }

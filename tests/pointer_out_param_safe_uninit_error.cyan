@@ -1,9 +1,9 @@
-int fill(int* out) {
+i64 fill(i64* out) {
     return 0;
 }
 
-int main() {
-    int value;
+i64 main() {
+    i64 value;
     fill(&mut value);
     return 0;
 }

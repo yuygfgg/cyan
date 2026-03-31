@@ -1,6 +1,6 @@
-int main() {
-    int sum = 0;
-    int value = 0;
+i64 main() {
+    i64 sum = 0;
+    i64 value = 0;
 
     while (value < 6) {
         value++;

@@ -18,7 +18,7 @@ struct InterfaceDecl;
 
 enum class TypeKind : std::uint8_t {
     Void,
-    Int,
+    Integer,
     Float,
     Char,
     Bool,
@@ -37,6 +37,8 @@ struct Type {
     const ast::StructDecl* struct_decl = nullptr;
     const ast::EnumDecl* enum_decl = nullptr;
     const ast::InterfaceDecl* interface_decl = nullptr;
+    std::uint16_t bit_width = 0;
+    bool is_signed = false;
     bool is_mut = false;
     bool is_const = false;
     std::uint64_t array_size = 0;
@@ -49,10 +51,28 @@ class TypeContext {
     TypeContext();
 
     [[nodiscard]] auto voidType() const -> const Type*;
-    [[nodiscard]] auto intType() const -> const Type*;
-    [[nodiscard]] auto floatType() const -> const Type*;
+    [[nodiscard]] auto defaultIntegerType() const -> const Type*;
+    [[nodiscard]] auto defaultFloatType() const -> const Type*;
+    [[nodiscard]] auto i8Type() const -> const Type*;
+    [[nodiscard]] auto i16Type() const -> const Type*;
+    [[nodiscard]] auto i32Type() const -> const Type*;
+    [[nodiscard]] auto i64Type() const -> const Type*;
+    [[nodiscard]] auto u8Type() const -> const Type*;
+    [[nodiscard]] auto u16Type() const -> const Type*;
+    [[nodiscard]] auto u32Type() const -> const Type*;
+    [[nodiscard]] auto u64Type() const -> const Type*;
+    [[nodiscard]] auto f32Type() const -> const Type*;
+    [[nodiscard]] auto f64Type() const -> const Type*;
+    [[nodiscard]] auto integerType(std::uint16_t bit_width,
+                                   bool is_signed) const -> const Type*;
+    [[nodiscard]] auto floatType(std::uint16_t bit_width) const -> const Type*;
     [[nodiscard]] auto charType() const -> const Type*;
     [[nodiscard]] auto boolType() const -> const Type*;
+    [[nodiscard]] auto isInteger(const Type* type) const -> bool;
+    [[nodiscard]] auto isFloat(const Type* type) const -> bool;
+    [[nodiscard]] auto isSignedInteger(const Type* type) const -> bool;
+    [[nodiscard]] auto isUnsignedInteger(const Type* type) const -> bool;
+    [[nodiscard]] auto isNumeric(const Type* type) const -> bool;
 
     auto registerStruct(std::string name, std::string linkage_name,
                         const ast::StructDecl* decl) -> const Type*;
@@ -98,8 +118,18 @@ class TypeContext {
     std::unordered_map<const ast::InterfaceDecl*, const Type*> interface_types;
     std::unordered_map<const Type*, const ast::FunctionDecl*> drop_functions;
     const Type* void_builtin_type = nullptr;
-    const Type* int_builtin_type = nullptr;
-    const Type* float_builtin_type = nullptr;
+    const Type* default_integer_builtin_type = nullptr;
+    const Type* default_float_builtin_type = nullptr;
+    const Type* i8_builtin_type = nullptr;
+    const Type* i16_builtin_type = nullptr;
+    const Type* i32_builtin_type = nullptr;
+    const Type* i64_builtin_type = nullptr;
+    const Type* u8_builtin_type = nullptr;
+    const Type* u16_builtin_type = nullptr;
+    const Type* u32_builtin_type = nullptr;
+    const Type* u64_builtin_type = nullptr;
+    const Type* f32_builtin_type = nullptr;
+    const Type* f64_builtin_type = nullptr;
     const Type* char_builtin_type = nullptr;
     const Type* bool_builtin_type = nullptr;
 };

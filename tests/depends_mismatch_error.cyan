@@ -1,4 +1,4 @@
-&int choose_left(&int x, &int y, bool cond) depends(return on x) {
+&i64 choose_left(&i64 x, &i64 y, bool cond) depends(return on x) {
     if (cond) {
         return x;
     }

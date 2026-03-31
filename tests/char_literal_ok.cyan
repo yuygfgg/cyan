@@ -1,4 +1,4 @@
-int main() {
+i64 main() {
     char value = 'A';
     if (value == 'A') {
         return 0;

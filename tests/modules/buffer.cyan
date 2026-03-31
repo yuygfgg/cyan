@@ -1,9 +1,9 @@
 export struct Buffer<T> {
     T* ptr;
-    int len;
+    i64 len;
 };
 
-T buffer_load<T>(&Buffer<T> buffer, int index) {
+T buffer_load<T>(&Buffer<T> buffer, i64 index) {
     unchecked {
         return buffer.ptr[index];
     }

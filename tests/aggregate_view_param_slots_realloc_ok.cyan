@@ -7,7 +7,7 @@ SliceValue slice_value([]const char text) depends(return.text on text) {
 }
 
 struct IntValue {
-    int value;
+    i64 value;
 };
 
 struct HttpHeader {
@@ -32,14 +32,14 @@ struct HeaderBag {
     HttpHeader user_agent;
     HttpHeader content_type;
     HttpHeader content_length;
-    int parsed_count;
+    i64 parsed_count;
 };
 
 struct HttpRequest {
     RequestLine line;
     HeaderBag headers;
     []const char body;
-    int content_length_value;
+    i64 content_length_value;
 };
 
 void touch(&HttpRequest request) {
@@ -70,6 +70,6 @@ void touch(&HttpRequest request) {
     }
 }
 
-int main() {
+i64 main() {
     return 0;
 }

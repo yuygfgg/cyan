@@ -1,12 +1,12 @@
 struct Holder {
-    &int value;
+    &i64 value;
 };
 
-int main() {
-    int fallback = 0;
+i64 main() {
+    i64 fallback = 0;
     Holder holder = {&fallback};
     {
-        int inner = 1;
+        i64 inner = 1;
         holder.value = &inner;
     }
     return 0;

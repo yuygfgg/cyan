@@ -1,11 +1,11 @@
-[]&int id([]&int values) depends(return on values) {
+[]&i64 id([]&i64 values) depends(return on values) {
     return values;
 }
 
-int main() {
-    int left = 1;
-    int right = 2;
-    []&int values = [&left, &right];
-    []&int same = id(values);
+i64 main() {
+    i64 left = 1;
+    i64 right = 2;
+    []&i64 values = [&left, &right];
+    []&i64 same = id(values);
     return *same[1] - 2;
 }

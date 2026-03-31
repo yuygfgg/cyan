@@ -1,10 +1,10 @@
-int head([]int s) {
+i64 head([]i64 s) {
     return s[0];
 }
 
-int main() {
-    int[4] arr = [1, 2, 3, 4];
-    &mut int[4] whole = &mut arr;
-    []int view = *whole;
+i64 main() {
+    i64[4] arr = [1, 2, 3, 4];
+    &mut i64[4] whole = &mut arr;
+    []i64 view = *whole;
     return view[1] + head(*whole);
 }

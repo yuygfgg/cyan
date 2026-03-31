@@ -112,7 +112,7 @@ auto same_concrete_base_type(const TypeContext& types, const Type* lhs,
 
     switch (lhs->kind) {
     case TypeKind::Void:
-    case TypeKind::Int:
+    case TypeKind::Integer:
     case TypeKind::Float:
     case TypeKind::Char:
     case TypeKind::Bool:
@@ -147,7 +147,7 @@ auto can_add_const_in_object_graph(const TypeContext& types, const Type* source,
 
     switch (source_base->kind) {
     case TypeKind::Void:
-    case TypeKind::Int:
+    case TypeKind::Integer:
     case TypeKind::Float:
     case TypeKind::Char:
     case TypeKind::Bool:
@@ -194,7 +194,7 @@ auto can_consume_value_type(const TypeContext& types, const Type* source,
 
     switch (source_base->kind) {
     case TypeKind::Void:
-    case TypeKind::Int:
+    case TypeKind::Integer:
     case TypeKind::Float:
     case TypeKind::Char:
     case TypeKind::Bool:
@@ -339,7 +339,7 @@ auto mangle_type(const Type* type) -> std::string {
                                   const auto& self) -> std::string {
         switch (inner->kind) {
         case TypeKind::Void:
-        case TypeKind::Int:
+        case TypeKind::Integer:
         case TypeKind::Float:
         case TypeKind::Char:
         case TypeKind::Bool:
@@ -386,7 +386,7 @@ auto impl_target_group_key(const TypeContext& types, const Type* type)
 
     switch (type->kind) {
     case TypeKind::Void:
-    case TypeKind::Int:
+    case TypeKind::Integer:
     case TypeKind::Float:
     case TypeKind::Char:
     case TypeKind::Bool:
@@ -441,7 +441,7 @@ auto make_type_syntax_from_type(const Type* type) -> ast::TypeSyntaxPtr {
     syntax->is_const = type->is_const;
     switch (type->kind) {
     case TypeKind::Void:
-    case TypeKind::Int:
+    case TypeKind::Integer:
     case TypeKind::Float:
     case TypeKind::Char:
     case TypeKind::Bool:

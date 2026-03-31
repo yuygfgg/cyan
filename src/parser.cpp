@@ -1135,8 +1135,12 @@ auto Parser::parseSimpleStmt(TokenKind terminator, std::string message)
 auto Parser::looksLikeVarDecl() -> bool {
     if (!(check(TokenKind::Ampersand) || check(TokenKind::LParen) ||
           check(TokenKind::LBracket) || check(TokenKind::KwConst) ||
-          check(TokenKind::KwInt) || check(TokenKind::KwFloat) ||
-          check(TokenKind::KwChar) || check(TokenKind::KwBool) ||
+          check(TokenKind::KwBool) || check(TokenKind::KwChar) ||
+          check(TokenKind::KwF32) || check(TokenKind::KwF64) ||
+          check(TokenKind::KwI8) || check(TokenKind::KwI16) ||
+          check(TokenKind::KwI32) || check(TokenKind::KwI64) ||
+          check(TokenKind::KwU8) || check(TokenKind::KwU16) ||
+          check(TokenKind::KwU32) || check(TokenKind::KwU64) ||
           check(TokenKind::KwVoid) || check(TokenKind::Identifier))) {
         return false;
     }
@@ -1185,8 +1189,12 @@ auto Parser::parseType() -> std::expected<ast::TypeSyntaxPtr, Diagnostic> {
             return inner;
         }
 
-        if (!(check(TokenKind::KwInt) || check(TokenKind::KwFloat) ||
-              check(TokenKind::KwChar) || check(TokenKind::KwBool) ||
+        if (!(check(TokenKind::KwBool) || check(TokenKind::KwChar) ||
+              check(TokenKind::KwF32) || check(TokenKind::KwF64) ||
+              check(TokenKind::KwI8) || check(TokenKind::KwI16) ||
+              check(TokenKind::KwI32) || check(TokenKind::KwI64) ||
+              check(TokenKind::KwU8) || check(TokenKind::KwU16) ||
+              check(TokenKind::KwU32) || check(TokenKind::KwU64) ||
               check(TokenKind::KwVoid) || check(TokenKind::Identifier))) {
             return std::unexpected(
                 Diagnostic("expected type name", current().range));
@@ -1916,10 +1924,18 @@ auto Parser::canStartType(TokenKind kind) const -> bool {
     case TokenKind::LBracket:
     case TokenKind::LParen:
     case TokenKind::KwConst:
-    case TokenKind::KwInt:
-    case TokenKind::KwFloat:
-    case TokenKind::KwChar:
     case TokenKind::KwBool:
+    case TokenKind::KwChar:
+    case TokenKind::KwF32:
+    case TokenKind::KwF64:
+    case TokenKind::KwI8:
+    case TokenKind::KwI16:
+    case TokenKind::KwI32:
+    case TokenKind::KwI64:
+    case TokenKind::KwU8:
+    case TokenKind::KwU16:
+    case TokenKind::KwU32:
+    case TokenKind::KwU64:
     case TokenKind::KwVoid:
     case TokenKind::Identifier:
         return true;

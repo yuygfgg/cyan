@@ -534,8 +534,8 @@ auto SemanticAnalyzer::analyzeUpdate(FunctionState& state,
     }
 
     const auto* value_target_type = types.unqualify(*target_type);
-    if (value_target_type == types.intType() ||
-        value_target_type == types.floatType()) {
+    if (types.isInteger(value_target_type) ||
+        types.isFloat(value_target_type)) {
         return {};
     }
 
@@ -545,8 +545,8 @@ auto SemanticAnalyzer::analyzeUpdate(FunctionState& state,
         return {};
     }
 
-    return make_error("increment/decrement requires an int, float, or "
-                      "unchecked non-void pointer target",
+    return make_error("increment/decrement requires an integer, "
+                      "floating-point, or unchecked non-void pointer target",
                       stmt.target->range);
 }
 

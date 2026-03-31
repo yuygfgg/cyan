@@ -1,13 +1,13 @@
 struct Pair {
-    int x;
-    int y;
+    i64 x;
+    i64 y;
 };
 
-int sum(&Pair pair) {
+i64 sum(&Pair pair) {
     return pair.x + pair.y;
 }
 
-int main() {
+i64 main() {
     Pair pair = {1, 2};
     return sum(&pair);
 }

@@ -1,20 +1,20 @@
-void store(&mut int out, int value) {
+void store(&mut i64 out, i64 value) {
     *out = value;
 }
 
-interface<T> void fmt(&T value, &mut int out);
+interface<T> void fmt(&T value, &mut i64 out);
 
 struct Box {
-    int value;
+    i64 value;
 };
 
-impl fmt(&Box value, &mut int out) {
+impl fmt(&Box value, &mut i64 out) {
     store(&mut out, value.value);
 }
 
-int main() {
+i64 main() {
     Box box = {7};
-    int out = 0;
+    i64 out = 0;
     fmt(box, &mut out);
     return out - 7;
 }

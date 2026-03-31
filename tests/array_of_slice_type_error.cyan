@@ -1,4 +1,4 @@
-int main() {
-    ([]int)[2] rows;
+i64 main() {
+    ([]i64)[2] rows;
     return 0;
 }

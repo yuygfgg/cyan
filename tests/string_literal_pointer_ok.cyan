@@ -1,7 +1,7 @@
 extern {
-    int second_char(const char* text);
+    i64 second_char(const char* text);
 }
 
-int main() {
+i64 main() {
     return second_char("safe");
 }

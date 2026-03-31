@@ -1,18 +1,18 @@
-interface<T> int measure(&T value);
+interface<T> i64 measure(&T value);
 
 struct Box {
-    int value;
+    i64 value;
 };
 
 impl measure(&Box box) {
     return box.value;
 }
 
-int call_dyn(&measure value) {
+i64 call_dyn(&measure value) {
     return measure(value);
 }
 
-int main() {
+i64 main() {
     Box box = {11};
     return call_dyn(&box);
 }

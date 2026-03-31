@@ -8,76 +8,130 @@
 namespace cyan {
 
 TypeContext::TypeContext() {
-    void_builtin_type = makeType(Type{.kind = TypeKind::Void,
-                                      .element_type = nullptr,
-                                      .struct_decl = nullptr,
-                                      .enum_decl = nullptr,
-                                      .interface_decl = nullptr,
-                                      .is_mut = false,
-                                      .is_const = false,
-                                      .array_size = 0,
-                                      .name = "void",
-                                      .linkage_name = "void"});
-    int_builtin_type = makeType(Type{.kind = TypeKind::Int,
-                                     .element_type = nullptr,
-                                     .struct_decl = nullptr,
-                                     .enum_decl = nullptr,
-                                     .interface_decl = nullptr,
-                                     .is_mut = false,
-                                     .is_const = false,
-                                     .array_size = 0,
-                                     .name = "int",
-                                     .linkage_name = "int"});
-    float_builtin_type = makeType(Type{.kind = TypeKind::Float,
-                                       .element_type = nullptr,
-                                       .struct_decl = nullptr,
-                                       .enum_decl = nullptr,
-                                       .interface_decl = nullptr,
-                                       .is_mut = false,
-                                       .is_const = false,
-                                       .array_size = 0,
-                                       .name = "float",
-                                       .linkage_name = "float"});
-    char_builtin_type = makeType(Type{.kind = TypeKind::Char,
-                                      .element_type = nullptr,
-                                      .struct_decl = nullptr,
-                                      .enum_decl = nullptr,
-                                      .interface_decl = nullptr,
-                                      .is_mut = false,
-                                      .is_const = false,
-                                      .array_size = 0,
-                                      .name = "char",
-                                      .linkage_name = "char"});
-    bool_builtin_type = makeType(Type{.kind = TypeKind::Bool,
-                                      .element_type = nullptr,
-                                      .struct_decl = nullptr,
-                                      .enum_decl = nullptr,
-                                      .interface_decl = nullptr,
-                                      .is_mut = false,
-                                      .is_const = false,
-                                      .array_size = 0,
-                                      .name = "bool",
-                                      .linkage_name = "bool"});
+    const auto register_builtin = [&](TypeKind kind, std::string name,
+                                      std::uint16_t bit_width = 0,
+                                      bool is_signed = false) -> const Type* {
+        const auto linkage_name = name;
+        const auto* type = makeType(Type{.kind = kind,
+                                         .element_type = nullptr,
+                                         .struct_decl = nullptr,
+                                         .enum_decl = nullptr,
+                                         .interface_decl = nullptr,
+                                         .bit_width = bit_width,
+                                         .is_signed = is_signed,
+                                         .is_mut = false,
+                                         .is_const = false,
+                                         .array_size = 0,
+                                         .name = std::move(name),
+                                         .linkage_name = linkage_name});
+        named_types.emplace(type->name, type);
+        return type;
+    };
 
-    named_types.emplace("void", void_builtin_type);
-    named_types.emplace("int", int_builtin_type);
-    named_types.emplace("size_t", int_builtin_type);
-    named_types.emplace("float", float_builtin_type);
-    named_types.emplace("char", char_builtin_type);
-    named_types.emplace("bool", bool_builtin_type);
+    void_builtin_type = register_builtin(TypeKind::Void, "void");
+    i8_builtin_type = register_builtin(TypeKind::Integer, "i8", 8, true);
+    i16_builtin_type = register_builtin(TypeKind::Integer, "i16", 16, true);
+    i32_builtin_type = register_builtin(TypeKind::Integer, "i32", 32, true);
+    i64_builtin_type = register_builtin(TypeKind::Integer, "i64", 64, true);
+    u8_builtin_type = register_builtin(TypeKind::Integer, "u8", 8, false);
+    u16_builtin_type = register_builtin(TypeKind::Integer, "u16", 16, false);
+    u32_builtin_type = register_builtin(TypeKind::Integer, "u32", 32, false);
+    u64_builtin_type = register_builtin(TypeKind::Integer, "u64", 64, false);
+    f32_builtin_type = register_builtin(TypeKind::Float, "f32", 32);
+    f64_builtin_type = register_builtin(TypeKind::Float, "f64", 64);
+    char_builtin_type = register_builtin(TypeKind::Char, "char", 8);
+    bool_builtin_type = register_builtin(TypeKind::Bool, "bool", 1);
+
+    default_integer_builtin_type = i64_builtin_type;
+    default_float_builtin_type = f64_builtin_type;
 }
 
 auto TypeContext::voidType() const -> const Type* { return void_builtin_type; }
 
-auto TypeContext::intType() const -> const Type* { return int_builtin_type; }
+auto TypeContext::defaultIntegerType() const -> const Type* {
+    return default_integer_builtin_type;
+}
 
-auto TypeContext::floatType() const -> const Type* {
-    return float_builtin_type;
+auto TypeContext::defaultFloatType() const -> const Type* {
+    return default_float_builtin_type;
+}
+
+auto TypeContext::i8Type() const -> const Type* { return i8_builtin_type; }
+
+auto TypeContext::i16Type() const -> const Type* { return i16_builtin_type; }
+
+auto TypeContext::i32Type() const -> const Type* { return i32_builtin_type; }
+
+auto TypeContext::i64Type() const -> const Type* { return i64_builtin_type; }
+
+auto TypeContext::u8Type() const -> const Type* { return u8_builtin_type; }
+
+auto TypeContext::u16Type() const -> const Type* { return u16_builtin_type; }
+
+auto TypeContext::u32Type() const -> const Type* { return u32_builtin_type; }
+
+auto TypeContext::u64Type() const -> const Type* { return u64_builtin_type; }
+
+auto TypeContext::f32Type() const -> const Type* { return f32_builtin_type; }
+
+auto TypeContext::f64Type() const -> const Type* { return f64_builtin_type; }
+
+auto TypeContext::integerType(std::uint16_t bit_width, bool is_signed) const
+    -> const Type* {
+    switch (bit_width) {
+    case 8:
+        return is_signed ? i8_builtin_type : u8_builtin_type;
+    case 16:
+        return is_signed ? i16_builtin_type : u16_builtin_type;
+    case 32:
+        return is_signed ? i32_builtin_type : u32_builtin_type;
+    case 64:
+        return is_signed ? i64_builtin_type : u64_builtin_type;
+    default:
+        return nullptr;
+    }
+}
+
+auto TypeContext::floatType(std::uint16_t bit_width) const -> const Type* {
+    switch (bit_width) {
+    case 32:
+        return f32_builtin_type;
+    case 64:
+        return f64_builtin_type;
+    default:
+        return nullptr;
+    }
 }
 
 auto TypeContext::charType() const -> const Type* { return char_builtin_type; }
 
 auto TypeContext::boolType() const -> const Type* { return bool_builtin_type; }
+
+auto TypeContext::isInteger(const Type* type) const -> bool {
+    return type != nullptr && unqualify(type)->kind == TypeKind::Integer;
+}
+
+auto TypeContext::isFloat(const Type* type) const -> bool {
+    return type != nullptr && unqualify(type)->kind == TypeKind::Float;
+}
+
+auto TypeContext::isSignedInteger(const Type* type) const -> bool {
+    type = type == nullptr ? nullptr : unqualify(type);
+    return type != nullptr && type->kind == TypeKind::Integer &&
+           type->is_signed;
+}
+
+auto TypeContext::isUnsignedInteger(const Type* type) const -> bool {
+    type = type == nullptr ? nullptr : unqualify(type);
+    return type != nullptr && type->kind == TypeKind::Integer &&
+           !type->is_signed;
+}
+
+auto TypeContext::isNumeric(const Type* type) const -> bool {
+    type = type == nullptr ? nullptr : unqualify(type);
+    return type != nullptr &&
+           (type->kind == TypeKind::Integer || type->kind == TypeKind::Float);
+}
 
 auto TypeContext::makeType(Type type) -> const Type* {
     owned_types.push_back(std::make_unique<Type>(std::move(type)));
@@ -92,6 +146,8 @@ auto TypeContext::registerStruct(std::string name, std::string linkage_name,
                       .struct_decl = decl,
                       .enum_decl = nullptr,
                       .interface_decl = nullptr,
+                      .bit_width = 0,
+                      .is_signed = false,
                       .is_mut = false,
                       .is_const = false,
                       .array_size = 0,
@@ -108,6 +164,8 @@ auto TypeContext::registerEnum(std::string name, std::string linkage_name,
                       .struct_decl = nullptr,
                       .enum_decl = decl,
                       .interface_decl = nullptr,
+                      .bit_width = 0,
+                      .is_signed = false,
                       .is_mut = false,
                       .is_const = false,
                       .array_size = 0,
@@ -128,6 +186,8 @@ auto TypeContext::getInterface(const ast::InterfaceDecl* decl) -> const Type* {
                                            .struct_decl = nullptr,
                                            .enum_decl = nullptr,
                                            .interface_decl = decl,
+                                           .bit_width = 0,
+                                           .is_signed = false,
                                            .is_mut = decl->receiver_is_mut,
                                            .is_const = false,
                                            .array_size = 0,
@@ -187,6 +247,8 @@ auto TypeContext::getBorrow(const Type* pointee, bool is_mut) -> const Type* {
                                            .struct_decl = nullptr,
                                            .enum_decl = nullptr,
                                            .interface_decl = nullptr,
+                                           .bit_width = 0,
+                                           .is_signed = false,
                                            .is_mut = is_mut,
                                            .is_const = false,
                                            .array_size = 0,
@@ -207,6 +269,8 @@ auto TypeContext::getPointer(const Type* pointee) -> const Type* {
                                            .struct_decl = nullptr,
                                            .enum_decl = nullptr,
                                            .interface_decl = nullptr,
+                                           .bit_width = 0,
+                                           .is_signed = false,
                                            .is_mut = false,
                                            .is_const = false,
                                            .array_size = 0,
@@ -230,6 +294,8 @@ auto TypeContext::getArray(const Type* element, std::uint64_t size)
                                            .struct_decl = nullptr,
                                            .enum_decl = nullptr,
                                            .interface_decl = nullptr,
+                                           .bit_width = 0,
+                                           .is_signed = false,
                                            .is_mut = false,
                                            .is_const = false,
                                            .array_size = size,
@@ -250,6 +316,8 @@ auto TypeContext::getSlice(const Type* element) -> const Type* {
                                            .struct_decl = nullptr,
                                            .enum_decl = nullptr,
                                            .interface_decl = nullptr,
+                                           .bit_width = 0,
+                                           .is_signed = false,
                                            .is_mut = false,
                                            .is_const = false,
                                            .array_size = 0,
@@ -302,13 +370,14 @@ auto TypeContext::sameIgnoringConst(const Type* lhs, const Type* rhs) const
         return true;
     }
     if (lhs->kind != rhs->kind || lhs->is_mut != rhs->is_mut ||
-        lhs->array_size != rhs->array_size) {
+        lhs->array_size != rhs->array_size ||
+        lhs->bit_width != rhs->bit_width || lhs->is_signed != rhs->is_signed) {
         return false;
     }
 
     switch (lhs->kind) {
     case TypeKind::Void:
-    case TypeKind::Int:
+    case TypeKind::Integer:
     case TypeKind::Float:
     case TypeKind::Char:
     case TypeKind::Bool:
@@ -333,7 +402,7 @@ auto TypeContext::isCopy(const Type* type) const -> bool {
     switch (type->kind) {
     case TypeKind::Void:
         return true;
-    case TypeKind::Int:
+    case TypeKind::Integer:
     case TypeKind::Float:
     case TypeKind::Char:
     case TypeKind::Bool:
@@ -397,7 +466,7 @@ auto TypeContext::describe(const Type* type) const -> std::string {
 
     switch (type->kind) {
     case TypeKind::Void:
-    case TypeKind::Int:
+    case TypeKind::Integer:
     case TypeKind::Float:
     case TypeKind::Char:
     case TypeKind::Bool:

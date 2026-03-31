@@ -1,8 +1,8 @@
-int read(&int value) {
+i64 read(&i64 value) {
     return *value;
 }
 
-int main() {
-    float value = 1.25;
+i64 main() {
+    f64 value = 1.25;
     return read(&value);
 }

@@ -1,11 +1,11 @@
 extern {
-    int* get_buffer();
+    i64* get_buffer();
 }
 
-int main() {
+i64 main() {
     unchecked {
-        int* ptr = get_buffer();
-        &mut int borrow = &mut *ptr;
+        i64* ptr = get_buffer();
+        &mut i64 borrow = &mut *ptr;
         *borrow = 5;
         return *ptr;
     }

@@ -1,10 +1,10 @@
 struct Holder {
-    &mut int view;
+    &mut i64 view;
 };
 
-int main() {
-    int x = 0;
-    &int shared = &x;
+i64 main() {
+    i64 x = 0;
+    &i64 shared = &x;
     Holder holder = {&mut x};
     return 0;
 }

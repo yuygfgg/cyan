@@ -1,15 +1,15 @@
-interface<T> void fmt(&T value, &mut int out);
+interface<T> void fmt(&T value, &mut i64 out);
 
 struct Box {
-    int value;
+    i64 value;
 };
 
-impl fmt(&Box value, &mut int out) {
+impl fmt(&Box value, &mut i64 out) {
     *out = *out + value.value;
 }
 
-void render_into(&mut int out, const char* format_text, []&fmt args) {
-    int i = 0;
+void render_into(&mut i64 out, const char* format_text, []&fmt args) {
+    i64 i = 0;
     while (i < len(args)) {
         fmt(args[i], out);
         i++;
@@ -17,14 +17,14 @@ void render_into(&mut int out, const char* format_text, []&fmt args) {
 }
 
 void println(const char* format_text, []&fmt args) {
-    int out = 0;
+    i64 out = 0;
     render_into(&mut out, format_text, args);
 }
 
-int main() {
+i64 main() {
     Box left = {4};
     Box right = {8};
-    int out = 0;
+    i64 out = 0;
     render_into(&mut out, "{}", [&left, &right]);
     if (out != 12) {
         return 1;

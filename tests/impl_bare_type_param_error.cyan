@@ -1,4 +1,4 @@
-interface<T> int measure(&T value);
+interface<T> i64 measure(&T value);
 
 impl measure<T>(&T value) {
     return 0;

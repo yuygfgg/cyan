@@ -1,6 +1,6 @@
-%"$mod$modules$buffer$Buffer$LT$int$GT$" = type
-%"$mod$modules$buffer$Buffer$LT$float$GT$" = type
-define i64 @"$mod$modules$buffer$buffer_load$LT$int$GT$"
-define double @"$mod$modules$buffer$buffer_load$LT$float$GT$"
-call i64 @"$mod$modules$buffer$buffer_first$LT$int$GT$"
-call double @"$mod$modules$buffer$buffer_first$LT$float$GT$"
+%"$mod$modules$buffer$Buffer$LT$i64$GT$" = type
+%"$mod$modules$buffer$Buffer$LT$f64$GT$" = type
+define i64 @"$mod$modules$buffer$buffer_load$LT$i64$GT$"
+define double @"$mod$modules$buffer$buffer_load$LT$f64$GT$"
+call i64 @"$mod$modules$buffer$buffer_first$LT$i64$GT$"
+call double @"$mod$modules$buffer$buffer_first$LT$f64$GT$"

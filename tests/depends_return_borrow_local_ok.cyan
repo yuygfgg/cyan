@@ -1,9 +1,9 @@
-&int first(&int x) {
+&i64 first(&i64 x) {
     return x;
 }
 
-int main() {
-    int value = 4;
-    &int alias = first(&value);
+i64 main() {
+    i64 value = 4;
+    &i64 alias = first(&value);
     return *alias;
 }

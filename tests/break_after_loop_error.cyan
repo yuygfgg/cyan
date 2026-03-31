@@ -1,4 +1,4 @@
-int bad() {
+i64 bad() {
     while (false) {}
     break;
     return 0;

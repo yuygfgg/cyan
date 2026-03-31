@@ -1,13 +1,13 @@
 struct MutRef {
-    &mut int value;
+    &mut i64 value;
 };
 
 MutRef id(MutRef r) depends(return on r) {
     return r;
 }
 
-int main() {
-    int x = 0;
+i64 main() {
+    i64 x = 0;
     MutRef first = {&mut x};
     {
         MutRef second = id(first);

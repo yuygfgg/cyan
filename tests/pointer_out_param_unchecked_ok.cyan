@@ -1,12 +1,12 @@
-int fill(int* out) {
+i64 fill(i64* out) {
     unchecked {
         *out = 11;
     }
     return 0;
 }
 
-int main() {
-    int value;
+i64 main() {
+    i64 value;
     unchecked {
         fill(&mut value);
     }

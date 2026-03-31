@@ -1,13 +1,13 @@
 extern {
-    void* malloc(size_t n);
+    void* malloc(u64 n);
     void free(void* p);
     void emit_str(const char* text);
 }
 
 struct StringBuilder {
     char* ptr;
-    size_t len;
-    size_t capacity;
+    u64 len;
+    u64 capacity;
 };
 
 impl drop(&mut StringBuilder self) {
@@ -16,7 +16,7 @@ impl drop(&mut StringBuilder self) {
     }
 }
 
-StringBuilder builder_new(size_t capacity) {
+StringBuilder builder_new(u64 capacity) {
     unchecked {
         char* memory = malloc(capacity);
         memory[0] = '\0';
@@ -24,19 +24,19 @@ StringBuilder builder_new(size_t capacity) {
     }
 }
 
-void builder_reserve(&mut StringBuilder out, size_t needed) {
+void builder_reserve(&mut StringBuilder out, u64 needed) {
     if (needed <= out.capacity) {
         return;
     }
 
-    size_t next_capacity = out.capacity;
+    u64 next_capacity = out.capacity;
     while (next_capacity < needed) {
         next_capacity = next_capacity * 2;
     }
 
     unchecked {
         char* next = malloc(next_capacity);
-        size_t i = 0;
+        u64 i = 0;
         while (i < out.len) {
             next[i] = out.ptr[i];
             i = i + 1;
@@ -49,7 +49,7 @@ void builder_reserve(&mut StringBuilder out, size_t needed) {
 }
 
 void builder_push_char(&mut StringBuilder out, char value) {
-    size_t needed = out.len + 2;
+    u64 needed = out.len + 2;
     builder_reserve(out, needed);
     unchecked {
         out.ptr[out.len] = value;
@@ -58,9 +58,9 @@ void builder_push_char(&mut StringBuilder out, char value) {
     }
 }
 
-size_t cstring_len(const char* text) {
+u64 cstring_len(const char* text) {
     unchecked {
-        size_t len = 0;
+        u64 len = 0;
         const char* cursor = text;
         while (*cursor != '\0') {
             len = len + 1;
@@ -71,12 +71,12 @@ size_t cstring_len(const char* text) {
 }
 
 void builder_append_cstring(&mut StringBuilder out, const char* text) {
-    size_t text_len = cstring_len(text);
-    size_t needed = out.len + text_len + 1;
+    u64 text_len = cstring_len(text);
+    u64 needed = out.len + text_len + 1;
     builder_reserve(out, needed);
 
     unchecked {
-        size_t i = 0;
+        u64 i = 0;
         while (i < text_len) {
             out.ptr[out.len + i] = text[i];
             i = i + 1;
@@ -87,10 +87,10 @@ void builder_append_cstring(&mut StringBuilder out, const char* text) {
 }
 
 void builder_append_slice(&mut StringBuilder out, []const char text) {
-    size_t needed = out.len + len(text) + 1;
+    u64 needed = out.len + len(text) + 1;
     builder_reserve(out, needed);
 
-    int i = 0;
+    i64 i = 0;
     while (i < len(text)) {
         unchecked {
             out.ptr[out.len + i] = text[i];
@@ -104,26 +104,26 @@ void builder_append_slice(&mut StringBuilder out, []const char text) {
     }
 }
 
-void builder_push_digit(&mut StringBuilder out, int digit) {
-    int ascii = ('0' as int) + digit;
+void builder_push_digit(&mut StringBuilder out, i64 digit) {
+    i64 ascii = ('0' as i64) + digit;
     builder_push_char(out, ascii as char);
 }
 
-void builder_append_positive_int(&mut StringBuilder out, int value) {
+void builder_append_positive_int(&mut StringBuilder out, i64 value) {
     if (value >= 10) {
         builder_append_positive_int(out, value / 10);
     }
     builder_push_digit(out, value % 10);
 }
 
-void builder_append_negative_digits(&mut StringBuilder out, int value) {
+void builder_append_negative_digits(&mut StringBuilder out, i64 value) {
     if (value <= -10) {
         builder_append_negative_digits(out, value / 10);
     }
     builder_push_digit(out, 0 - (value % 10));
 }
 
-void builder_append_int(&mut StringBuilder out, int value) {
+void builder_append_int(&mut StringBuilder out, i64 value) {
     if (value < 0) {
         builder_push_char(out, '-');
         builder_append_negative_digits(out, value);
@@ -138,12 +138,12 @@ impl fmt(&[]const char value, &mut StringBuilder out) {
     builder_append_slice(out, *value);
 }
 
-impl fmt(&int value, &mut StringBuilder out) {
+impl fmt(&i64 value, &mut StringBuilder out) {
     builder_append_int(out, *value);
 }
 
 void render_into(&mut StringBuilder out, const char* format_text, []&fmt args) {
-    int next_arg = 0;
+    i64 next_arg = 0;
 
     unchecked {
         const char* cursor = format_text;

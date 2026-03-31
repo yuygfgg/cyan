@@ -1,12 +1,12 @@
 enum Action {
     Skip,
-    Add(int),
+    Add(i64),
 };
 
-int sum_odd_values() {
-    int sum = 0;
+i64 sum_odd_values() {
+    i64 sum = 0;
 
-    for (int i = 0; i < 5; i++) {
+    for (i64 i = 0; i < 5; i++) {
         if (i % 2 == 0) {
             Action action = Skip();
             switch (move action) {
@@ -29,7 +29,7 @@ int sum_odd_values() {
     return sum;
 }
 
-int main() {
+i64 main() {
     if (sum_odd_values() == 4) {
         return 0;
     }

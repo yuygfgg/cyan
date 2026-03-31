@@ -1,9 +1,9 @@
 enum Result {
-    Ok(int),
-    Err(int),
+    Ok(i64),
+    Err(i64),
 };
 
-int unwrap(Result value) {
+i64 unwrap(Result value) {
     switch (&value) {
         case Ok(payload):
             return *payload;

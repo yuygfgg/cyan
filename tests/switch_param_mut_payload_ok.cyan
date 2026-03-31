@@ -1,5 +1,5 @@
 struct Trace {
-    int value;
+    i64 value;
 };
 
 enum Item {
@@ -16,7 +16,7 @@ void bump(&mut Item item) {
     }
 }
 
-int main() {
+i64 main() {
     Item item = TraceValue({1});
     bump(&mut item);
     switch (&item) {

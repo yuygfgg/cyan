@@ -122,10 +122,10 @@ constexpr std::string_view FIXTURE_SOURCE = R"(enum Option<T> {
 };
 
 struct Pair {
-    int value;
+    i64 value;
 };
 
-int unwrap(Option<int> value) {
+i64 unwrap(Option<i64> value) {
     Pair pair = {1};
     switch (move value) {
         case None:
@@ -137,17 +137,17 @@ int unwrap(Option<int> value) {
 )";
 
 constexpr std::string_view INTERFACE_FIXTURE_SOURCE =
-    R"(interface<T> int measure(&T value);
+    R"(interface<T> i64 measure(&T value);
 
 struct Box {
-    int value;
+    i64 value;
 };
 
 impl measure(&Box box) {
     return box.value;
 }
 
-int main() {
+i64 main() {
     Box box = {7};
     return measure(box);
 }
@@ -636,7 +636,7 @@ auto test_language_server(std::vector<std::string>& failures) -> void {
         uri + R"("}}})";
     const std::string did_change_notification =
         R"({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":")" +
-        uri + R"(","version":2},"contentChanges":[{"text":"int broken( {"}]}})";
+        uri + R"(","version":2},"contentChanges":[{"text":"i64 broken( {"}]}})";
     const std::string shutdown_request =
         R"({"jsonrpc":"2.0","id":5,"method":"shutdown","params":{}})";
     const std::string exit_notification =
@@ -723,7 +723,7 @@ auto test_language_server(std::vector<std::string>& failures) -> void {
             parse_json<lsp_test::Hover>(hover_response->result->str);
         expect(hover.has_value(), "failed to parse hover response", failures);
         if (hover.has_value()) {
-            expect(hover->contents.value.find("payload: int") !=
+            expect(hover->contents.value.find("payload: i64") !=
                        std::string::npos,
                    "hover should include the payload type", failures);
         }

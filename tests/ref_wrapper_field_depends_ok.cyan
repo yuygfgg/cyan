@@ -10,9 +10,9 @@ Ref<T> make_ref<T>(&T value) depends(return.value on value) {
     return r.value;
 }
 
-int main() {
-    int x = 10;
-    Ref<int> wrapped = make_ref(&x);
-    &int rx = get(&wrapped);
+i64 main() {
+    i64 x = 10;
+    Ref<i64> wrapped = make_ref(&x);
+    &i64 rx = get(&wrapped);
     return *rx - 10;
 }

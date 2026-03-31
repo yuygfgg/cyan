@@ -1,10 +1,10 @@
 struct Token {
-    int value;
+    i64 value;
 };
 
 impl drop(&mut Token token) {}
 
-int main() {
+i64 main() {
     Token x = {1};
     Token y = move x;
     x = move x;

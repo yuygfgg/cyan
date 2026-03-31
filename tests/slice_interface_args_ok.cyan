@@ -1,16 +1,16 @@
-interface<T> int measure(&T value);
+interface<T> i64 measure(&T value);
 
 struct Box {
-    int value;
+    i64 value;
 };
 
 impl measure(&Box box) {
     return box.value;
 }
 
-int sum([]&measure values) {
-    int i = 0;
-    int total = 0;
+i64 sum([]&measure values) {
+    i64 i = 0;
+    i64 total = 0;
     while (i < len(values)) {
         total = total + measure(values[i]);
         i++;
@@ -18,7 +18,7 @@ int sum([]&measure values) {
     return total;
 }
 
-int main() {
+i64 main() {
     Box left = {4};
     Box right = {8};
     []&measure values = [&left, &right];

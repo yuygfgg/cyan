@@ -1,11 +1,11 @@
-&mut int id_mut(&mut int value) {
+&mut i64 id_mut(&mut i64 value) {
     return value;
 }
 
-int main() {
-    int value = 0;
-    &mut int first = &mut value;
-    &mut int second = id_mut(first);
+i64 main() {
+    i64 value = 0;
+    &mut i64 first = &mut value;
+    &mut i64 second = id_mut(first);
     *first = 2;
     return value;
 }

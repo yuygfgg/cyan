@@ -1,9 +1,9 @@
 enum Option {
     None,
-    Some(int),
+    Some(i64),
 };
 
-int main() {
+i64 main() {
     Option value = None();
     switch (move value) {
         case None:

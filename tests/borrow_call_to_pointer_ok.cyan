@@ -1,10 +1,10 @@
-&int first(&int value) {
+&i64 first(&i64 value) {
     return value;
 }
 
-int main() {
-    int value = 0;
-    int* ptr = &*first(&value);
+i64 main() {
+    i64 value = 0;
+    i64* ptr = &*first(&value);
     unchecked {
         *ptr = 12;
     }

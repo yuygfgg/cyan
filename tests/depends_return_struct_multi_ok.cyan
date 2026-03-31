@@ -1,20 +1,20 @@
 struct PairRefs {
-    &int left;
-    &int right;
+    &i64 left;
+    &i64 right;
 };
 
-PairRefs pair_refs(&int x, &int y)
+PairRefs pair_refs(&i64 x, &i64 y)
     depends(return.left on x, return.right on y) {
     return {x, y};
 }
 
-int read(&int value) {
+i64 read(&i64 value) {
     return *value;
 }
 
-int main() {
-    int left = 3;
-    int right = 7;
+i64 main() {
+    i64 left = 3;
+    i64 right = 7;
     PairRefs refs = pair_refs(&left, &right);
     if (read(refs.left) != 3) {
         return 1;

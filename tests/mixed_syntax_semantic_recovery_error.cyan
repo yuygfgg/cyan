@@ -1,6 +1,6 @@
-int main() {
-    int x = ;
+i64 main() {
+    i64 x = ;
     y = 1;
-    int z
+    i64 z
     return 0;
 }

@@ -1,10 +1,10 @@
-void bump(&int before, &mut int target) {
+void bump(&i64 before, &mut i64 target) {
     *target = *before + 1;
 }
 
-int main() {
-    int value = 0;
-    &mut int alias = &mut value;
+i64 main() {
+    i64 value = 0;
+    &mut i64 alias = &mut value;
     bump(alias, alias);
     return value;
 }

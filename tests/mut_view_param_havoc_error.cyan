@@ -6,7 +6,7 @@ void exploit(&mut View v, []const char malicious_data) {
     v.data = malicious_data;
 }
 
-int main() {
+i64 main() {
     char[10] good_buf = ['g', 'o', 'o', 'd', '0', '1', '2', '3', '4', '5'];
     View v = { subslice(good_buf, 0, 10) };
 
@@ -15,5 +15,5 @@ int main() {
         exploit(&mut v, subslice(bad_buf, 0, 10));
     }
 
-    return v.data[0] as int;
+    return v.data[0] as i64;
 }

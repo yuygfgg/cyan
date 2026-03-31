@@ -1,7 +1,7 @@
-[]&int dup(&int x) depends(return on x) {
+[]&i64 dup(&i64 x) depends(return on x) {
     return [x, x];
 }
 
-int main() {
+i64 main() {
     return 0;
 }

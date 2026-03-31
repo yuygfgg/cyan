@@ -21,7 +21,7 @@ bool span_eq([]const char left, []const char right) {
         return false;
     }
 
-    int i = 0;
+    i64 i = 0;
     while (i < len(left)) {
         if (left[i] != right[i]) {
             return false;
@@ -31,7 +31,7 @@ bool span_eq([]const char left, []const char right) {
     return true;
 }
 
-int main() {
+i64 main() {
     []const char text = subslice("abcd", 0, 4);
     []const char special = subslice("ZZ", 0, 2);
     Bundle bundle = build(text, special);

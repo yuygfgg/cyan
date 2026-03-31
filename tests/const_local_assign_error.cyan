@@ -1,5 +1,5 @@
-int main() {
-    const int value = 7;
+i64 main() {
+    const i64 value = 7;
     value = 9;
     return value;
 }

@@ -1,8 +1,8 @@
 extern {
-    int* get_buffer();
+    i64* get_buffer();
 }
 
-int main() {
-    int* ptr = get_buffer();
+i64 main() {
+    i64* ptr = get_buffer();
     return ptr[0];
 }

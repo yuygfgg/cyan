@@ -1,19 +1,19 @@
 struct Token {
-    int value;
+    i64 value;
 };
 
 impl drop(&mut Token token) {}
 
-Token make(int value) {
+Token make(i64 value) {
     Token token = {value};
     return token;
 }
 
-int consume(Token token) {
+i64 consume(Token token) {
     return token.value;
 }
 
-int bad() {
+i64 bad() {
     Token token = make(1);
 
     while (true) {

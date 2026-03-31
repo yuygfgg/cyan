@@ -1,2 +1,2 @@
-define i64 @"id$LT$int$GT$"
-call i64 @"id$LT$int$GT$"
+define i64 @"id$LT$i64$GT$"
+call i64 @"id$LT$i64$GT$"

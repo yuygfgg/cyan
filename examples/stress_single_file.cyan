@@ -1,12 +1,12 @@
 extern {
-    void* malloc(size_t n);
+    void* malloc(u64 n);
     void free(void* p);
 }
 
 struct Buffer<T> {
     T* ptr;
-    size_t len;
-    size_t capacity;
+    u64 len;
+    u64 capacity;
 };
 
 enum Maybe<T> {
@@ -15,23 +15,23 @@ enum Maybe<T> {
 };
 
 struct Pair {
-    int left;
-    int right;
+    i64 left;
+    i64 right;
 };
 
 struct Score {
-    int id;
-    float weight;
+    i64 id;
+    f64 weight;
     char tag;
 };
 
 struct Trace {
-    int value;
+    i64 value;
 };
 
 impl drop<T>(&mut Buffer<T> self) {
     unchecked {
-        for (int i = 0; i < self.len; i++) {
+        for (i64 i = 0; i < self.len; i++) {
             drop(self.ptr[i]);
         }
         free(self.ptr);
@@ -41,26 +41,26 @@ impl drop<T>(&mut Buffer<T> self) {
 impl drop(&mut Trace self) {}
 
 struct Stats {
-    int number_sum;
-    int pair_sum;
-    int even_count;
-    float weight_total;
-    int first_score_id;
+    i64 number_sum;
+    i64 pair_sum;
+    i64 even_count;
+    f64 weight_total;
+    i64 first_score_id;
 };
 
 enum WorkItem {
-    Count(int),
-    Weight(float),
+    Count(i64),
+    Weight(f64),
     Marker(char),
     TraceValue(Trace),
     Empty,
 };
 
-Buffer<T> buffer_from_ptr<T>(T* memory, size_t capacity) {
+Buffer<T> buffer_from_ptr<T>(T* memory, u64 capacity) {
     return {memory, 0, capacity};
 }
 
-int buffer_len<T>(&Buffer<T> buffer) {
+i64 buffer_len<T>(&Buffer<T> buffer) {
     return buffer.len;
 }
 
@@ -71,13 +71,13 @@ void buffer_push<T>(&mut Buffer<T> buffer, T value) {
     }
 }
 
-&T buffer_get<T>(&Buffer<T> buffer, size_t index) depends(return on buffer) {
+&T buffer_get<T>(&Buffer<T> buffer, u64 index) depends(return on buffer) {
     unchecked {
         return &buffer.ptr[index];
     }
 }
 
-&mut T buffer_get_mut<T>(&mut Buffer<T> buffer, size_t index)
+&mut T buffer_get_mut<T>(&mut Buffer<T> buffer, u64 index)
     depends(return on buffer) {
     unchecked {
         return &mut buffer.ptr[index];
@@ -91,53 +91,53 @@ Maybe<T> take_or_none<T>(bool take, T value) {
     return None();
 }
 
-Buffer<int> int_buffer_new(size_t capacity) {
+Buffer<i64> int_buffer_new(u64 capacity) {
     unchecked {
-        int* memory = malloc(sizeof(int) * capacity);
+        i64* memory = malloc(sizeof(i64) * capacity);
         return buffer_from_ptr(memory, capacity);
     }
 }
 
-Buffer<Pair> pair_buffer_new(size_t capacity) {
+Buffer<Pair> pair_buffer_new(u64 capacity) {
     unchecked {
         Pair* memory = malloc(sizeof(Pair) * capacity);
         return buffer_from_ptr(memory, capacity);
     }
 }
 
-Buffer<Score> score_buffer_new(size_t capacity) {
+Buffer<Score> score_buffer_new(u64 capacity) {
     unchecked {
         Score* memory = malloc(sizeof(Score) * capacity);
         return buffer_from_ptr(memory, capacity);
     }
 }
 
-Buffer<Trace> trace_buffer_new(size_t capacity) {
+Buffer<Trace> trace_buffer_new(u64 capacity) {
     unchecked {
         Trace* memory = malloc(sizeof(Trace) * capacity);
         return buffer_from_ptr(memory, capacity);
     }
 }
 
-Pair make_pair(int base) {
+Pair make_pair(i64 base) {
     Pair pair = {base, base + 1};
     return pair;
 }
 
-Score make_score(int id, float weight, char tag) {
+Score make_score(i64 id, f64 weight, char tag) {
     Score score = {id, weight, tag};
     return score;
 }
 
-Trace make_trace(int value) {
+Trace make_trace(i64 value) {
     Trace trace = {value};
     return trace;
 }
 
-int pair_sum(Pair pair) { return pair.left + pair.right; }
+i64 pair_sum(Pair pair) { return pair.left + pair.right; }
 
-void fill_numbers(&mut Buffer<int> numbers) {
-    for (int i = 0; i < 12; i++) {
+void fill_numbers(&mut Buffer<i64> numbers) {
+    for (i64 i = 0; i < 12; i++) {
         if (i == 5) {
             continue;
         }
@@ -167,8 +167,8 @@ void seed_traces(&mut Buffer<Trace> traces) {
 }
 
 void shift_pairs(&mut Buffer<Pair> pairs) {
-    int len = buffer_len(pairs);
-    for (int i = 0; i < len; i++) {
+    i64 len = buffer_len(pairs);
+    for (i64 i = 0; i < len; i++) {
         &mut Pair pair = buffer_get_mut(pairs, i);
         pair.left++;
         if (pair.left % 2 == 0) {
@@ -181,9 +181,9 @@ void shift_pairs(&mut Buffer<Pair> pairs) {
 void boost_first_score(&mut Buffer<Score> scores) {
     &mut Score score = buffer_get_mut(scores, 0);
     {
-        &mut int id_ref = &mut score.id;
+        &mut i64 id_ref = &mut score.id;
         {
-            &int view = id_ref;
+            &i64 view = id_ref;
             if (*view < 10) {
             }
         }
@@ -192,9 +192,9 @@ void boost_first_score(&mut Buffer<Score> scores) {
     score.weight = score.weight + 1.25;
 }
 
-void normalize_scores(&mut Buffer<Score> scores, float factor) {
-    int len = buffer_len(scores);
-    for (int i = 0; i < len; i++) {
+void normalize_scores(&mut Buffer<Score> scores, f64 factor) {
+    i64 len = buffer_len(scores);
+    for (i64 i = 0; i < len; i++) {
         &mut Score score = buffer_get_mut(scores, i);
         score.weight = score.weight * factor;
         if (score.id % 2 == 0) {
@@ -205,8 +205,8 @@ void normalize_scores(&mut Buffer<Score> scores, float factor) {
 }
 
 void retag_scores(&mut Buffer<Score> scores) {
-    int len = buffer_len(scores);
-    for (int i = 0; i < len; i++) {
+    i64 len = buffer_len(scores);
+    for (i64 i = 0; i < len; i++) {
         &mut Score score = buffer_get_mut(scores, i);
         if (score.id > 10) {
             score.tag = 'b';
@@ -218,10 +218,10 @@ void retag_scores(&mut Buffer<Score> scores) {
     }
 }
 
-Maybe<int> first_even(&Buffer<int> numbers) {
-    int len = buffer_len(numbers);
-    for (int i = 0; i < len; i++) {
-        int value = *buffer_get(numbers, i);
+Maybe<i64> first_even(&Buffer<i64> numbers) {
+    i64 len = buffer_len(numbers);
+    for (i64 i = 0; i < len; i++) {
+        i64 value = *buffer_get(numbers, i);
         if (value % 2 != 0) {
             continue;
         }
@@ -230,10 +230,10 @@ Maybe<int> first_even(&Buffer<int> numbers) {
     return None();
 }
 
-Maybe<int> first_above(&Buffer<int> numbers, int limit) {
-    int len = buffer_len(numbers);
-    for (int i = 0; i < len; i++) {
-        int value = *buffer_get(numbers, i);
+Maybe<i64> first_above(&Buffer<i64> numbers, i64 limit) {
+    i64 len = buffer_len(numbers);
+    for (i64 i = 0; i < len; i++) {
+        i64 value = *buffer_get(numbers, i);
         if (value <= limit) {
             continue;
         }
@@ -242,9 +242,9 @@ Maybe<int> first_above(&Buffer<int> numbers, int limit) {
     return None();
 }
 
-Maybe<Pair> find_large_pair(&Buffer<Pair> pairs, int limit) {
-    int len = buffer_len(pairs);
-    for (int i = 0; i < len; i++) {
+Maybe<Pair> find_large_pair(&Buffer<Pair> pairs, i64 limit) {
+    i64 len = buffer_len(pairs);
+    for (i64 i = 0; i < len; i++) {
         Pair pair = *buffer_get(pairs, i);
         if (pair.left + pair.right <= limit) {
             continue;
@@ -254,11 +254,11 @@ Maybe<Pair> find_large_pair(&Buffer<Pair> pairs, int limit) {
     return None();
 }
 
-int sum_with_cursor(&Buffer<int> numbers) {
+i64 sum_with_cursor(&Buffer<i64> numbers) {
     unchecked {
-        int total = 0;
-        int* cursor = numbers.ptr;
-        int* end = numbers.ptr + numbers.len;
+        i64 total = 0;
+        i64* cursor = numbers.ptr;
+        i64* end = numbers.ptr + numbers.len;
         while (cursor != end) {
             total = total + *cursor;
             cursor++;
@@ -267,10 +267,10 @@ int sum_with_cursor(&Buffer<int> numbers) {
     }
 }
 
-int sum_even_traces(&Buffer<Trace> traces) {
-    int total = 0;
-    int len = buffer_len(traces);
-    for (int i = 0; i < len; i++) {
+i64 sum_even_traces(&Buffer<Trace> traces) {
+    i64 total = 0;
+    i64 len = buffer_len(traces);
+    for (i64 i = 0; i < len; i++) {
         &Trace trace = buffer_get(traces, i);
         if (trace.value % 2 != 0) {
             continue;
@@ -280,23 +280,23 @@ int sum_even_traces(&Buffer<Trace> traces) {
     return total;
 }
 
-Stats summarize(&Buffer<int> numbers, &Buffer<Pair> pairs, &Buffer<Score> scores) {
+Stats summarize(&Buffer<i64> numbers, &Buffer<Pair> pairs, &Buffer<Score> scores) {
     Stats stats = {0, 0, 0, 0.0, 0};
-    int number_len = buffer_len(numbers);
-    for (int i = 0; i < number_len; i++) {
-        int value = *buffer_get(numbers, i);
+    i64 number_len = buffer_len(numbers);
+    for (i64 i = 0; i < number_len; i++) {
+        i64 value = *buffer_get(numbers, i);
         stats.number_sum = stats.number_sum + value;
         if (value % 2 == 0) {
             stats.even_count++;
         }
     }
-    int pair_len = buffer_len(pairs);
-    for (int i = 0; i < pair_len; i++) {
+    i64 pair_len = buffer_len(pairs);
+    for (i64 i = 0; i < pair_len; i++) {
         Pair pair = *buffer_get(pairs, i);
         stats.pair_sum = stats.pair_sum + pair.left + pair.right;
     }
-    int score_len = buffer_len(scores);
-    for (int i = 0; i < score_len; i++) {
+    i64 score_len = buffer_len(scores);
+    for (i64 i = 0; i < score_len; i++) {
         Score score = *buffer_get(scores, i);
         stats.weight_total = stats.weight_total + score.weight;
     }
@@ -320,7 +320,7 @@ void adjust_item(&mut WorkItem item) {
     }
 }
 
-int score_item(WorkItem item) {
+i64 score_item(WorkItem item) {
     switch (move item) {
         case Count(value):
             return value;
@@ -341,8 +341,8 @@ int score_item(WorkItem item) {
     }
 }
 
-int main() {
-    Buffer<int> numbers = int_buffer_new(24);
+i64 main() {
+    Buffer<i64> numbers = int_buffer_new(24);
     Buffer<Pair> pairs = pair_buffer_new(8);
     Buffer<Score> scores = score_buffer_new(8);
     fill_numbers(&mut numbers);
@@ -353,8 +353,8 @@ int main() {
     normalize_scores(&mut scores, 2.0);
     retag_scores(&mut scores);
 
-    Maybe<int> maybe_even = first_even(&numbers);
-    int even_value = -1;
+    Maybe<i64> maybe_even = first_even(&numbers);
+    i64 even_value = -1;
     switch (&maybe_even) {
         case None:
             return 1;
@@ -362,8 +362,8 @@ int main() {
             even_value = *value;
     }
 
-    Maybe<int> maybe_high = first_above(&numbers, 8);
-    int high_value = -1;
+    Maybe<i64> maybe_high = first_above(&numbers, 8);
+    i64 high_value = -1;
     switch (move maybe_high) {
         case None:
             return 2;
@@ -372,7 +372,7 @@ int main() {
     }
 
     Maybe<Pair> maybe_pair = find_large_pair(&pairs, 20);
-    int pair_value = -1;
+    i64 pair_value = -1;
     switch (move maybe_pair) {
         case None:
             return 3;
@@ -381,7 +381,7 @@ int main() {
     }
 
     Maybe<Trace> maybe_trace = take_or_none(true, make_trace(9));
-    int trace_value = -1;
+    i64 trace_value = -1;
     switch (move maybe_trace) {
         case None:
             return 4;
@@ -389,21 +389,21 @@ int main() {
             trace_value = trace.value;
     }
 
-    int item_score = 0;
+    i64 item_score = 0;
     {
         WorkItem item = TraceValue(make_trace(5));
         adjust_item(&mut item);
         item_score = score_item(item);
     }
 
-    int trace_block_total = 0;
+    i64 trace_block_total = 0;
     {
         Buffer<Trace> traces = trace_buffer_new(4);
         seed_traces(&mut traces);
         trace_block_total = sum_even_traces(&traces);
     }
 
-    int raw_total = sum_with_cursor(&numbers);
+    i64 raw_total = sum_with_cursor(&numbers);
     Stats stats = summarize(&numbers, &pairs, &scores);
     &Score first = buffer_get(&scores, 0);
     char first_tag = first.tag;

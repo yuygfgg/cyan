@@ -1,5 +1,5 @@
 struct Token {
-    int value;
+    i64 value;
 };
 
 enum Selection {
@@ -7,7 +7,7 @@ enum Selection {
     Tail([]Token),
 };
 
-int read(&Token token) {
+i64 read(&Token token) {
     return token.value;
 }
 
@@ -19,7 +19,7 @@ Selection choose([]Token values, bool want_head)
     return Tail(values);
 }
 
-int main() {
+i64 main() {
     Token[2] items = [{4}, {9}];
     Selection head = choose(&items, true);
     switch (move head) {

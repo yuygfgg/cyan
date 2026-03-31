@@ -1,5 +1,5 @@
 struct Token {
-    int value;
+    i64 value;
 };
 
 impl drop(&mut Token token) {
@@ -11,11 +11,11 @@ struct Holder {
 };
 
 impl drop(&mut Holder holder) {
-    int observed = holder.ptr.value;
+    i64 observed = holder.ptr.value;
     return;
 }
 
-int main() {
+i64 main() {
     Token stable = {0};
     Holder holder = {&stable};
     Token later = {1};

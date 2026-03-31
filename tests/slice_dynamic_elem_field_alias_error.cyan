@@ -1,13 +1,13 @@
 struct Pair {
-    int x;
-    int y;
+    i64 x;
+    i64 y;
 };
 
-int main() {
+i64 main() {
     Pair p = {1, 2};
     Pair q = {3, 4};
-    int i = 1;
-    &int fx = &p.x;
+    i64 i = 1;
+    &i64 fx = &p.x;
     {
         []&Pair views = [&p, &q];
         &Pair a = views[i];

@@ -1,5 +1,5 @@
 struct Token {
-    int value;
+    i64 value;
 };
 
 impl drop(&mut Token token) {}
@@ -8,6 +8,6 @@ Token take([]Token values) {
     return values[0];
 }
 
-int main() {
+i64 main() {
     return 0;
 }

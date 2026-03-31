@@ -1,10 +1,10 @@
 struct Token {
-    int value;
+    i64 value;
 };
 
 void drop_Token(&mut Token token) {}
 
-int main() {
+i64 main() {
     Token token = {1};
     return token.value;
 }

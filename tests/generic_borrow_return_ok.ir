@@ -1,2 +1,2 @@
-define ptr @"first$LT$int$GT$"
-call ptr @"first$LT$int$GT$"
+define ptr @"first$LT$i64$GT$"
+call ptr @"first$LT$i64$GT$"

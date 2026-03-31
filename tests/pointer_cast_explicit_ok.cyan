@@ -1,10 +1,10 @@
 extern {
-    void* alloc_bytes(size_t n);
+    void* alloc_bytes(u64 n);
 }
 
-int main() {
+i64 main() {
     unchecked {
-        int* ptr = alloc_bytes(sizeof(int)) as int*;
+        i64* ptr = alloc_bytes(sizeof(i64)) as i64*;
         *ptr = 41;
         return *ptr + 1;
     }

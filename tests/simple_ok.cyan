@@ -1,9 +1,9 @@
-int add(int lhs, int rhs) {
+i64 add(i64 lhs, i64 rhs) {
     return lhs + rhs;
 }
 
-int main() {
-    int value = add(2, 3);
+i64 main() {
+    i64 value = add(2, 3);
     if (value > 4) {
         return value;
     } else {

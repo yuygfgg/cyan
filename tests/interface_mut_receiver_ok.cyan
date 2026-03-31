@@ -1,18 +1,18 @@
-interface<T> void set_to(&mut T value, int next);
+interface<T> void set_to(&mut T value, i64 next);
 
 struct Box {
-    int value;
+    i64 value;
 };
 
-impl set_to(&mut Box box, int next) {
+impl set_to(&mut Box box, i64 next) {
     box.value = next;
 }
 
-void apply(&set_to action, int next) {
+void apply(&set_to action, i64 next) {
     set_to(action, next);
 }
 
-int main() {
+i64 main() {
     Box box = {1};
     apply(&mut box, 9);
     return box.value;

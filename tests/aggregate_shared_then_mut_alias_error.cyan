@@ -1,11 +1,11 @@
 struct Pair {
-    &int shared;
-    &mut int unique;
+    &i64 shared;
+    &mut i64 unique;
 };
 
-int main() {
-    int value = 0;
-    &mut int alias = &mut value;
+i64 main() {
+    i64 value = 0;
+    &mut i64 alias = &mut value;
     Pair pair = {&*alias, alias};
     return 0;
 }

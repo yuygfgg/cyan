@@ -7,6 +7,6 @@ void overwrite_wrong(&mut View v, []const char expected, []const char actual)
     v.data = actual;
 }
 
-int main() {
+i64 main() {
     return 0;
 }

@@ -1,1 +1,1 @@
-arithmetic operators require int operands, float operands, or unchecked pointer arithmetic
+arithmetic operators require matching integer operands, matching floating-point operands, or unchecked pointer arithmetic

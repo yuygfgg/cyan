@@ -3,7 +3,7 @@ import http_parse.println;
 // Use extern to import C functions.
 // None is needed in this example though.
 // extern {
-//     void* malloc(size_t n);
+//     void* malloc(u64 n);
 //     void free(void* p);
 // }
 
@@ -21,8 +21,8 @@ struct BufferView {
 };
 
 struct Pair {
-    int left;
-    int right;
+    i64 left;
+    i64 right;
 };
 
 struct Split {
@@ -37,9 +37,9 @@ struct HighlightedSplit {
 
 // Interfaces declare ad-hoc polymorphic operations selected from the receiver
 // type's matching `impl`.
-export interface<T> int compute(&T value);
+export interface<T> i64 compute(&T value);
 
-impl compute(&int value) {
+impl compute(&i64 value) {
     return *value;
 }
 
@@ -55,7 +55,7 @@ impl drop(&mut BufferView self) {
 
 // `depends(return on text)` says the returned slice is a zero-copy view into
 // the parameter named on the right-hand side.
-[]const char skip_prefix([]const char text, int count) depends(return on text) {
+[]const char skip_prefix([]const char text, i64 count) depends(return on text) {
     if (count >= len(text)) {
         return subslice(text, 0, 0);
     }
@@ -64,7 +64,7 @@ impl drop(&mut BufferView self) {
 
 // The shorthand also works recursively for aggregate returns: every
 // borrow/slice leaf inside `return` is treated as depending on `text`.
-Split split_at([]const char text, int mid)
+Split split_at([]const char text, i64 mid)
     depends(return on text) {
     if (mid <= 0) {
         return {subslice(text, 0, 0), text};
@@ -77,7 +77,7 @@ Split split_at([]const char text, int mid)
 
 // More specific target paths override broader ones. Here every returned leaf
 // depends on `text` except `return.parts.tail`, which depends on `focus`.
-HighlightedSplit highlight_split([]const char text, []const char focus, int mid)
+HighlightedSplit highlight_split([]const char text, []const char focus, i64 mid)
     depends(return on text, return.parts.tail on focus) {
     if (mid <= 0) {
         return {{subslice(text, 0, 0), focus}, text};
@@ -91,7 +91,7 @@ HighlightedSplit highlight_split([]const char text, []const char focus, int mid)
 // `depends(out on text)` is the mutable-parameter shorthand: after the call,
 // every borrow/slice leaf stored into `out` is treated as borrowing from
 // `text` unless a more specific `out... on ...` entry overrides it.
-void reset_view(&mut BufferView out, []const char text, int start)
+void reset_view(&mut BufferView out, []const char text, i64 start)
     depends(out on text) {
     out.bytes = skip_prefix(text, start);
     out.active = true;
@@ -108,15 +108,15 @@ Option<&T> first_element<T>([]T slice) depends(return.Some on slice) {
 
 // Borrow-returning functions use `depends(return on pair)` to tie the returned
 // `&mut` to the source mutable borrow parameter.
-&mut int first_mut(&mut Pair pair) depends(return on pair) {
+&mut i64 first_mut(&mut Pair pair) depends(return on pair) {
     return &mut pair.left;
 }
 
 // `while` is the basic looping construct, and slice indexing reads through the
 // view created by `subslice(...)`.
-int sum_slice([]int values) {
-    int i = 0;
-    int total = 0;
+i64 sum_slice([]i64 values) {
+    i64 i = 0;
+    i64 total = 0;
     while (i < len(values)) {
         total = total + values[i];
         i++;
@@ -124,7 +124,7 @@ int sum_slice([]int values) {
     return total;
 }
 
-export int main() {
+export i64 main() {
     // `subslice(...)` creates a zero-copy slice view over an array or string
     // literal without copying the underlying bytes.
     []const char greeting = subslice("cyan demo", 0, 9);
@@ -135,12 +135,12 @@ export int main() {
     BufferView view = {pieces.tail, false};
     reset_view(&mut view, pieces.head, 2);
 
-    int[4] numbers = [10, 20, 30, 40];
-    []int tail = subslice(numbers, 1, len(numbers) - 1);
-    int total = sum_slice(tail);
+    i64[4] numbers = [10, 20, 30, 40];
+    []i64 tail = subslice(numbers, 1, len(numbers) - 1);
+    i64 total = sum_slice(tail);
 
-    Option<&int> first = first_element(tail);
-    int picked = -1;
+    Option<&i64> first = first_element(tail);
+    i64 picked = -1;
 
     // `switch (&value)` pattern-matches an enum by shared borrow, so the
     // original enum remains available after the switch.
@@ -152,20 +152,20 @@ export int main() {
     }
 
     Pair pair = {picked, total};
-    int combined = compute(&pair);
+    i64 combined = compute(&pair);
 
     {
         &mut Pair pair_mut = &pair;
-        &mut int left = first_mut(pair_mut);
+        &mut i64 left = first_mut(pair_mut);
         *left = *left + 5;
     }
 
-    int adjusted = pair.left;
+    i64 adjusted = pair.left;
 
     // Raw pointers are available, but dereference and pointer mutation require
     // an explicit `unchecked` block.
     unchecked {
-        int* ptr = &mut adjusted;
+        i64* ptr = &mut adjusted;
         *ptr = *ptr + 1;
     }
 

@@ -1,10 +1,10 @@
 struct Holder {
-    &int view;
+    &i64 view;
 };
 
-int main() {
-    int x = 1;
-    int y = 2;
+i64 main() {
+    i64 x = 1;
+    i64 y = 2;
     Holder h = {&x};
     &Holder alias = &h;
     h.view = &y;

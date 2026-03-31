@@ -1,12 +1,12 @@
 enum Resource {
-    Raw(int)
+    Raw(i64)
 };
 
 impl drop(&mut Resource value) {
     return;
 }
 
-int reassign() {
+i64 reassign() {
     Resource value = Raw(1);
     value = Raw(2);
     return 0;

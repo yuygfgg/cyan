@@ -7,7 +7,7 @@ void overwrite(&mut View v, []const char next)
     v.data = next;
 }
 
-int main() {
+i64 main() {
     char[4] initial = ['o', 'l', 'd', '!'];
     char[4] next = ['n', 'e', 'w', '!'];
     View v = { subslice(initial, 0, 4) };

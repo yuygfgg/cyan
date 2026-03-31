@@ -1,6 +1,6 @@
-int main() {
-    int[1] values = [0];
-    &mut int slot = &values[0];
-    []int view = values;
+i64 main() {
+    i64[1] values = [0];
+    &mut i64 slot = &values[0];
+    []i64 view = values;
     return *slot + view[0];
 }

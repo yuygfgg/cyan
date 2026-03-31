@@ -1,6 +1,6 @@
-int main() {
-    int value = 1;
-    &int p = &value;
-    &(&int) q = &p;
+i64 main() {
+    i64 value = 1;
+    &i64 p = &value;
+    &(&i64) q = &p;
     return 0;
 }

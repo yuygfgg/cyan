@@ -40,6 +40,13 @@ struct TypeParameterInfo {
     SourceRange declaration_range;
 };
 
+auto is_builtin_type_name(std::string_view name) -> bool {
+    static const std::unordered_set<std::string_view> builtins = {
+        "bool", "char", "f32", "f64", "i8",  "i16", "i32",
+        "i64",  "u8",   "u16", "u32", "u64", "void"};
+    return builtins.contains(name);
+}
+
 auto contains_offset(SourceRange range, std::size_t offset) -> bool {
     if (range.source == nullptr || range.end <= range.begin) {
         return false;
@@ -237,9 +244,7 @@ class ModuleTraversal {
         }
 
         if (type.resolved_type == nullptr) {
-            if (type.name == "void" || type.name == "int" ||
-                type.name == "float" || type.name == "char" ||
-                type.name == "bool") {
+            if (is_builtin_type_name(type.name)) {
                 return LSPSymbolOccurrence{
                     .kind = LSPSymbolKind::BuiltinType,
                     .role = LSPSymbolRole::Reference,
@@ -307,7 +312,7 @@ class ModuleTraversal {
 
         switch (type.resolved_type->kind) {
         case TypeKind::Void:
-        case TypeKind::Int:
+        case TypeKind::Integer:
         case TypeKind::Float:
         case TypeKind::Char:
         case TypeKind::Bool:
@@ -1788,7 +1793,7 @@ auto format_type(const Type* type) -> std::string {
 
     switch (type->kind) {
     case TypeKind::Void:
-    case TypeKind::Int:
+    case TypeKind::Integer:
     case TypeKind::Float:
     case TypeKind::Char:
     case TypeKind::Bool:
@@ -2178,12 +2183,13 @@ auto is_symbol_renamable(LSPSymbolKind kind) -> bool {
 
 auto is_valid_identifier_name(std::string_view name) -> bool {
     static const std::unordered_set<std::string_view> keywords = {
-        "as",        "bool",    "break",   "case",      "char",   "const",
-        "continue",  "default", "depends", "drop",      "else",   "enum",
-        "export",    "extern",  "false",   "float",     "for",    "if",
-        "impl",      "import",  "int",     "interface", "move",   "mut",
-        "on",        "return",  "sizeof",  "struct",    "switch", "true",
-        "unchecked", "void",    "while"};
+        "as",       "bool",      "break",     "case", "char",  "const",
+        "continue", "default",   "depends",   "drop", "else",  "enum",
+        "export",   "extern",    "f32",       "f64",  "false", "for",
+        "i8",       "i16",       "i32",       "i64",  "if",    "impl",
+        "import",   "interface", "move",      "mut",  "on",    "return",
+        "sizeof",   "struct",    "switch",    "true", "u8",    "u16",
+        "u32",      "u64",       "unchecked", "void", "while"};
     if (name.empty()) {
         return false;
     }
@@ -2376,8 +2382,16 @@ auto is_builtin_type_keyword(TokenKind kind) -> bool {
     switch (kind) {
     case TokenKind::KwBool:
     case TokenKind::KwChar:
-    case TokenKind::KwFloat:
-    case TokenKind::KwInt:
+    case TokenKind::KwF32:
+    case TokenKind::KwF64:
+    case TokenKind::KwI8:
+    case TokenKind::KwI16:
+    case TokenKind::KwI32:
+    case TokenKind::KwI64:
+    case TokenKind::KwU8:
+    case TokenKind::KwU16:
+    case TokenKind::KwU32:
+    case TokenKind::KwU64:
     case TokenKind::KwVoid:
         return true;
     default:

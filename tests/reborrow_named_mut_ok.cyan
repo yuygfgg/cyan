@@ -1,9 +1,9 @@
-int main() {
-    int value = 0;
+i64 main() {
+    i64 value = 0;
     {
-        &mut int first = &value;
+        &mut i64 first = &value;
         {
-            &mut int second = first;
+            &mut i64 second = first;
             *second = 1;
         }
         *first = 2;

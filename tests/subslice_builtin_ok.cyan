@@ -2,7 +2,7 @@
     return subslice(text, 1, 3);
 }
 
-int main() {
+i64 main() {
     char[12] text = "hello world";
     []char whole = subslice(text, 0, 11);
     []char word = subslice(whole, 6, 5);

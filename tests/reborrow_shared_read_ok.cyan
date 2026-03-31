@@ -1,7 +1,7 @@
-int main() {
-    int x = 7;
-    &mut int p = &mut x;
-    &int s = p;
-    int y = *s;
+i64 main() {
+    i64 x = 7;
+    &mut i64 p = &mut x;
+    &i64 s = p;
+    i64 y = *s;
     return y;
 }

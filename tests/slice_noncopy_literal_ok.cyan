@@ -1,14 +1,14 @@
 struct Token {
-    int value;
+    i64 value;
 };
 
 impl drop(&mut Token token) {}
 
-int read(&Token token) {
+i64 read(&Token token) {
     return token.value;
 }
 
-int main() {
+i64 main() {
     []Token values = [{4}, {8}];
     if (read(values[0]) != 4) {
         return 1;

@@ -1,10 +1,10 @@
-int write_twice(&mut int first, &mut int second) {
+i64 write_twice(&mut i64 first, &mut i64 second) {
     *first = 1;
     *second = 2;
     return 0;
 }
 
-int main() {
-    int value = 0;
+i64 main() {
+    i64 value = 0;
     return write_twice(&value, &value);
 }

@@ -1,5 +1,5 @@
 struct Token {
-    int value;
+    i64 value;
 };
 
 struct ViewAndHead {
@@ -7,7 +7,7 @@ struct ViewAndHead {
     &Token head;
 };
 
-int read(&Token token) {
+i64 read(&Token token) {
     return token.value;
 }
 
@@ -16,7 +16,7 @@ ViewAndHead expose([]Token values)
     return {values, &values[0]};
 }
 
-int main() {
+i64 main() {
     Token[2] items = [{4}, {9}];
     ViewAndHead result = expose(&items);
     if (read(result.head) != 4) {

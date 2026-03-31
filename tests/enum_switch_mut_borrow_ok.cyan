@@ -1,8 +1,8 @@
 enum BoxedInt {
-    Value(int),
+    Value(i64),
 };
 
-int set_and_read(BoxedInt value) {
+i64 set_and_read(BoxedInt value) {
     switch (&mut value) {
         case Value(payload):
             *payload = 41;

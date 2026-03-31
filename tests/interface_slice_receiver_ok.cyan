@@ -1,4 +1,4 @@
-interface<T> int span_len(&T value);
+interface<T> i64 span_len(&T value);
 
 impl span_len(&[]const char value) {
     return len(*value);
@@ -8,9 +8,9 @@ struct Request {
     []const char path;
 };
 
-int sum([]&span_len values) {
-    int i = 0;
-    int total = 0;
+i64 sum([]&span_len values) {
+    i64 i = 0;
+    i64 total = 0;
     while (i < len(values)) {
         total = total + span_len(values[i]);
         i++;
@@ -18,7 +18,7 @@ int sum([]&span_len values) {
     return total;
 }
 
-int main() {
+i64 main() {
     []const char root = subslice("hello", 0, 5);
     Request request = {subslice("abc", 0, 3)};
     if (span_len(root) != 5) {

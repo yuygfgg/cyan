@@ -1,17 +1,17 @@
 extern {
     void record_drop();
-    int dropped_count();
+    i64 dropped_count();
 }
 
 struct Token {
-    int value;
+    i64 value;
 };
 
 impl drop(&mut Token token) {
     record_drop();
 }
 
-int main() {
+i64 main() {
     Token token;
     token = {1};
     return dropped_count();

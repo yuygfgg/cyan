@@ -1,13 +1,13 @@
 extern {
-    void* malloc(size_t n);
+    void* malloc(u64 n);
     void free(void* p);
 }
 
-int main() {
+i64 main() {
     unchecked {
-        int* ptr = malloc(sizeof(int));
+        i64* ptr = malloc(sizeof(i64));
         *ptr = 7;
-        int value = *ptr;
+        i64 value = *ptr;
         free(ptr);
         if (value == 7) {
             return 0;

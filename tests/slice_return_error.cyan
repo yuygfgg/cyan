@@ -1,8 +1,8 @@
-[]int bad() {
-    int[2] values = [1, 2];
+[]i64 bad() {
+    i64[2] values = [1, 2];
     return values;
 }
 
-int main() {
+i64 main() {
     return 0;
 }

@@ -1,11 +1,11 @@
 extern {
-    int* get_buffer();
+    i64* get_buffer();
 }
 
-int main() {
-    int result = 0;
+i64 main() {
+    i64 result = 0;
     unchecked {
-        int* ptr = get_buffer();
+        i64* ptr = get_buffer();
         ptr[1] = 9;
         result = ptr[0] + ptr[1];
     }

@@ -1,2 +1,2 @@
-define void @"drop_Box$LT$T$GT$$LT$int$GT$"
-call void @"drop_Box$LT$T$GT$$LT$int$GT$"(ptr
+define void @"drop_Box$LT$T$GT$$LT$i64$GT$"
+call void @"drop_Box$LT$T$GT$$LT$i64$GT$"(ptr

@@ -1,21 +1,21 @@
 struct RefBox {
-    &int value;
+    &i64 value;
 };
 
-RefBox rewrite_and_make(&mut RefBox r, &int next)
+RefBox rewrite_and_make(&mut RefBox r, &i64 next)
     depends(return.value on next, r.value on next) {
     r.value = next;
     return {next};
 }
 
-RefBox forward(RefBox r, &int next)
+RefBox forward(RefBox r, &i64 next)
     depends(return on r) {
     return rewrite_and_make(&mut r, next);
 }
 
-int main() {
-    int first = 1;
-    int second = 5;
+i64 main() {
+    i64 first = 1;
+    i64 second = 5;
     RefBox box = {&first};
     RefBox out = forward(box, &second);
     return *out.value - 5;

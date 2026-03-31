@@ -1,5 +1,5 @@
 struct Box {
-    int value;
+    i64 value;
 };
 
 struct OneBox {
@@ -19,16 +19,16 @@ impl drop(&mut OneBox boxes) {
 
 extern {
     Box* get_box_buffer();
-    int dropped_count();
+    i64 dropped_count();
     void record_drop();
 }
 
-int compute() {
+i64 compute() {
     OneBox boxes = {get_box_buffer()};
     return 0;
 }
 
-int main() {
+i64 main() {
     compute();
     return dropped_count();
 }

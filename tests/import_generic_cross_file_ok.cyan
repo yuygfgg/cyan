@@ -1,15 +1,15 @@
 import modules.buffer;
 
 extern {
-    int* get_int_buffer();
-    float* get_float_buffer();
+    i64* get_int_buffer();
+    f64* get_float_buffer();
 }
 
-int main() {
-    Buffer<int> ints = {get_int_buffer(), 1};
-    Buffer<float> floats = {get_float_buffer(), 1};
-    int left = buffer_first(&ints);
-    float right = buffer_first(&floats);
+i64 main() {
+    Buffer<i64> ints = {get_int_buffer(), 1};
+    Buffer<f64> floats = {get_float_buffer(), 1};
+    i64 left = buffer_first(&ints);
+    f64 right = buffer_first(&floats);
     if (left == 7 && right == 3.5) {
         return 0;
     }

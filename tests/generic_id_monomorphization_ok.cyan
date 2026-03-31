@@ -2,6 +2,6 @@ T id<T>(T value) {
     return value;
 }
 
-int main() {
+i64 main() {
     return id(7);
 }
