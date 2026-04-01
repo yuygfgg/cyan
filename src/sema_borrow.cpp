@@ -23,6 +23,12 @@ auto has_direct_interface_source(const ast::Expr& expr) -> bool {
            expr.resolved_place.has_value();
 }
 
+auto is_owner_bound_borrow_cast(const ast::Expr& expr) -> bool {
+    const auto* cast = std::get_if<ast::CastExpr>(&expr.node);
+    return cast != nullptr && cast->owner_expr != nullptr &&
+           cast->cast_kind == ast::CastKind::OwnerBorrow;
+}
+
 auto place_less(const ast::ResolvedPlace& lhs, const ast::ResolvedPlace& rhs)
     -> bool {
     if (lhs.is_external != rhs.is_external) {
@@ -1251,7 +1257,10 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
     }
 
     if (want_mut) {
-        if (!local.type->is_mut) {
+        const auto allow_shared_owner_mut_borrow =
+            is_owner_bound_borrow_cast(expr) &&
+            is_borrow_like_type(local.type) && !local.type->is_mut;
+        if (!local.type->is_mut && !allow_shared_owner_mut_borrow) {
             return unexpected_result<ast::ResolvedPlace>(
                 "expected a mutable borrow source", expr.range);
         }
@@ -1265,7 +1274,9 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
         if (temporary_only) {
             local.status = LocalState::Status::Moved;
             for (auto loan_place : local_origins) {
-                loan_place.owner_local_id = local.unique_id;
+                if (!allow_shared_owner_mut_borrow) {
+                    loan_place.owner_local_id = local.unique_id;
+                }
                 state.temporary_loans.push_back(TemporaryLoan{
                     .place = std::move(loan_place), .is_mut = true});
             }
@@ -1407,7 +1418,8 @@ auto SemanticAnalyzer::sharedReborrowParentLocalIds(const FunctionState& state,
     for (const auto& candidate : state.locals) {
         if (candidate.unique_id == source_local.unique_id ||
             !candidate.in_scope || !mayBeLive(candidate.status) ||
-            !is_borrow_like_type(candidate.type) || !candidate.type->is_mut) {
+            !is_borrow_like_type(candidate.type) || !candidate.type->is_mut ||
+            candidate.is_interior_mut_borrow) {
             continue;
         }
         const auto candidate_origins = topLevelOrigins(candidate);

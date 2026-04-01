@@ -131,6 +131,7 @@ class SemanticAnalyzer {
         std::vector<ast::ResolvedPlace> borrow_origins;
         std::vector<ast::ResolvedPlace> element_origins;
         std::optional<std::size_t> reborrow_parent_local_id;
+        bool is_interior_mut_borrow = false;
         bool is_parameter = false;
         bool is_hidden = false;
         bool is_view_slot = false;

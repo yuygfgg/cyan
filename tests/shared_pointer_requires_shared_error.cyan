@@ -1,0 +1,8 @@
+void wrap(shared i64* ptr) {}
+
+i64 main() {
+    i64 value = 0;
+    i64* ptr = &mut value;
+    wrap(ptr);
+    return 0;
+}

@@ -1,0 +1,8 @@
+struct shared {
+    i64 value;
+};
+
+i64 main() {
+    shared value = {7};
+    return value.value - 7;
+}

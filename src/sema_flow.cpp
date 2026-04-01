@@ -4,6 +4,16 @@ namespace cyan {
 
 using namespace detail;
 
+namespace {
+
+auto is_owner_bound_borrow_cast(const ast::Expr& expr) -> bool {
+    const auto* cast = std::get_if<ast::CastExpr>(&expr.node);
+    return cast != nullptr && cast->owner_expr != nullptr &&
+           cast->cast_kind == ast::CastKind::OwnerBorrow;
+}
+
+} // namespace
+
 auto SemanticAnalyzer::branchMerge(FunctionState& into,
                                    const FunctionState& then_state,
                                    const FunctionState& else_state,
@@ -47,6 +57,13 @@ auto SemanticAnalyzer::branchMerge(FunctionState& into,
                     local.name + "'",
                 range);
         }
+        if (then_local.is_interior_mut_borrow !=
+            else_local.is_interior_mut_borrow) {
+            return make_error(
+                "control-flow merge requires identical reborrow state for '" +
+                    local.name + "'",
+                range);
+        }
     }
 
     for (auto& local : into.locals) {
@@ -71,6 +88,7 @@ auto SemanticAnalyzer::branchMerge(FunctionState& into,
                                                else_local.element_origins);
         }
         local.reborrow_parent_local_id = then_local.reborrow_parent_local_id;
+        local.is_interior_mut_borrow = then_local.is_interior_mut_borrow;
         local.in_scope = then_local.in_scope;
     }
     return {};
@@ -166,6 +184,7 @@ auto SemanticAnalyzer::enterScope(FunctionState& state) -> void {
 auto SemanticAnalyzer::releaseReborrowParent(FunctionState& state,
                                              LocalState& local) -> void {
     if (!local.reborrow_parent_local_id.has_value()) {
+        local.is_interior_mut_borrow = false;
         return;
     }
     const auto parent_index =
@@ -174,6 +193,7 @@ auto SemanticAnalyzer::releaseReborrowParent(FunctionState& state,
         state.locals[*parent_index].status = LocalState::Status::Live;
     }
     local.reborrow_parent_local_id.reset();
+    local.is_interior_mut_borrow = false;
 }
 
 auto SemanticAnalyzer::attachReborrowParent(FunctionState& state,
@@ -199,7 +219,7 @@ auto SemanticAnalyzer::attachReborrowParent(FunctionState& state,
     }
 
     auto& parent = state.locals[*parent_index];
-    if (!is_borrow_like_type(parent.type) || !parent.type->is_mut) {
+    if (!is_borrow_like_type(parent.type)) {
         return {};
     }
 
@@ -207,7 +227,12 @@ auto SemanticAnalyzer::attachReborrowParent(FunctionState& state,
         return {};
     }
 
+    if (!parent.type->is_mut && !is_owner_bound_borrow_cast(source_expr)) {
+        return {};
+    }
+
     local.reborrow_parent_local_id = parent.unique_id;
+    local.is_interior_mut_borrow = !parent.type->is_mut;
     parent.status = LocalState::Status::Moved;
     return {};
 }

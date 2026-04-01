@@ -1184,14 +1184,15 @@ auto Parser::parseSimpleStmt(TokenKind terminator, std::string message)
 auto Parser::looksLikeVarDecl() -> bool {
     if (!(check(TokenKind::Ampersand) || check(TokenKind::LParen) ||
           check(TokenKind::LBracket) || check(TokenKind::KwConst) ||
-          check(TokenKind::KwBool) || check(TokenKind::KwChar) ||
-          check(TokenKind::KwF32) || check(TokenKind::KwF64) ||
-          check(TokenKind::KwI8) || check(TokenKind::KwI16) ||
-          check(TokenKind::KwI32) || check(TokenKind::KwI64) ||
-          check(TokenKind::KwI128) || check(TokenKind::KwU8) ||
-          check(TokenKind::KwU16) || check(TokenKind::KwU32) ||
-          check(TokenKind::KwU64) || check(TokenKind::KwU128) ||
-          check(TokenKind::KwVoid) || check(TokenKind::Identifier))) {
+          looksLikeSharedTypeQualifier() || check(TokenKind::KwBool) ||
+          check(TokenKind::KwChar) || check(TokenKind::KwF32) ||
+          check(TokenKind::KwF64) || check(TokenKind::KwI8) ||
+          check(TokenKind::KwI16) || check(TokenKind::KwI32) ||
+          check(TokenKind::KwI64) || check(TokenKind::KwI128) ||
+          check(TokenKind::KwU8) || check(TokenKind::KwU16) ||
+          check(TokenKind::KwU32) || check(TokenKind::KwU64) ||
+          check(TokenKind::KwU128) || check(TokenKind::KwVoid) ||
+          check(TokenKind::Identifier))) {
         return false;
     }
 
@@ -1201,6 +1202,36 @@ auto Parser::looksLikeVarDecl() -> bool {
         maybe_type.has_value() && check(TokenKind::Identifier);
     index = saved_index;
     return looks_like_decl;
+}
+
+auto Parser::looksLikeSharedTypeQualifier() -> bool {
+    if (!(check(TokenKind::Identifier) && current().text == "shared")) {
+        return false;
+    }
+
+    const auto saved_index = index;
+    advance();
+    auto maybe_type = parseType();
+    const auto looks_like_qualifier =
+        maybe_type.has_value() && typeSyntaxContainsPointer(**maybe_type);
+    index = saved_index;
+    return looks_like_qualifier;
+}
+
+auto Parser::typeSyntaxContainsPointer(const ast::TypeSyntax& type) const
+    -> bool {
+    switch (type.kind) {
+    case ast::TypeSyntax::Kind::Pointer:
+        return true;
+    case ast::TypeSyntax::Kind::Borrow:
+    case ast::TypeSyntax::Kind::Slice:
+    case ast::TypeSyntax::Kind::Array:
+        return type.element_type != nullptr &&
+               typeSyntaxContainsPointer(*type.element_type);
+    case ast::TypeSyntax::Kind::Named:
+        return false;
+    }
+    return false;
 }
 
 auto Parser::looksLikeExplicitCallTypeArguments() -> bool {
@@ -1297,6 +1328,11 @@ auto Parser::parseType() -> std::expected<ast::TypeSyntaxPtr, Diagnostic> {
     auto parse_postfix_type =
         [&]() -> std::expected<ast::TypeSyntaxPtr, Diagnostic> {
         const auto is_const = match(TokenKind::KwConst);
+        auto pending_shared = false;
+        if (looksLikeSharedTypeQualifier()) {
+            pending_shared = true;
+            advance();
+        }
         auto type = parse_primary_type();
         if (!type) {
             return std::unexpected(type.error());
@@ -1308,8 +1344,10 @@ auto Parser::parseType() -> std::expected<ast::TypeSyntaxPtr, Diagnostic> {
                 pointer->range = source_file.range((*type)->range.begin,
                                                    previous().range.end);
                 pointer->kind = ast::TypeSyntax::Kind::Pointer;
+                pointer->is_shared = pending_shared;
                 pointer->element_type = std::move(*type);
                 type = std::move(pointer);
+                pending_shared = false;
                 continue;
             }
             if (match(TokenKind::LBracket)) {
@@ -1334,6 +1372,9 @@ auto Parser::parseType() -> std::expected<ast::TypeSyntaxPtr, Diagnostic> {
                 continue;
             }
             break;
+        }
+        if (pending_shared) {
+            (*type)->is_shared = true;
         }
         return type;
     };
@@ -1511,11 +1552,21 @@ auto Parser::parseCast() -> std::expected<ast::ExprPtr, Diagnostic> {
         if (!target_type) {
             return std::unexpected(target_type.error());
         }
-        expr = make_expr(
-            source_file.range((*expr)->range.begin, (*target_type)->range.end),
-            ast::CastExpr{.operand = std::move(*expr),
-                          .target_type = std::move(*target_type),
-                          .cast_kind = ast::CastKind::None});
+        ast::ExprPtr owner_expr;
+        auto end = (*target_type)->range.end;
+        if (match(TokenKind::KwOn)) {
+            auto parsed_owner = parseUnary();
+            if (!parsed_owner) {
+                return std::unexpected(parsed_owner.error());
+            }
+            end = (*parsed_owner)->range.end;
+            owner_expr = std::move(*parsed_owner);
+        }
+        expr = make_expr(source_file.range((*expr)->range.begin, end),
+                         ast::CastExpr{.operand = std::move(*expr),
+                                       .target_type = std::move(*target_type),
+                                       .owner_expr = std::move(owner_expr),
+                                       .cast_kind = ast::CastKind::None});
     }
 
     return expr;

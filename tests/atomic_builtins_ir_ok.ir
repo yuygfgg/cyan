@@ -1,0 +1,6 @@
+load atomic
+store atomic
+atomicrmw xchg
+atomicrmw add
+cmpxchg
+fence seq_cst

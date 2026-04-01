@@ -40,6 +40,7 @@ struct Type {
     std::uint16_t bit_width = 0;
     bool is_signed = false;
     bool is_mut = false;
+    bool is_shared = false;
     bool is_const = false;
     std::uint64_t array_size = 0;
     std::string name;
@@ -84,7 +85,7 @@ class TypeContext {
     [[nodiscard]] auto findNamed(std::string_view name) const -> const Type*;
     auto getConst(const Type* type) -> const Type*;
     auto getBorrow(const Type* pointee, bool is_mut) -> const Type*;
-    auto getPointer(const Type* pointee) -> const Type*;
+    auto getPointer(const Type* pointee, bool is_shared = false) -> const Type*;
     auto getArray(const Type* element, std::uint64_t size) -> const Type*;
     auto getSlice(const Type* element) -> const Type*;
     auto registerDropFunction(const Type* type,
@@ -105,7 +106,7 @@ class TypeContext {
   private:
     auto makeType(Type type) -> const Type*;
     auto borrowKey(const Type* pointee, bool is_mut) const -> std::string;
-    auto pointerKey(const Type* pointee) const -> std::string;
+    auto pointerKey(const Type* pointee, bool is_shared) const -> std::string;
     auto arrayKey(const Type* element, std::uint64_t size) const -> std::string;
     auto sliceKey(const Type* element) const -> std::string;
 

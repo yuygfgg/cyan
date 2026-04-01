@@ -106,6 +106,7 @@ auto same_concrete_base_type(const TypeContext& types, const Type* lhs,
     lhs = types.unqualify(lhs);
     rhs = types.unqualify(rhs);
     if (lhs->kind != rhs->kind || lhs->is_mut != rhs->is_mut ||
+        lhs->is_shared != rhs->is_shared ||
         lhs->array_size != rhs->array_size) {
         return false;
     }
@@ -138,6 +139,7 @@ auto can_add_const_in_object_graph(const TypeContext& types, const Type* source,
     const auto* target_base = types.unqualify(target);
     if (source_base->kind != target_base->kind ||
         source_base->is_mut != target_base->is_mut ||
+        source_base->is_shared != target_base->is_shared ||
         source_base->array_size != target_base->array_size) {
         return false;
     }
@@ -174,6 +176,9 @@ auto can_convert_pointer_value(const TypeContext& types, const Type* source,
     const auto* target_base = types.unqualify(target);
     if (source_base->kind != TypeKind::Pointer ||
         target_base->kind != TypeKind::Pointer) {
+        return false;
+    }
+    if (source_base->is_shared != target_base->is_shared) {
         return false;
     }
     return can_add_const_in_object_graph(types, source_base->element_type,
@@ -259,7 +264,8 @@ auto describe_type_syntax(const ast::TypeSyntax& type) -> std::string {
         case ast::TypeSyntax::Kind::Slice:
             return "[]" + self(*inner.element_type, self);
         case ast::TypeSyntax::Kind::Pointer:
-            return self(*inner.element_type, self) + '*';
+            return std::string(inner.is_shared ? "shared " : "") +
+                   self(*inner.element_type, self) + '*';
         case ast::TypeSyntax::Kind::Array: {
             std::ostringstream stream;
             stream << self(*inner.element_type, self) << '[' << inner.array_size
@@ -316,7 +322,8 @@ auto mangle_type_syntax(const ast::TypeSyntax& type) -> std::string {
         case ast::TypeSyntax::Kind::Slice:
             return "slice$LT$" + self(*inner.element_type, self) + "$GT";
         case ast::TypeSyntax::Kind::Pointer:
-            return "ptr$LT$" + self(*inner.element_type, self) + "$GT";
+            return std::string(inner.is_shared ? "sptr$LT$" : "ptr$LT$") +
+                   self(*inner.element_type, self) + "$GT";
         case ast::TypeSyntax::Kind::Array: {
             std::ostringstream stream;
             stream << "arr$LT$" << inner.array_size << "$COMMA$"
@@ -354,7 +361,8 @@ auto mangle_type(const Type* type) -> std::string {
         case TypeKind::Slice:
             return "slice$LT$" + self(inner->element_type, self) + "$GT";
         case TypeKind::Pointer:
-            return "ptr$LT$" + self(inner->element_type, self) + "$GT";
+            return std::string(inner->is_shared ? "sptr$LT$" : "ptr$LT$") +
+                   self(inner->element_type, self) + "$GT";
         case TypeKind::Array: {
             std::ostringstream stream;
             stream << "arr$LT$" << inner->array_size << "$COMMA$"
@@ -495,6 +503,7 @@ auto make_type_syntax_from_type(const Type* type) -> ast::TypeSyntaxPtr {
         break;
     case TypeKind::Pointer:
         syntax->kind = ast::TypeSyntax::Kind::Pointer;
+        syntax->is_shared = type->is_shared;
         syntax->element_type = make_type_syntax_from_type(type->element_type);
         break;
     case TypeKind::Array:
@@ -524,6 +533,7 @@ auto clone_type_syntax(
     clone->name = type.name;
     clone->name_range = type.name_range;
     clone->is_mut = type.is_mut;
+    clone->is_shared = type.is_shared;
     clone->is_const = type.is_const;
     clone->array_size = type.array_size;
     if (type.element_type != nullptr) {
@@ -661,6 +671,10 @@ auto clone_expr(
                     .operand = clone_expr(*cast_expr.operand, type_bindings),
                     .target_type = clone_type_syntax(*cast_expr.target_type,
                                                      type_bindings),
+                    .owner_expr =
+                        cast_expr.owner_expr != nullptr
+                            ? clone_expr(*cast_expr.owner_expr, type_bindings)
+                            : nullptr,
                     .cast_kind = ast::CastKind::None};
             },
             [&](const ast::SizeofExpr& sizeof_expr) -> ast::Expr::Variant {

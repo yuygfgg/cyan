@@ -1,0 +1,14 @@
+struct Holder {
+    &mut i64 view;
+};
+
+i64 main() {
+    i64 x = 0;
+    shared i64* ptr = &mut x;
+    &i64 owner = &x;
+    unchecked {
+        Holder holder = {ptr as &mut i64 on owner};
+        *holder.view = 9;
+    }
+    return x - 9;
+}

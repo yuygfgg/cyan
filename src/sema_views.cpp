@@ -925,8 +925,9 @@ auto SemanticAnalyzer::setAggregateViewSlots(
                 findLocalById(state, *binding->source_local_id);
             if (parent_index.has_value()) {
                 auto& parent = state.locals[*parent_index];
-                if (is_borrow_like_type(parent.type) && parent.type->is_mut) {
+                if (is_borrow_like_type(parent.type)) {
                     slot.reborrow_parent_local_id = parent.unique_id;
+                    slot.is_interior_mut_borrow = !parent.type->is_mut;
                     parent.status = LocalState::Status::Moved;
                 }
             }

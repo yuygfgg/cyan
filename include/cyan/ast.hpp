@@ -50,6 +50,7 @@ enum class CastKind : std::uint8_t {
     Numeric,
     Const,
     Pointer,
+    OwnerBorrow,
 };
 
 struct TypeSyntax;
@@ -87,6 +88,7 @@ struct TypeSyntax {
     TypeSyntaxPtr element_type;
     std::vector<TypeSyntaxPtr> type_arguments;
     bool is_mut = false;
+    bool is_shared = false;
     bool is_const = false;
     std::uint64_t array_size = 0;
     const Type* resolved_type = nullptr;
@@ -173,6 +175,21 @@ enum class BuiltinCallKind : std::uint8_t {
     None,
     Len,
     Subslice,
+    AtomicRelaxedOrder,
+    AtomicAcquireOrder,
+    AtomicReleaseOrder,
+    AtomicAcqRelOrder,
+    AtomicSeqCstOrder,
+    AtomicLoad,
+    AtomicStore,
+    AtomicExchange,
+    AtomicCompareExchange,
+    AtomicFetchAdd,
+    AtomicFetchSub,
+    AtomicFetchAnd,
+    AtomicFetchOr,
+    AtomicFetchXor,
+    AtomicFence,
 };
 
 struct CallExpr {
@@ -210,6 +227,7 @@ struct ArrayLiteralExpr {
 struct CastExpr {
     ExprPtr operand;
     TypeSyntaxPtr target_type;
+    ExprPtr owner_expr;
     CastKind cast_kind = CastKind::None;
 };
 

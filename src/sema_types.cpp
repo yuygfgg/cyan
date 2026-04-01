@@ -278,6 +278,11 @@ auto SemanticAnalyzer::resolveType(ast::TypeSyntax& type)
         return type.resolved_type;
     }
 
+    if (type.is_shared && type.kind != ast::TypeSyntax::Kind::Pointer) {
+        return unexpected_result<const Type*>(
+            "shared qualifier is only supported on pointer types", type.range);
+    }
+
     auto apply_const =
         [&](const Type* resolved) -> std::expected<const Type*, Diagnostic> {
         if (!type.is_const) {
@@ -466,7 +471,7 @@ auto SemanticAnalyzer::resolveType(ast::TypeSyntax& type)
                 "raw pointers to borrow or interface types are not supported",
                 type.range);
         }
-        return apply_const(types.getPointer(*element));
+        return apply_const(types.getPointer(*element, type.is_shared));
     }
     case ast::TypeSyntax::Kind::Array: {
         auto element = resolveType(*type.element_type);

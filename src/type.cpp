@@ -20,6 +20,7 @@ TypeContext::TypeContext() {
                                          .bit_width = bit_width,
                                          .is_signed = is_signed,
                                          .is_mut = false,
+                                         .is_shared = false,
                                          .is_const = false,
                                          .array_size = 0,
                                          .name = std::move(name),
@@ -157,6 +158,7 @@ auto TypeContext::registerStruct(std::string name, std::string linkage_name,
                       .bit_width = 0,
                       .is_signed = false,
                       .is_mut = false,
+                      .is_shared = false,
                       .is_const = false,
                       .array_size = 0,
                       .name = std::move(name),
@@ -175,6 +177,7 @@ auto TypeContext::registerEnum(std::string name, std::string linkage_name,
                       .bit_width = 0,
                       .is_signed = false,
                       .is_mut = false,
+                      .is_shared = false,
                       .is_const = false,
                       .array_size = 0,
                       .name = std::move(name),
@@ -197,6 +200,7 @@ auto TypeContext::getInterface(const ast::InterfaceDecl* decl) -> const Type* {
                                            .bit_width = 0,
                                            .is_signed = false,
                                            .is_mut = decl->receiver_is_mut,
+                                           .is_shared = false,
                                            .is_const = false,
                                            .array_size = 0,
                                            .name = decl->name,
@@ -231,8 +235,9 @@ auto TypeContext::borrowKey(const Type* pointee, bool is_mut) const
     return (is_mut ? "mut:" : "shr:") + describe(pointee);
 }
 
-auto TypeContext::pointerKey(const Type* pointee) const -> std::string {
-    return "ptr:" + describe(pointee);
+auto TypeContext::pointerKey(const Type* pointee, bool is_shared) const
+    -> std::string {
+    return std::string(is_shared ? "sptr:" : "ptr:") + describe(pointee);
 }
 
 auto TypeContext::arrayKey(const Type* element, std::uint64_t size) const
@@ -258,6 +263,7 @@ auto TypeContext::getBorrow(const Type* pointee, bool is_mut) -> const Type* {
                                            .bit_width = 0,
                                            .is_signed = false,
                                            .is_mut = is_mut,
+                                           .is_shared = false,
                                            .is_const = false,
                                            .array_size = 0,
                                            .name = key,
@@ -266,8 +272,9 @@ auto TypeContext::getBorrow(const Type* pointee, bool is_mut) -> const Type* {
     return type;
 }
 
-auto TypeContext::getPointer(const Type* pointee) -> const Type* {
-    const auto key = pointerKey(pointee);
+auto TypeContext::getPointer(const Type* pointee, bool is_shared)
+    -> const Type* {
+    const auto key = pointerKey(pointee, is_shared);
     if (const auto it = pointer_types.find(key); it != pointer_types.end()) {
         return it->second;
     }
@@ -280,6 +287,7 @@ auto TypeContext::getPointer(const Type* pointee) -> const Type* {
                                            .bit_width = 0,
                                            .is_signed = false,
                                            .is_mut = false,
+                                           .is_shared = is_shared,
                                            .is_const = false,
                                            .array_size = 0,
                                            .name = key,
@@ -305,6 +313,7 @@ auto TypeContext::getArray(const Type* element, std::uint64_t size)
                                            .bit_width = 0,
                                            .is_signed = false,
                                            .is_mut = false,
+                                           .is_shared = false,
                                            .is_const = false,
                                            .array_size = size,
                                            .name = name.str(),
@@ -327,6 +336,7 @@ auto TypeContext::getSlice(const Type* element) -> const Type* {
                                            .bit_width = 0,
                                            .is_signed = false,
                                            .is_mut = false,
+                                           .is_shared = false,
                                            .is_const = false,
                                            .array_size = 0,
                                            .name = "[]" + describe(element),
@@ -378,6 +388,7 @@ auto TypeContext::sameIgnoringConst(const Type* lhs, const Type* rhs) const
         return true;
     }
     if (lhs->kind != rhs->kind || lhs->is_mut != rhs->is_mut ||
+        lhs->is_shared != rhs->is_shared ||
         lhs->array_size != rhs->array_size ||
         lhs->bit_width != rhs->bit_width || lhs->is_signed != rhs->is_signed) {
         return false;
@@ -502,7 +513,8 @@ auto TypeContext::describe(const Type* type) const -> std::string {
         return stream.str();
     }
     case TypeKind::Pointer:
-        return describe(type->element_type) + '*';
+        return std::string(type->is_shared ? "shared " : "") +
+               describe(type->element_type) + '*';
     }
     return "<invalid>";
 }

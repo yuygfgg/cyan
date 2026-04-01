@@ -49,6 +49,7 @@ enum class TokenKind : std::uint8_t {
     KwMut,
     KwOn,
     KwReturn,
+    KwShared,
     KwSizeof,
     KwStruct,
     KwSwitch,

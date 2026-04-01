@@ -1,0 +1,19 @@
+void touch(shared i64* ptr) {
+    i64 value = atomic_load(ptr, atomic_relaxed());
+    atomic_store(ptr, value, atomic_release());
+    i64 old = atomic_exchange(ptr, 3, atomic_acq_rel());
+    i64 prev = atomic_fetch_add(ptr, 1, atomic_seq_cst());
+    i64 seen = atomic_compare_exchange(
+        ptr, prev + 1, old, atomic_acq_rel(), atomic_acquire());
+    atomic_fence(atomic_seq_cst());
+    if (seen == value) {
+        atomic_store(ptr, seen, atomic_seq_cst());
+    }
+}
+
+i64 main() {
+    i64 x = 0;
+    shared i64* ptr = &mut x;
+    touch(ptr);
+    return 0;
+}

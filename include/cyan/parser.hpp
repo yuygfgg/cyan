@@ -63,6 +63,9 @@ class Parser {
         -> std::expected<ast::StmtPtr, Diagnostic>;
     [[nodiscard]] auto looksLikeVarDecl() -> bool;
     [[nodiscard]] auto looksLikeExplicitCallTypeArguments() -> bool;
+    [[nodiscard]] auto looksLikeSharedTypeQualifier() -> bool;
+    [[nodiscard]] auto typeSyntaxContainsPointer(const ast::TypeSyntax& type)
+        const -> bool;
     auto parseType() -> std::expected<ast::TypeSyntaxPtr, Diagnostic>;
     auto parseTypeArguments()
         -> std::expected<std::vector<ast::TypeSyntaxPtr>, Diagnostic>;

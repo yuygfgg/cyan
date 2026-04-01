@@ -1915,6 +1915,191 @@ class LLVMCodegen {
         return finishIntrinsicLowering(lowering, call_inst, wrapper_arguments);
     }
 
+    auto atomicOrderIndex(ast::BuiltinCallKind kind)
+        -> std::optional<std::int64_t> {
+        switch (kind) {
+        case ast::BuiltinCallKind::AtomicRelaxedOrder:
+            return 0;
+        case ast::BuiltinCallKind::AtomicAcquireOrder:
+            return 1;
+        case ast::BuiltinCallKind::AtomicReleaseOrder:
+            return 2;
+        case ast::BuiltinCallKind::AtomicAcqRelOrder:
+            return 3;
+        case ast::BuiltinCallKind::AtomicSeqCstOrder:
+            return 4;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    auto atomicOrdering(ast::BuiltinCallKind kind)
+        -> std::optional<llvm::AtomicOrdering> {
+        switch (kind) {
+        case ast::BuiltinCallKind::AtomicRelaxedOrder:
+            return llvm::AtomicOrdering::Monotonic;
+        case ast::BuiltinCallKind::AtomicAcquireOrder:
+            return llvm::AtomicOrdering::Acquire;
+        case ast::BuiltinCallKind::AtomicReleaseOrder:
+            return llvm::AtomicOrdering::Release;
+        case ast::BuiltinCallKind::AtomicAcqRelOrder:
+            return llvm::AtomicOrdering::AcquireRelease;
+        case ast::BuiltinCallKind::AtomicSeqCstOrder:
+            return llvm::AtomicOrdering::SequentiallyConsistent;
+        default:
+            return std::nullopt;
+        }
+    }
+
+    auto atomicOrdering(ast::Expr& expr)
+        -> std::optional<llvm::AtomicOrdering> {
+        const auto* order_call = std::get_if<ast::CallExpr>(&expr.node);
+        if (order_call == nullptr) {
+            return std::nullopt;
+        }
+        return atomicOrdering(order_call->builtin_kind);
+    }
+
+    auto atomicAlign(const Type* type) -> llvm::Align {
+        return module.getDataLayout().getABITypeAlign(lowerType(type));
+    }
+
+    auto emitAtomicBuiltin(ast::CallExpr& call) -> llvm::Value* {
+        switch (call.builtin_kind) {
+        case ast::BuiltinCallKind::AtomicRelaxedOrder:
+        case ast::BuiltinCallKind::AtomicAcquireOrder:
+        case ast::BuiltinCallKind::AtomicReleaseOrder:
+        case ast::BuiltinCallKind::AtomicAcqRelOrder:
+        case ast::BuiltinCallKind::AtomicSeqCstOrder: {
+            const auto order_index = atomicOrderIndex(call.builtin_kind);
+            return order_index.has_value()
+                       ? integerConstant(types.i64Type(), *order_index)
+                       : nullptr;
+        }
+        case ast::BuiltinCallKind::AtomicLoad: {
+            if (call.arguments.size() != 2 ||
+                call.arguments[0]->resolved_type == nullptr) {
+                return nullptr;
+            }
+            const auto* pointer_type =
+                types.unqualify(call.arguments[0]->resolved_type);
+            auto order = atomicOrdering(*call.arguments[1]);
+            auto* pointer = emitExpr(*call.arguments[0]);
+            if (pointer == nullptr || !order.has_value() ||
+                pointer_type->element_type == nullptr) {
+                return nullptr;
+            }
+            auto* load = builder.CreateLoad(
+                lowerType(pointer_type->element_type), pointer, "atomic.load");
+            load->setAtomic(*order);
+            load->setAlignment(atomicAlign(pointer_type->element_type));
+            return load;
+        }
+        case ast::BuiltinCallKind::AtomicStore: {
+            if (call.arguments.size() != 3 ||
+                call.arguments[0]->resolved_type == nullptr) {
+                return nullptr;
+            }
+            const auto* pointer_type =
+                types.unqualify(call.arguments[0]->resolved_type);
+            auto order = atomicOrdering(*call.arguments[2]);
+            auto* pointer = emitExpr(*call.arguments[0]);
+            auto* value = emitExpr(*call.arguments[1]);
+            if (pointer == nullptr || value == nullptr || !order.has_value() ||
+                pointer_type->element_type == nullptr) {
+                return nullptr;
+            }
+            auto* store = builder.CreateStore(value, pointer);
+            store->setAtomic(*order);
+            store->setAlignment(atomicAlign(pointer_type->element_type));
+            return store;
+        }
+        case ast::BuiltinCallKind::AtomicExchange:
+        case ast::BuiltinCallKind::AtomicFetchAdd:
+        case ast::BuiltinCallKind::AtomicFetchSub:
+        case ast::BuiltinCallKind::AtomicFetchAnd:
+        case ast::BuiltinCallKind::AtomicFetchOr:
+        case ast::BuiltinCallKind::AtomicFetchXor: {
+            if (call.arguments.size() != 3 ||
+                call.arguments[0]->resolved_type == nullptr) {
+                return nullptr;
+            }
+            const auto* pointer_type =
+                types.unqualify(call.arguments[0]->resolved_type);
+            auto order = atomicOrdering(*call.arguments[2]);
+            auto* pointer = emitExpr(*call.arguments[0]);
+            auto* value = emitExpr(*call.arguments[1]);
+            if (pointer == nullptr || value == nullptr || !order.has_value() ||
+                pointer_type->element_type == nullptr) {
+                return nullptr;
+            }
+            llvm::AtomicRMWInst::BinOp op = llvm::AtomicRMWInst::Xchg;
+            switch (call.builtin_kind) {
+            case ast::BuiltinCallKind::AtomicExchange:
+                op = llvm::AtomicRMWInst::Xchg;
+                break;
+            case ast::BuiltinCallKind::AtomicFetchAdd:
+                op = llvm::AtomicRMWInst::Add;
+                break;
+            case ast::BuiltinCallKind::AtomicFetchSub:
+                op = llvm::AtomicRMWInst::Sub;
+                break;
+            case ast::BuiltinCallKind::AtomicFetchAnd:
+                op = llvm::AtomicRMWInst::And;
+                break;
+            case ast::BuiltinCallKind::AtomicFetchOr:
+                op = llvm::AtomicRMWInst::Or;
+                break;
+            case ast::BuiltinCallKind::AtomicFetchXor:
+                op = llvm::AtomicRMWInst::Xor;
+                break;
+            default:
+                break;
+            }
+            return builder.CreateAtomicRMW(
+                op, pointer, value,
+                llvm::MaybeAlign(atomicAlign(pointer_type->element_type)),
+                *order, llvm::SyncScope::System);
+        }
+        case ast::BuiltinCallKind::AtomicCompareExchange: {
+            if (call.arguments.size() != 5 ||
+                call.arguments[0]->resolved_type == nullptr) {
+                return nullptr;
+            }
+            const auto* pointer_type =
+                types.unqualify(call.arguments[0]->resolved_type);
+            auto success_order = atomicOrdering(*call.arguments[3]);
+            auto failure_order = atomicOrdering(*call.arguments[4]);
+            auto* pointer = emitExpr(*call.arguments[0]);
+            auto* expected = emitExpr(*call.arguments[1]);
+            auto* desired = emitExpr(*call.arguments[2]);
+            if (pointer == nullptr || expected == nullptr ||
+                desired == nullptr || !success_order.has_value() ||
+                !failure_order.has_value() ||
+                pointer_type->element_type == nullptr) {
+                return nullptr;
+            }
+            auto* cmp = builder.CreateAtomicCmpXchg(
+                pointer, expected, desired,
+                llvm::MaybeAlign(atomicAlign(pointer_type->element_type)),
+                *success_order, *failure_order, llvm::SyncScope::System);
+            cmp->setWeak(false);
+            return builder.CreateExtractValue(cmp, {0}, "atomic.cmpxchg.old");
+        }
+        case ast::BuiltinCallKind::AtomicFence: {
+            if (call.arguments.size() != 1) {
+                return nullptr;
+            }
+            auto order = atomicOrdering(*call.arguments[0]);
+            return order.has_value()
+                       ? builder.CreateFence(*order, llvm::SyncScope::System)
+                       : nullptr;
+        }
+        default:
+            return nullptr;
+        }
+    }
+
     auto emitSubsliceBuiltin(ast::CallExpr& call) -> llvm::Value* {
         if (call.arguments.size() != 3 ||
             call.arguments.front()->resolved_type == nullptr) {
@@ -2244,6 +2429,11 @@ class LLVMCodegen {
                     return nullptr;
                 },
                 [&](ast::CallExpr& call) -> llvm::Value* {
+                    if (call.builtin_kind != ast::BuiltinCallKind::None &&
+                        call.builtin_kind != ast::BuiltinCallKind::Len &&
+                        call.builtin_kind != ast::BuiltinCallKind::Subslice) {
+                        return emitAtomicBuiltin(call);
+                    }
                     if (call.builtin_kind == ast::BuiltinCallKind::Len) {
                         const auto* argument_type = types.unqualify(
                             call.arguments.front()->resolved_type);
@@ -2549,6 +2739,9 @@ class LLVMCodegen {
                         return builder.CreateBitCast(
                             operand, lowerType(expr.resolved_type),
                             "ptrcasttmp");
+                    }
+                    if (cast_expr.cast_kind == ast::CastKind::OwnerBorrow) {
+                        return operand;
                     }
                     if (types.isFloat(target_type)) {
                         if (types.isFloat(source_type)) {

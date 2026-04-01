@@ -1108,6 +1108,99 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                 if (!operand_type) {
                     return std::unexpected(operand_type.error());
                 }
+                if (cast_expr.owner_expr != nullptr) {
+                    if (state.unchecked_depth == 0) {
+                        return unexpected_result<const Type*>(
+                            "owner-bound borrow casts are only allowed in "
+                            "unchecked blocks",
+                            expr.range);
+                    }
+                    if ((*target_type)->kind != TypeKind::Borrow) {
+                        return unexpected_result<const Type*>(
+                            "owner-bound borrow casts require a borrow target "
+                            "type",
+                            expr.range);
+                    }
+                    const auto* pointer_type = types.unqualify(*operand_type);
+                    if (pointer_type->kind != TypeKind::Pointer ||
+                        pointer_type->element_type == nullptr) {
+                        return unexpected_result<const Type*>(
+                            "owner-bound borrow casts require a pointer "
+                            "operand",
+                            cast_expr.operand->range);
+                    }
+                    if ((*target_type)->is_mut &&
+                        pointer_type->element_type->is_const) {
+                        return unexpected_result<const Type*>(
+                            "cannot mutably borrow through a const pointer",
+                            expr.range);
+                    }
+                    if (!types.sameIgnoringTopLevelConst(
+                            pointer_type->element_type,
+                            (*target_type)->element_type)) {
+                        return unexpected_result<const Type*>(
+                            "owner-bound borrow cast requires matching "
+                            "pointee type",
+                            expr.range);
+                    }
+
+                    auto owner_type = analyzeExpr(state, *cast_expr.owner_expr);
+                    if (!owner_type) {
+                        return std::unexpected(owner_type.error());
+                    }
+                    if (!is_borrow_like_type(*owner_type)) {
+                        return unexpected_result<const Type*>(
+                            "owner-bound borrow casts require a borrow owner",
+                            cast_expr.owner_expr->range);
+                    }
+
+                    auto owner_bindings =
+                        collectExprViewBindings(state, *cast_expr.owner_expr);
+                    if (!owner_bindings) {
+                        return std::unexpected(owner_bindings.error());
+                    }
+                    const auto top_level_binding = std::ranges::find_if(
+                        *owner_bindings, [](const ViewLeafBinding& binding) {
+                            return binding.path.empty();
+                        });
+                    if (top_level_binding == owner_bindings->end() ||
+                        top_level_binding->source_places.empty()) {
+                        return unexpected_result<const Type*>(
+                            "owner-bound borrow cast owner has no tracked "
+                            "source",
+                            cast_expr.owner_expr->range);
+                    }
+
+                    cast_expr.cast_kind = ast::CastKind::OwnerBorrow;
+                    expr.resolved_type = *target_type;
+                    expr.cached_view_bindings =
+                        std::vector<ast::CachedViewBinding>{
+                            ast::CachedViewBinding{
+                                .path = {},
+                                .source_places =
+                                    top_level_binding->source_places,
+                                .source_local_id =
+                                    top_level_binding->source_local_id,
+                                .element_sources = {},
+                                .type = expr.resolved_type,
+                            },
+                        };
+                    expr.resolved_place = placeSetRepresentative(
+                        top_level_binding->source_places);
+                    if (!expr.resolved_place.has_value()) {
+                        return unexpected_result<const Type*>(
+                            "owner-bound borrow cast owner has no tracked "
+                            "source",
+                            cast_expr.owner_expr->range);
+                    }
+                    if (expr.resolved_type->is_mut &&
+                        top_level_binding->source_local_id.has_value()) {
+                        expr.resolved_place->owner_local_id =
+                            top_level_binding->source_local_id;
+                    }
+                    expr.slice_source_place.reset();
+                    return expr.resolved_type;
+                }
                 if (types.sameIgnoringConst(*operand_type, *target_type) &&
                     !types.isSame(*operand_type, *target_type)) {
                     if (state.unchecked_depth == 0) {
@@ -1181,6 +1274,220 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         }
         return std::nullopt;
     };
+    enum class AtomicOrderUse : std::uint8_t {
+        Load,
+        Store,
+        Rmw,
+        CompareExchangeSuccess,
+        CompareExchangeFailure,
+        Fence,
+    };
+    const auto is_atomic_order_kind = [](ast::BuiltinCallKind kind) -> bool {
+        switch (kind) {
+        case ast::BuiltinCallKind::AtomicRelaxedOrder:
+        case ast::BuiltinCallKind::AtomicAcquireOrder:
+        case ast::BuiltinCallKind::AtomicReleaseOrder:
+        case ast::BuiltinCallKind::AtomicAcqRelOrder:
+        case ast::BuiltinCallKind::AtomicSeqCstOrder:
+            return true;
+        default:
+            return false;
+        }
+    };
+    const auto atomic_order_label =
+        [](ast::BuiltinCallKind kind) -> std::string_view {
+        switch (kind) {
+        case ast::BuiltinCallKind::AtomicRelaxedOrder:
+            return "relaxed";
+        case ast::BuiltinCallKind::AtomicAcquireOrder:
+            return "acquire";
+        case ast::BuiltinCallKind::AtomicReleaseOrder:
+            return "release";
+        case ast::BuiltinCallKind::AtomicAcqRelOrder:
+            return "acq_rel";
+        case ast::BuiltinCallKind::AtomicSeqCstOrder:
+            return "seq_cst";
+        default:
+            return "invalid";
+        }
+    };
+    const auto is_atomic_scalar_type = [&](const Type* type) -> bool {
+        type = types.unqualify(type);
+        return type != nullptr && (type->kind == TypeKind::Integer ||
+                                   type->kind == TypeKind::Bool ||
+                                   type->kind == TypeKind::Pointer);
+    };
+    const auto require_atomic_pointer =
+        [&](ast::Expr& pointer_expr,
+            bool require_writable) -> std::expected<const Type*, Diagnostic> {
+        auto pointer_type = requireReadable(state, pointer_expr);
+        if (!pointer_type) {
+            return std::unexpected(pointer_type.error());
+        }
+        const auto* pointer_base = types.unqualify(*pointer_type);
+        if (pointer_base->kind != TypeKind::Pointer ||
+            !pointer_base->is_shared || pointer_base->element_type == nullptr) {
+            return unexpected_result<const Type*>(
+                "atomic operations require a shared pointer operand",
+                pointer_expr.range);
+        }
+        if (require_writable && pointer_base->element_type->is_const) {
+            return unexpected_result<const Type*>(
+                "atomic write operations require a mutable pointee type",
+                pointer_expr.range);
+        }
+        return pointer_base;
+    };
+    const auto require_atomic_order = [&](ast::Expr& order_expr,
+                                          AtomicOrderUse use)
+        -> std::expected<ast::BuiltinCallKind, Diagnostic> {
+        auto order_type = requireReadable(state, order_expr, types.i64Type());
+        if (!order_type) {
+            return std::unexpected(order_type.error());
+        }
+        const auto* order_call = std::get_if<ast::CallExpr>(&order_expr.node);
+        if (order_call == nullptr ||
+            !is_atomic_order_kind(order_call->builtin_kind)) {
+            return unexpected_result<ast::BuiltinCallKind>(
+                "atomic memory order must be one of atomic_relaxed(), "
+                "atomic_acquire(), atomic_release(), atomic_acq_rel(), or "
+                "atomic_seq_cst()",
+                order_expr.range);
+        }
+
+        const auto valid = [=](ast::BuiltinCallKind kind) -> bool {
+            switch (use) {
+            case AtomicOrderUse::Load:
+                return kind == ast::BuiltinCallKind::AtomicRelaxedOrder ||
+                       kind == ast::BuiltinCallKind::AtomicAcquireOrder ||
+                       kind == ast::BuiltinCallKind::AtomicSeqCstOrder;
+            case AtomicOrderUse::Store:
+                return kind == ast::BuiltinCallKind::AtomicRelaxedOrder ||
+                       kind == ast::BuiltinCallKind::AtomicReleaseOrder ||
+                       kind == ast::BuiltinCallKind::AtomicSeqCstOrder;
+            case AtomicOrderUse::Rmw:
+            case AtomicOrderUse::CompareExchangeSuccess:
+                return true;
+            case AtomicOrderUse::CompareExchangeFailure:
+                return kind == ast::BuiltinCallKind::AtomicRelaxedOrder ||
+                       kind == ast::BuiltinCallKind::AtomicAcquireOrder ||
+                       kind == ast::BuiltinCallKind::AtomicSeqCstOrder;
+            case AtomicOrderUse::Fence:
+                return kind == ast::BuiltinCallKind::AtomicAcquireOrder ||
+                       kind == ast::BuiltinCallKind::AtomicReleaseOrder ||
+                       kind == ast::BuiltinCallKind::AtomicAcqRelOrder ||
+                       kind == ast::BuiltinCallKind::AtomicSeqCstOrder;
+            }
+            return false;
+        };
+        if (!valid(order_call->builtin_kind)) {
+            std::string op_name = "atomic operation";
+            switch (use) {
+            case AtomicOrderUse::Load:
+                op_name = "atomic_load()";
+                break;
+            case AtomicOrderUse::Store:
+                op_name = "atomic_store()";
+                break;
+            case AtomicOrderUse::Rmw:
+                op_name = "atomic read-modify-write operation";
+                break;
+            case AtomicOrderUse::CompareExchangeSuccess:
+                op_name = "atomic_compare_exchange() success";
+                break;
+            case AtomicOrderUse::CompareExchangeFailure:
+                op_name = "atomic_compare_exchange() failure";
+                break;
+            case AtomicOrderUse::Fence:
+                op_name = "atomic_fence()";
+                break;
+            }
+            return unexpected_result<ast::BuiltinCallKind>(
+                op_name + " does not accept " +
+                    std::string(atomic_order_label(order_call->builtin_kind)) +
+                    " ordering",
+                order_expr.range);
+        }
+        return order_call->builtin_kind;
+    };
+    const auto validate_compare_exchange_orders =
+        [&](ast::BuiltinCallKind success_order,
+            ast::BuiltinCallKind failure_order,
+            SourceRange range) -> std::expected<void, Diagnostic> {
+        switch (success_order) {
+        case ast::BuiltinCallKind::AtomicRelaxedOrder:
+            if (failure_order != ast::BuiltinCallKind::AtomicRelaxedOrder) {
+                return unexpected_result<void>(
+                    "atomic_compare_exchange() failure ordering must not be "
+                    "stronger than success ordering",
+                    range);
+            }
+            return {};
+        case ast::BuiltinCallKind::AtomicAcquireOrder:
+            if (failure_order != ast::BuiltinCallKind::AtomicRelaxedOrder &&
+                failure_order != ast::BuiltinCallKind::AtomicAcquireOrder) {
+                return unexpected_result<void>(
+                    "atomic_compare_exchange() failure ordering must not be "
+                    "stronger than success ordering",
+                    range);
+            }
+            return {};
+        case ast::BuiltinCallKind::AtomicReleaseOrder:
+            if (failure_order != ast::BuiltinCallKind::AtomicRelaxedOrder) {
+                return unexpected_result<void>(
+                    "atomic_compare_exchange() failure ordering must not be "
+                    "stronger than success ordering",
+                    range);
+            }
+            return {};
+        case ast::BuiltinCallKind::AtomicAcqRelOrder:
+            if (failure_order != ast::BuiltinCallKind::AtomicRelaxedOrder &&
+                failure_order != ast::BuiltinCallKind::AtomicAcquireOrder) {
+                return unexpected_result<void>(
+                    "atomic_compare_exchange() failure ordering must not be "
+                    "stronger than success ordering",
+                    range);
+            }
+            return {};
+        case ast::BuiltinCallKind::AtomicSeqCstOrder:
+            return {};
+        default:
+            return unexpected_result<void>("invalid compare-exchange ordering",
+                                           range);
+        }
+    };
+    struct ScopeExit {
+        std::function<void()> fn;
+
+        ~ScopeExit() { fn(); }
+    };
+    const auto temporary_loan_base = state.temporary_loans.size();
+    const auto temporary_suspended_base =
+        state.temporary_suspended_local_ids.size();
+    const auto clear_call_temporaries = [&]() -> void {
+        const auto has_live_reborrow_child = [&](std::size_t local_id) -> bool {
+            return std::ranges::any_of(
+                state.locals, [&](const LocalState& local) {
+                    return local.in_scope && isDefinitelyLive(local.status) &&
+                           local.reborrow_parent_local_id == local_id;
+                });
+        };
+
+        for (std::size_t index = temporary_suspended_base;
+             index < state.temporary_suspended_local_ids.size(); ++index) {
+            const auto local_id = state.temporary_suspended_local_ids[index];
+            const auto local_index = findLocalById(state, local_id);
+            if (local_index.has_value() &&
+                state.locals[*local_index].in_scope &&
+                !has_live_reborrow_child(local_id)) {
+                state.locals[*local_index].status = LocalState::Status::Live;
+            }
+        }
+        state.temporary_suspended_local_ids.resize(temporary_suspended_base);
+        state.temporary_loans.resize(temporary_loan_base);
+    };
+    [[maybe_unused]] const auto call_temporary_cleanup =
+        ScopeExit{[&]() { clear_call_temporaries(); }};
 
     auto analyze_argument =
         [&](ast::Expr& argument,
@@ -1431,6 +1738,34 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         findVisibleInterface(call.callee) == nullptr &&
         !findVisibleEnumVariant(call.callee).has_value() &&
         findVisibleTemplateEnumVariants(call.callee).empty();
+    if ((call.callee == "atomic_relaxed" || call.callee == "atomic_acquire" ||
+         call.callee == "atomic_release" || call.callee == "atomic_acq_rel" ||
+         call.callee == "atomic_seq_cst") &&
+        builtin_available) {
+        if (!call.explicit_type_arguments.empty()) {
+            return unexpected_result<const Type*>(
+                "explicit type arguments require a generic function",
+                expr.range);
+        }
+        if (!call.arguments.empty()) {
+            return unexpected_result<const Type*>(
+                call.callee + "() expects exactly zero arguments", expr.range);
+        }
+        if (call.callee == "atomic_relaxed") {
+            call.builtin_kind = ast::BuiltinCallKind::AtomicRelaxedOrder;
+        } else if (call.callee == "atomic_acquire") {
+            call.builtin_kind = ast::BuiltinCallKind::AtomicAcquireOrder;
+        } else if (call.callee == "atomic_release") {
+            call.builtin_kind = ast::BuiltinCallKind::AtomicReleaseOrder;
+        } else if (call.callee == "atomic_acq_rel") {
+            call.builtin_kind = ast::BuiltinCallKind::AtomicAcqRelOrder;
+        } else {
+            call.builtin_kind = ast::BuiltinCallKind::AtomicSeqCstOrder;
+        }
+        expr.resolved_type = types.i64Type();
+        expr.resolved_place.reset();
+        return expr.resolved_type;
+    }
     if (call.callee == "len" && builtin_available) {
         if (call.arguments.size() != 1) {
             return unexpected_result<const Type*>(
@@ -1600,6 +1935,232 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                 };
             }
         }
+        return expr.resolved_type;
+    }
+    if (call.callee == "atomic_load" && builtin_available) {
+        if (!call.explicit_type_arguments.empty()) {
+            return unexpected_result<const Type*>(
+                "explicit type arguments require a generic function",
+                expr.range);
+        }
+        if (call.arguments.size() != 2) {
+            return unexpected_result<const Type*>(
+                "atomic_load() expects exactly two arguments", expr.range);
+        }
+        auto pointer_type = require_atomic_pointer(*call.arguments[0], false);
+        if (!pointer_type) {
+            return std::unexpected(pointer_type.error());
+        }
+        if (!is_atomic_scalar_type((*pointer_type)->element_type)) {
+            return unexpected_result<const Type*>(
+                "atomic_load() requires an integer, bool, or pointer pointee "
+                "type",
+                call.arguments[0]->range);
+        }
+        auto order =
+            require_atomic_order(*call.arguments[1], AtomicOrderUse::Load);
+        if (!order) {
+            return std::unexpected(order.error());
+        }
+        static_cast<void>(*order);
+        call.builtin_kind = ast::BuiltinCallKind::AtomicLoad;
+        expr.resolved_type = (*pointer_type)->element_type;
+        expr.resolved_place.reset();
+        return expr.resolved_type;
+    }
+    if (call.callee == "atomic_store" && builtin_available) {
+        if (!call.explicit_type_arguments.empty()) {
+            return unexpected_result<const Type*>(
+                "explicit type arguments require a generic function",
+                expr.range);
+        }
+        if (call.arguments.size() != 3) {
+            return unexpected_result<const Type*>(
+                "atomic_store() expects exactly three arguments", expr.range);
+        }
+        auto pointer_type = require_atomic_pointer(*call.arguments[0], true);
+        if (!pointer_type) {
+            return std::unexpected(pointer_type.error());
+        }
+        if (!is_atomic_scalar_type((*pointer_type)->element_type)) {
+            return unexpected_result<const Type*>(
+                "atomic_store() requires an integer, bool, or pointer pointee "
+                "type",
+                call.arguments[0]->range);
+        }
+        auto value = consumeValue(state, *call.arguments[1],
+                                  (*pointer_type)->element_type);
+        if (!value) {
+            return std::unexpected(value.error());
+        }
+        auto order =
+            require_atomic_order(*call.arguments[2], AtomicOrderUse::Store);
+        if (!order) {
+            return std::unexpected(order.error());
+        }
+        static_cast<void>(*order);
+        call.builtin_kind = ast::BuiltinCallKind::AtomicStore;
+        expr.resolved_type = types.voidType();
+        expr.resolved_place.reset();
+        return expr.resolved_type;
+    }
+    if (call.callee == "atomic_exchange" && builtin_available) {
+        if (!call.explicit_type_arguments.empty()) {
+            return unexpected_result<const Type*>(
+                "explicit type arguments require a generic function",
+                expr.range);
+        }
+        if (call.arguments.size() != 3) {
+            return unexpected_result<const Type*>(
+                "atomic_exchange() expects exactly three arguments",
+                expr.range);
+        }
+        auto pointer_type = require_atomic_pointer(*call.arguments[0], true);
+        if (!pointer_type) {
+            return std::unexpected(pointer_type.error());
+        }
+        if (!is_atomic_scalar_type((*pointer_type)->element_type)) {
+            return unexpected_result<const Type*>(
+                "atomic_exchange() requires an integer, bool, or pointer "
+                "pointee type",
+                call.arguments[0]->range);
+        }
+        auto value = consumeValue(state, *call.arguments[1],
+                                  (*pointer_type)->element_type);
+        if (!value) {
+            return std::unexpected(value.error());
+        }
+        auto order =
+            require_atomic_order(*call.arguments[2], AtomicOrderUse::Rmw);
+        if (!order) {
+            return std::unexpected(order.error());
+        }
+        static_cast<void>(*order);
+        call.builtin_kind = ast::BuiltinCallKind::AtomicExchange;
+        expr.resolved_type = (*pointer_type)->element_type;
+        expr.resolved_place.reset();
+        return expr.resolved_type;
+    }
+    if (call.callee == "atomic_compare_exchange" && builtin_available) {
+        if (!call.explicit_type_arguments.empty()) {
+            return unexpected_result<const Type*>(
+                "explicit type arguments require a generic function",
+                expr.range);
+        }
+        if (call.arguments.size() != 5) {
+            return unexpected_result<const Type*>(
+                "atomic_compare_exchange() expects exactly five arguments",
+                expr.range);
+        }
+        auto pointer_type = require_atomic_pointer(*call.arguments[0], true);
+        if (!pointer_type) {
+            return std::unexpected(pointer_type.error());
+        }
+        if (!is_atomic_scalar_type((*pointer_type)->element_type)) {
+            return unexpected_result<const Type*>(
+                "atomic_compare_exchange() requires an integer, bool, or "
+                "pointer pointee type",
+                call.arguments[0]->range);
+        }
+        auto expected = consumeValue(state, *call.arguments[1],
+                                     (*pointer_type)->element_type);
+        if (!expected) {
+            return std::unexpected(expected.error());
+        }
+        auto desired = consumeValue(state, *call.arguments[2],
+                                    (*pointer_type)->element_type);
+        if (!desired) {
+            return std::unexpected(desired.error());
+        }
+        auto success_order = require_atomic_order(
+            *call.arguments[3], AtomicOrderUse::CompareExchangeSuccess);
+        if (!success_order) {
+            return std::unexpected(success_order.error());
+        }
+        auto failure_order = require_atomic_order(
+            *call.arguments[4], AtomicOrderUse::CompareExchangeFailure);
+        if (!failure_order) {
+            return std::unexpected(failure_order.error());
+        }
+        auto order_pair_valid = validate_compare_exchange_orders(
+            *success_order, *failure_order, expr.range);
+        if (!order_pair_valid) {
+            return std::unexpected(order_pair_valid.error());
+        }
+        call.builtin_kind = ast::BuiltinCallKind::AtomicCompareExchange;
+        expr.resolved_type = (*pointer_type)->element_type;
+        expr.resolved_place.reset();
+        return expr.resolved_type;
+    }
+    if ((call.callee == "atomic_fetch_add" ||
+         call.callee == "atomic_fetch_sub" ||
+         call.callee == "atomic_fetch_and" ||
+         call.callee == "atomic_fetch_or" ||
+         call.callee == "atomic_fetch_xor") &&
+        builtin_available) {
+        if (!call.explicit_type_arguments.empty()) {
+            return unexpected_result<const Type*>(
+                "explicit type arguments require a generic function",
+                expr.range);
+        }
+        if (call.arguments.size() != 3) {
+            return unexpected_result<const Type*>(
+                call.callee + "() expects exactly three arguments", expr.range);
+        }
+        auto pointer_type = require_atomic_pointer(*call.arguments[0], true);
+        if (!pointer_type) {
+            return std::unexpected(pointer_type.error());
+        }
+        if (!types.isInteger((*pointer_type)->element_type)) {
+            return unexpected_result<const Type*>(
+                call.callee + "() requires an integer pointee type",
+                call.arguments[0]->range);
+        }
+        auto value = consumeValue(state, *call.arguments[1],
+                                  (*pointer_type)->element_type);
+        if (!value) {
+            return std::unexpected(value.error());
+        }
+        auto order =
+            require_atomic_order(*call.arguments[2], AtomicOrderUse::Rmw);
+        if (!order) {
+            return std::unexpected(order.error());
+        }
+        static_cast<void>(*order);
+        if (call.callee == "atomic_fetch_add") {
+            call.builtin_kind = ast::BuiltinCallKind::AtomicFetchAdd;
+        } else if (call.callee == "atomic_fetch_sub") {
+            call.builtin_kind = ast::BuiltinCallKind::AtomicFetchSub;
+        } else if (call.callee == "atomic_fetch_and") {
+            call.builtin_kind = ast::BuiltinCallKind::AtomicFetchAnd;
+        } else if (call.callee == "atomic_fetch_or") {
+            call.builtin_kind = ast::BuiltinCallKind::AtomicFetchOr;
+        } else {
+            call.builtin_kind = ast::BuiltinCallKind::AtomicFetchXor;
+        }
+        expr.resolved_type = (*pointer_type)->element_type;
+        expr.resolved_place.reset();
+        return expr.resolved_type;
+    }
+    if (call.callee == "atomic_fence" && builtin_available) {
+        if (!call.explicit_type_arguments.empty()) {
+            return unexpected_result<const Type*>(
+                "explicit type arguments require a generic function",
+                expr.range);
+        }
+        if (call.arguments.size() != 1) {
+            return unexpected_result<const Type*>(
+                "atomic_fence() expects exactly one argument", expr.range);
+        }
+        auto order =
+            require_atomic_order(*call.arguments[0], AtomicOrderUse::Fence);
+        if (!order) {
+            return std::unexpected(order.error());
+        }
+        static_cast<void>(*order);
+        call.builtin_kind = ast::BuiltinCallKind::AtomicFence;
+        expr.resolved_type = types.voidType();
+        expr.resolved_place.reset();
         return expr.resolved_type;
     }
     if (function == nullptr) {

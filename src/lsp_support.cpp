@@ -993,6 +993,10 @@ class ModuleTraversal {
                     visitExpr(*cast_expr.operand, type_parameters,
                               enclosing_function);
                     visitType(*cast_expr.target_type, type_parameters);
+                    if (cast_expr.owner_expr != nullptr) {
+                        visitExpr(*cast_expr.owner_expr, type_parameters,
+                                  enclosing_function);
+                    }
                 },
                 [&](const ast::SizeofExpr& sizeof_expr) {
                     visitType(*sizeof_expr.type, type_parameters);

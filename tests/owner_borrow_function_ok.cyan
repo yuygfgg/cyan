@@ -1,0 +1,18 @@
+struct Cell {
+    shared i64* ptr;
+};
+
+&mut i64 borrow_cell(&Cell c) depends(return on c) {
+    unchecked {
+        return c.ptr as &mut i64 on c;
+    }
+}
+
+i64 main() {
+    i64 x = 0;
+    shared i64* ptr = &mut x;
+    Cell cell = {ptr};
+    &mut i64 value = borrow_cell(&cell);
+    *value = 7;
+    return x - 7;
+}
