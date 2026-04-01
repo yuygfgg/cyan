@@ -477,19 +477,10 @@ auto SemanticAnalyzer::resolveType(ast::TypeSyntax& type)
             return unexpected_result<const Type*>(
                 "array elements cannot have type void", type.range);
         }
-        if (is_borrow_like_type(*element)) {
+        if (typeContainsViews(*element) && !types.isCopy(*element)) {
             return unexpected_result<const Type*>(
-                "array elements cannot have borrow or interface type",
-                type.range);
-        }
-        if (types.unqualify(*element)->kind == TypeKind::Slice) {
-            return unexpected_result<const Type*>(
-                "array elements cannot have slice type", type.range);
-        }
-        if (typeContainsViews(*element)) {
-            return unexpected_result<const Type*>(
-                "array elements cannot contain borrow, interface, or slice "
-                "subobjects",
+                "array elements that contain borrow, interface, or slice "
+                "subobjects must be copy",
                 type.range);
         }
         return apply_const(types.getArray(*element, type.array_size));

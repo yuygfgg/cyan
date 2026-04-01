@@ -1,0 +1,22 @@
+struct Token {
+    i64 value;
+};
+
+extern {
+    void record_drop();
+    i64 dropped_count();
+}
+
+impl drop(&mut Token token) {
+    record_drop();
+}
+
+void run() {
+    Token[1] values = [{1}];
+    values[0] = {2};
+}
+
+i64 main() {
+    run();
+    return dropped_count() - 2;
+}

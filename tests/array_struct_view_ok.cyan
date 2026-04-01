@@ -1,0 +1,10 @@
+struct Holder {
+    &i64 ptr;
+};
+
+i64 main() {
+    i64 left = 4;
+    i64 right = 8;
+    Holder[2] values = [{&left}, {&right}];
+    return *values[0].ptr + *values[1].ptr - 12;
+}

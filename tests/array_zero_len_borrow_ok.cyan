@@ -1,4 +1,4 @@
 i64 main() {
-    ([]i64)[2] rows;
+    (&i64)[0] refs = [];
     return 0;
 }

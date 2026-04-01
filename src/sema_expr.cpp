@@ -941,12 +941,74 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                 const auto* elem_type =
                     types.unqualify(expected_base->element_type);
                 const bool elem_is_borrow_like = is_borrow_like_type(elem_type);
+                const bool track_array_view_bindings =
+                    expected_base->kind == TypeKind::Array &&
+                    typeContainsViews(expected_base->element_type);
                 const bool track_element_sources =
                     expected_base->kind == TypeKind::Slice &&
                     is_direct_shared_view_slice(types, expected_type);
                 std::vector<ast::ResolvedPlace> element_sources;
+                std::vector<ast::CachedViewBinding> cached_bindings;
+                auto merge_cached_binding =
+                    [&](ast::CachedViewBinding next_binding) -> void {
+                    const auto existing_it = std::ranges::find_if(
+                        cached_bindings,
+                        [&](const ast::CachedViewBinding& binding) {
+                            return binding.path == next_binding.path;
+                        });
+                    if (existing_it == cached_bindings.end()) {
+                        cached_bindings.push_back(std::move(next_binding));
+                        return;
+                    }
+
+                    auto append_unique_place =
+                        [](std::vector<ast::ResolvedPlace>& places,
+                           const ast::ResolvedPlace& place) -> void {
+                        if (std::ranges::find(places, place) == places.end()) {
+                            places.push_back(place);
+                        }
+                    };
+                    for (const auto& place : next_binding.source_places) {
+                        append_unique_place(existing_it->source_places, place);
+                    }
+                    for (const auto& place : next_binding.element_sources) {
+                        append_unique_place(existing_it->element_sources,
+                                            place);
+                    }
+                    if (!existing_it->source_local_id.has_value()) {
+                        existing_it->source_local_id =
+                            next_binding.source_local_id;
+                    } else if (next_binding.source_local_id.has_value() &&
+                               existing_it->source_local_id !=
+                                   next_binding.source_local_id) {
+                        existing_it->source_local_id.reset();
+                    }
+                };
 
                 for (auto& element : array_literal.elements) {
+                    if (track_array_view_bindings) {
+                        auto analyzed = analyzeExpr(
+                            state, *element, expected_base->element_type);
+                        if (!analyzed) {
+                            return std::unexpected(analyzed.error());
+                        }
+                        auto bindings =
+                            collectExprViewBindings(state, *element);
+                        if (!bindings) {
+                            return std::unexpected(bindings.error());
+                        }
+                        for (const auto& binding : *bindings) {
+                            auto path = binding.path;
+                            path.insert(path.begin(), INDEX_FIELD_SENTINEL);
+                            merge_cached_binding(ast::CachedViewBinding{
+                                .path = std::move(path),
+                                .source_places = binding.source_places,
+                                .source_local_id = binding.source_local_id,
+                                .element_sources = binding.element_sources,
+                                .type = binding.type,
+                            });
+                        }
+                    }
                     auto analyzed = consumeValue(state, *element,
                                                  expected_base->element_type);
                     if (!analyzed) {
@@ -1004,21 +1066,21 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                 expr.resolved_type = expected_type;
                 expr.resolved_place.reset();
                 if (track_element_sources) {
-                    expr.cached_view_bindings = std::vector<
-                        ast::CachedViewBinding>{
-                        ast::CachedViewBinding{
-                            .path = {},
-                            .source_places =
-                                expr.slice_source_place.has_value()
-                                    ? std::vector<
-                                          ast::
-                                              ResolvedPlace>{*expr.slice_source_place}
-                                    : std::vector<ast::ResolvedPlace>{},
-                            .source_local_id = std::nullopt,
-                            .element_sources = std::move(element_sources),
-                            .type = expected_type,
-                        },
-                    };
+                    merge_cached_binding(ast::CachedViewBinding{
+                        .path = {},
+                        .source_places =
+                            expr.slice_source_place.has_value()
+                                ? std::vector<
+                                      ast::
+                                          ResolvedPlace>{*expr.slice_source_place}
+                                : std::vector<ast::ResolvedPlace>{},
+                        .source_local_id = std::nullopt,
+                        .element_sources = std::move(element_sources),
+                        .type = expected_type,
+                    });
+                }
+                if (track_array_view_bindings || !cached_bindings.empty()) {
+                    expr.cached_view_bindings = std::move(cached_bindings);
                 }
                 return expr.resolved_type;
             },

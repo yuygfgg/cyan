@@ -170,6 +170,12 @@ Move down to `Pair pair = {3, 4};`. Cyan uses positional struct initialization. 
 
 The declaration `i64[4] values = [pair.left, pair.right, 5, 6];` creates a fixed array. This is owned storage. Those four integers live in one concrete object. The type says so up front: four `i64` values in a fixed layout.
 
+Fixed arrays are not limited to plain scalars. They can also store copyable
+view values such as shared borrows, slices, and structs or enums that carry
+those view values. The checker treats `array[index]` conservatively, so
+borrowing through an indexed view array may keep more source places read-only
+than a fully per-index analysis would.
+
 `[]i64 tail = subslice(values, 1, len(values) - 1);` is where the owner/view split becomes real. `values` owns the storage. `tail` is a slice that starts at index `1` and spans the rest of the array. No copy happens here. Cyan is carving out a view.
 
 Then `i64 total = sum(tail);` shows why that distinction matters. `sum` works directly with the slice and stays independent from the original owner.

@@ -1,0 +1,15 @@
+enum MaybeRef {
+    None,
+    Some(&i64),
+};
+
+i64 main() {
+    i64 value = 4;
+    MaybeRef[1] values = [Some(&value)];
+    switch (&values[0]) {
+        case Some(ptr):
+            return **ptr - 4;
+        case None:
+            return 1;
+    }
+}

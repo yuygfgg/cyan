@@ -34,6 +34,8 @@ auto SemanticAnalyzer::typeContainsViews(const Type* type) const -> bool {
 
     type = types.unqualify(type);
     switch (type->kind) {
+    case TypeKind::Array:
+        return typeContainsViews(type->element_type);
     case TypeKind::Struct:
         return std::ranges::any_of(
             type->struct_decl->fields, [&](const ast::StructField& field) {
@@ -64,6 +66,18 @@ auto SemanticAnalyzer::collectViewLeafInfos(
 
     type = types.unqualify(type);
     switch (type->kind) {
+    case TypeKind::Array: {
+        if (type->array_size == 0) {
+            break;
+        }
+        auto next_prefix = prefix;
+        next_prefix.push_back(INDEX_FIELD_SENTINEL);
+        auto element_leaves =
+            collectViewLeafInfos(type->element_type, std::move(next_prefix));
+        leaves.insert(leaves.end(), element_leaves.begin(),
+                      element_leaves.end());
+        break;
+    }
     case TypeKind::Struct:
         for (std::size_t index = 0; index < type->struct_decl->fields.size();
              ++index) {
@@ -792,6 +806,10 @@ auto SemanticAnalyzer::setAggregateViewSlots(
         return std::unexpected(ensured.error());
     }
 
+    const auto summarized_indexed_target =
+        std::ranges::find(target_place.fields, INDEX_FIELD_SENTINEL) !=
+        target_place.fields.end();
+
     auto find_binding =
         [&](const std::vector<std::uint32_t>& path) -> const ViewLeafBinding* {
         const auto it =
@@ -821,8 +839,18 @@ auto SemanticAnalyzer::setAggregateViewSlots(
 
         auto& slot = state.locals[*slot_index];
         releaseReborrowParent(state, slot);
-        setTopLevelOrigins(slot, binding->source_places);
-        slot.element_origins = binding->element_sources;
+        std::vector<ast::ResolvedPlace> assigned_sources =
+            binding->source_places;
+        std::vector<ast::ResolvedPlace> assigned_element_sources =
+            binding->element_sources;
+        if (summarized_indexed_target) {
+            assigned_sources =
+                joinPlaces(topLevelOrigins(slot), assigned_sources);
+            assigned_element_sources =
+                joinPlaces(slot.element_origins, assigned_element_sources);
+        }
+        setTopLevelOrigins(slot, assigned_sources);
+        slot.element_origins = assigned_element_sources;
         auto outlives = ensureViewSourceOutlivesLocal(state, slot, range);
         if (!outlives) {
             return std::unexpected(outlives.error());

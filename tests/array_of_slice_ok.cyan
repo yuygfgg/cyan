@@ -1,0 +1,6 @@
+i64 main() {
+    i64[2] left = [1, 2];
+    i64[1] right = [4];
+    ([]i64)[2] rows = [left, right];
+    return rows[0][1] + rows[1][0] - 6;
+}

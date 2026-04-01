@@ -791,8 +791,20 @@ auto SemanticAnalyzer::assignNamedBorrow(FunctionState& state,
     }
 
     auto prospective_local = local;
-    setTopLevelOrigins(prospective_local, origin_places);
-    prospective_local.element_origins = element_origins;
+    const auto summarized_indexed_slot =
+        prospective_local.is_view_slot &&
+        std::ranges::find(prospective_local.slot_path, INDEX_FIELD_SENTINEL) !=
+            prospective_local.slot_path.end();
+    if (summarized_indexed_slot) {
+        setTopLevelOrigins(
+            prospective_local,
+            joinPlaces(topLevelOrigins(prospective_local), origin_places));
+        prospective_local.element_origins =
+            joinPlaces(prospective_local.element_origins, element_origins);
+    } else {
+        setTopLevelOrigins(prospective_local, origin_places);
+        prospective_local.element_origins = element_origins;
+    }
     auto outlives =
         ensureViewSourceOutlivesLocal(state, prospective_local, value.range);
     if (!outlives) {
@@ -802,8 +814,13 @@ auto SemanticAnalyzer::assignNamedBorrow(FunctionState& state,
     local.status = LocalState::Status::Moved;
     local.borrow_origins.clear();
     local.element_origins.clear();
-    setTopLevelOrigins(local, std::move(origin_places));
-    local.element_origins = std::move(element_origins);
+    if (summarized_indexed_slot) {
+        setTopLevelOrigins(local, prospective_local.borrow_origins);
+        local.element_origins = prospective_local.element_origins;
+    } else {
+        setTopLevelOrigins(local, std::move(origin_places));
+        local.element_origins = std::move(element_origins);
+    }
     local.status = LocalState::Status::Live;
     auto attached = attachReborrowParent(state, local, value);
     if (!attached) {

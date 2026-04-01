@@ -1,1 +1,1 @@
-array elements cannot contain borrow, interface, or slice subobjects
+array elements that contain borrow, interface, or slice subobjects must be copy

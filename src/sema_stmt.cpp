@@ -399,12 +399,11 @@ auto SemanticAnalyzer::analyzeAssign(FunctionState& state,
         }
     }
 
-    auto root_was_live_before_assign = false;
+    auto target_was_live_before_assign = false;
     if (local_index.has_value()) {
         auto& root = state.locals[*local_index];
-        root_was_live_before_assign =
-            place->fields.empty() && isDefinitelyLive(root.status);
-        if (root_was_live_before_assign && types.needsDrop(target_type) &&
+        target_was_live_before_assign = isDefinitelyLive(root.status);
+        if (target_was_live_before_assign && types.needsDrop(target_type) &&
             typeContainsViews(target_type)) {
             auto live = ensureViewSubtreeLive(state, *place, target_type,
                                               stmt.target->range);
@@ -442,7 +441,7 @@ auto SemanticAnalyzer::analyzeAssign(FunctionState& state,
     if (local_index.has_value() && place->fields.empty()) {
         const auto root_still_holds_old_value =
             isDefinitelyLive(state.locals[*local_index].status);
-        stmt.drop_old_value = root_was_live_before_assign &&
+        stmt.drop_old_value = target_was_live_before_assign &&
                               root_still_holds_old_value &&
                               types.needsDrop(target_type);
         state.locals[*local_index].status = LocalState::Status::Live;
@@ -453,11 +452,17 @@ auto SemanticAnalyzer::analyzeAssign(FunctionState& state,
                 return std::unexpected(assigned.error());
             }
         }
-    } else if (typeContainsViews(target_type)) {
-        auto assigned = setAggregateViewSlots(state, *place, target_type,
-                                              view_bindings, stmt.value->range);
-        if (!assigned) {
-            return std::unexpected(assigned.error());
+    } else {
+        if (local_index.has_value()) {
+            stmt.drop_old_value =
+                target_was_live_before_assign && types.needsDrop(target_type);
+        }
+        if (typeContainsViews(target_type)) {
+            auto assigned = setAggregateViewSlots(
+                state, *place, target_type, view_bindings, stmt.value->range);
+            if (!assigned) {
+                return std::unexpected(assigned.error());
+            }
         }
     }
 

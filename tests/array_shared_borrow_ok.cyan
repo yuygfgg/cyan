@@ -1,0 +1,6 @@
+i64 main() {
+    i64 left = 4;
+    i64 right = 8;
+    (&i64)[2] refs = [&left, &right];
+    return *refs[0] + *refs[1] - 12;
+}

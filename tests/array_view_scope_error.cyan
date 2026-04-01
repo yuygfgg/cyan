@@ -1,0 +1,8 @@
+i64 main() {
+    (&i64)[1] refs;
+    {
+        i64 value = 4;
+        refs = [&value];
+    }
+    return *refs[0];
+}

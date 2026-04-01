@@ -7,10 +7,7 @@ grammar.md
 *.pyc
 node_modules/
 */out/*.js*
-tests/cyan_stdlib_file_ok.tmp
-tests/cyan_stdlib_println_ok.tmp
-tests/cyan_stdlib_println_custom_fmt_ok.tmp
-tests/cyan_stdlib_println_scalars_ok.tmp
+*.tmp
 
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
