@@ -237,6 +237,10 @@ The next line, `[]const char part = slice.span_slice(text, 1, 3);`, builds a sma
 
 The `if` condition checks all of this at once. `slice.span_len(text) == 6` confirms the whole literal includes the terminator. `slice.span_len(part) == 3` confirms the smaller view has exactly three visible bytes. `part[0] == 'e'` and `part[2] == 'l'` confirm that the view starts one byte into the original literal.
 
+String and character literals use byte-oriented escape sequences for common
+control characters. Today that includes `\n`, `\r`, `\t`, `\v`, `\f`, `\0`,
+and the usual quote and backslash escapes that each literal form needs.
+
 ### Under The Hood: The Off-By-One Surprise
 
 When you want only the visible letters of a string literal, do not pass the whole literal blindly as a slice. Carve out the visible part yourself:

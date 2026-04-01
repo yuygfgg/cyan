@@ -38,6 +38,9 @@ static constexpr char k_std_println_source[] = {
 static constexpr char k_std_strconv_source[] = {
 #embed "../stdlib/std/strconv.cyan"
     , 0};
+static constexpr char k_std_ryu_source[] = {
+#embed "../stdlib/std/ryu.cyan"
+    , 0};
 static constexpr char k_std_ptr_source[] = {
 #embed "../stdlib/std/ptr.cyan"
     , 0};
@@ -76,6 +79,8 @@ auto builtin_module_sources()
                                              sizeof(k_std_println_source) - 1)},
             {"std.strconv", std::string_view(k_std_strconv_source,
                                              sizeof(k_std_strconv_source) - 1)},
+            {"std.ryu",
+             std::string_view(k_std_ryu_source, sizeof(k_std_ryu_source) - 1)},
             {"std.ptr",
              std::string_view(k_std_ptr_source, sizeof(k_std_ptr_source) - 1)},
             {"std.slice", std::string_view(k_std_slice_source,

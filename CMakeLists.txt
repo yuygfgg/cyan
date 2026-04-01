@@ -54,14 +54,6 @@ target_include_directories(cyan PRIVATE include)
 target_include_directories(cyan SYSTEM PRIVATE third_party/glaze/include)
 target_link_libraries(cyan PRIVATE ${LLVM_LIBS})
 
-add_library(
-    cyan_runtime
-    STATIC
-    runtime/strconv.cpp
-)
-
-add_dependencies(cyan cyan_runtime)
-
 add_executable(
     cyan_lsp_support_tests
     src/ast.cpp
@@ -89,8 +81,7 @@ target_include_directories(
     SYSTEM PRIVATE
     third_party/glaze/include
 )
-
-add_dependencies(cyan_lsp_support_tests cyan_runtime)
+target_link_libraries(cyan_lsp_support_tests PRIVATE ${LLVM_LIBS})
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
     target_compile_options(

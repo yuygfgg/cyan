@@ -59,6 +59,12 @@ auto decode_string_literal(std::string_view text)
         case 't':
             value.push_back('\t');
             break;
+        case 'v':
+            value.push_back('\v');
+            break;
+        case 'f':
+            value.push_back('\f');
+            break;
         case '0':
             value.push_back('\0');
             break;
@@ -1737,6 +1743,12 @@ auto Parser::parsePrimary() -> std::expected<ast::ExprPtr, Diagnostic> {
                 break;
             case 't':
                 value = '\t';
+                break;
+            case 'v':
+                value = '\v';
+                break;
+            case 'f':
+                value = '\f';
                 break;
             case '0':
                 value = '\0';

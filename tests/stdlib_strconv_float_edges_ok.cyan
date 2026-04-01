@@ -1,0 +1,110 @@
+import /std.cstr as cstr;
+import /std.heap as heap;
+import /std.mem as mem;
+import /std.strconv as strconv;
+
+bool same_f64_bits(f64 lhs, f64 rhs) {
+    const f64* left = &lhs;
+    const f64* right = &rhs;
+    unchecked {
+        return mem.memcmp(left as const char*, right as const char*, sizeof(f64)) == 0;
+    }
+}
+
+bool same_f32_bits(f32 lhs, f32 rhs) {
+    const f32* left = &lhs;
+    const f32* right = &rhs;
+    unchecked {
+        return mem.memcmp(left as const char*, right as const char*, sizeof(f32)) == 0;
+    }
+}
+
+i64 expect_text(char* buf, i64 written, const char* expected) {
+    i64 expected_len = cstr.strlen(expected);
+    if (written != expected_len) {
+        return 1;
+    }
+    if (mem.memcmp(buf, expected, expected_len + 1) != 0) {
+        return 2;
+    }
+    return 0;
+}
+
+i64 roundtrip_f64(char* buf, f64 value) {
+    i64 written = strconv.write_f64(buf, 64, value);
+    if (written < 0) {
+        return 1;
+    }
+    f64 parsed = strconv.parse_f64(buf);
+    if (!same_f64_bits(parsed, value)) {
+        return 2;
+    }
+    return 0;
+}
+
+i64 roundtrip_f32(char* buf, f32 value) {
+    i64 written = strconv.write_f32(buf, 64, value);
+    if (written < 0) {
+        return 1;
+    }
+    f32 parsed = strconv.parse_f32(buf);
+    if (!same_f32_bits(parsed, value)) {
+        return 2;
+    }
+    return 0;
+}
+
+i64 main() {
+    char* buf = heap.malloc_array<char>(64);
+
+    if (expect_text(buf, strconv.write_f64(buf, 64, 0.1), "0.1") != 0) {
+        return 1;
+    }
+    if (expect_text(buf, strconv.write_f64(buf, 64, strconv.parse_f64("-0")), "-0") != 0) {
+        return 2;
+    }
+    if (expect_text(buf, strconv.write_f64(buf, 64, strconv.parse_f64("1e6")), "1e+06") != 0) {
+        return 3;
+    }
+    if (expect_text(buf, strconv.write_f64(buf, 64, strconv.parse_f64("inf")), "inf") != 0) {
+        return 4;
+    }
+    if (expect_text(buf, strconv.write_f64(buf, 64, strconv.parse_f64("-inf")), "-inf") != 0) {
+        return 5;
+    }
+    if (expect_text(buf, strconv.write_f64(buf, 64, strconv.parse_f64("nan")), "nan") != 0) {
+        return 6;
+    }
+
+    if (roundtrip_f64(buf, 0.1) != 0) {
+        return 7;
+    }
+    if (roundtrip_f64(buf, 1.2345678901234567) != 0) {
+        return 8;
+    }
+    if (roundtrip_f64(buf, strconv.parse_f64("2.2250738585072014e-308")) != 0) {
+        return 9;
+    }
+    if (roundtrip_f64(buf, strconv.parse_f64("5e-324")) != 0) {
+        return 10;
+    }
+    if (roundtrip_f64(buf, strconv.parse_f64("-0")) != 0) {
+        return 11;
+    }
+
+    if (roundtrip_f32(buf, 1.5 as f32) != 0) {
+        return 12;
+    }
+    if (roundtrip_f32(buf, 1.234567 as f32) != 0) {
+        return 13;
+    }
+    if (roundtrip_f32(buf, strconv.parse_f32("1e-45")) != 0) {
+        return 14;
+    }
+    if (roundtrip_f32(buf, strconv.parse_f32("-0")) != 0) {
+        return 15;
+    }
+
+    heap.free_ptr(buf);
+    return 0;
+}

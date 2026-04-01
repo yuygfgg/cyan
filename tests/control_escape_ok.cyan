@@ -1,0 +1,23 @@
+import /std.strconv as strconv;
+
+i64 main() {
+    []const char controls = "\v\f";
+    if (controls[0] != '\v') {
+        return 1;
+    }
+    if (controls[1] != '\f') {
+        return 2;
+    }
+    if (controls[2] != '\0') {
+        return 3;
+    }
+
+    if (strconv.parse_i128("\v\f-42tail") != (-42 as i128)) {
+        return 4;
+    }
+    if (strconv.parse_u128("\f\v+42tail") != (42 as u128)) {
+        return 5;
+    }
+
+    return 0;
+}

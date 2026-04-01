@@ -122,6 +122,26 @@ void builder_append_u64(&mut StringBuilder out, u64 value) {
     }
 }
 
+void builder_append_i128(&mut StringBuilder out, i128 value) {
+    i64 needed = out.len + 41;
+    builder_reserve(out, needed);
+    unchecked {
+        char* dst = out.ptr + out.len;
+        i64 written = strconv.write_i128(dst, value);
+        out.len = out.len + written;
+    }
+}
+
+void builder_append_u128(&mut StringBuilder out, u128 value) {
+    i64 needed = out.len + 40;
+    builder_reserve(out, needed);
+    unchecked {
+        char* dst = out.ptr + out.len;
+        i64 written = strconv.write_u128(dst, value);
+        out.len = out.len + written;
+    }
+}
+
 void builder_append_f64(&mut StringBuilder out, f64 value) {
     i64 needed = out.len + 64;
     builder_reserve(out, needed);
@@ -199,6 +219,10 @@ impl fmt(&i64 value, &mut StringBuilder out) {
     builder_append_i64(out, *value);
 }
 
+impl fmt(&i128 value, &mut StringBuilder out) {
+    builder_append_i128(out, *value);
+}
+
 impl fmt(&u8 value, &mut StringBuilder out) {
     builder_append_u64(out, *value as u64);
 }
@@ -213,6 +237,10 @@ impl fmt(&u32 value, &mut StringBuilder out) {
 
 impl fmt(&u64 value, &mut StringBuilder out) {
     builder_append_u64(out, *value);
+}
+
+impl fmt(&u128 value, &mut StringBuilder out) {
+    builder_append_u128(out, *value);
 }
 
 impl fmt(&f32 value, &mut StringBuilder out) {

@@ -93,6 +93,10 @@ auto decode_char_literal(std::string_view text)
         return '\r';
     case 't':
         return '\t';
+    case 'v':
+        return '\v';
+    case 'f':
+        return '\f';
     case '0':
         return '\0';
     default:

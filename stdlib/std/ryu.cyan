@@ -1,0 +1,981 @@
+import /std.mem as mem;
+import /std.ptr as ptr;
+
+// Ryu shortest-roundtrip float formatting adapted to Cyan.
+// Table values follow the reference implementation from ulfjack/ryu.
+
+struct U64Pair {
+    u64 low;
+    u64 high;
+};
+
+struct FloatingDecimal64 {
+    u64 mantissa;
+    i32 exponent;
+};
+
+struct FloatingDecimal32 {
+    u32 mantissa;
+    i32 exponent;
+};
+
+i32 pow5bits(i32 e) {
+    return ((((e as u32) * (1217359 as u32)) >> 19) as i32) + 1;
+}
+
+u32 log10_pow2(i32 e) {
+    return ((e as u32) * (78913 as u32)) >> 18;
+}
+
+u32 log10_pow5(i32 e) {
+    return ((e as u32) * (732923 as u32)) >> 20;
+}
+
+u64 f64_to_bits(f64 value) {
+    u64 bits = 0 as u64;
+    u64* dst = &mut bits;
+    const f64* src = &value;
+    unchecked {
+        mem.memcpy(dst as char*, src as const char*, sizeof(u64));
+    }
+    return bits;
+}
+
+u32 f32_to_bits(f32 value) {
+    u32 bits = 0 as u32;
+    u32* dst = &mut bits;
+    const f32* src = &value;
+    unchecked {
+        mem.memcpy(dst as char*, src as const char*, sizeof(u32));
+    }
+    return bits;
+}
+
+bool checked_push_char(char* out, i64 capacity, &mut i64 len, char value) {
+    if (*len + 1 >= capacity) {
+        return false;
+    }
+
+    unchecked {
+        out[*len] = value;
+        *len = *len + 1;
+        out[*len] = '\0';
+    }
+    return true;
+}
+
+bool checked_push_digit(char* out, i64 capacity, &mut i64 len, i64 digit) {
+    return checked_push_char(out, capacity, &mut len, (('0' as i64) + digit) as char);
+}
+
+bool checked_append_literal(char* out, i64 capacity, &mut i64 len, const char* text) {
+    unchecked {
+        const char* cursor = text;
+        while (*cursor != '\0') {
+            if (!checked_push_char(out, capacity, &mut len, *cursor)) {
+                return false;
+            }
+            cursor = cursor + 1;
+        }
+    }
+    return true;
+}
+
+bool checked_append_u64_digits(char* out, i64 capacity, &mut i64 len, u64 value) {
+    if (value >= (10 as u64)) {
+        if (!checked_append_u64_digits(out, capacity, &mut len, value / (10 as u64))) {
+            return false;
+        }
+    }
+    return checked_push_digit(out, capacity, &mut len, (value % (10 as u64)) as i64);
+}
+
+u64 pow10_u64(i64 exp) {
+    u64 result = 1 as u64;
+    i64 i = 0;
+    while (i < exp) {
+        result = result * (10 as u64);
+        i++;
+    }
+    return result;
+}
+
+bool checked_append_u64_zero_padded(char* out, i64 capacity, &mut i64 len, u64 value, i64 width) {
+    if (width <= 0) {
+        return true;
+    }
+
+    u64 divisor = pow10_u64(width - 1);
+    i64 written = 0;
+    u64 remaining = value;
+    while (written < width) {
+        u64 digit = remaining / divisor;
+        if (!checked_push_digit(out, capacity, &mut len, digit as i64)) {
+            return false;
+        }
+
+        remaining = remaining % divisor;
+        if (divisor > (1 as u64)) {
+            divisor = divisor / (10 as u64);
+        }
+        written++;
+    }
+    return true;
+}
+
+u32 decimal_length_u64(u64 value) {
+    if (value >= 10000000000000000 as u64) {
+        return 17 as u32;
+    }
+    if (value >= 1000000000000000 as u64) {
+        return 16 as u32;
+    }
+    if (value >= 100000000000000 as u64) {
+        return 15 as u32;
+    }
+    if (value >= 10000000000000 as u64) {
+        return 14 as u32;
+    }
+    if (value >= 1000000000000 as u64) {
+        return 13 as u32;
+    }
+    if (value >= 100000000000 as u64) {
+        return 12 as u32;
+    }
+    if (value >= 10000000000 as u64) {
+        return 11 as u32;
+    }
+    if (value >= 1000000000 as u64) {
+        return 10 as u32;
+    }
+    if (value >= 100000000 as u64) {
+        return 9 as u32;
+    }
+    if (value >= 10000000 as u64) {
+        return 8 as u32;
+    }
+    if (value >= 1000000 as u64) {
+        return 7 as u32;
+    }
+    if (value >= 100000 as u64) {
+        return 6 as u32;
+    }
+    if (value >= 10000 as u64) {
+        return 5 as u32;
+    }
+    if (value >= 1000 as u64) {
+        return 4 as u32;
+    }
+    if (value >= 100 as u64) {
+        return 3 as u32;
+    }
+    if (value >= 10 as u64) {
+        return 2 as u32;
+    }
+    return 1 as u32;
+}
+
+void zero_terminate(char* out, i64 capacity) {
+    if (capacity <= 0) {
+        return;
+    }
+    unchecked {
+        out[0] = '\0';
+    }
+}
+
+u32 pow5_factor_32(u32 value) {
+    u32 count = 0 as u32;
+    u32 current = value;
+    while (true) {
+        u32 q = current / (5 as u32);
+        u32 r = current % (5 as u32);
+        if (r != (0 as u32)) {
+            return count;
+        }
+        current = q;
+        count = count + (1 as u32);
+    }
+    return count;
+}
+
+u32 pow5_factor_64(u64 value) {
+    u32 count = 0 as u32;
+    u64 current = value;
+    while (true) {
+        u64 q = current / (5 as u64);
+        u64 r = current % (5 as u64);
+        if (r != (0 as u64)) {
+            return count;
+        }
+        current = q;
+        count = count + (1 as u32);
+    }
+    return count;
+}
+
+bool multiple_of_power_of_5_32(u32 value, u32 p) {
+    return pow5_factor_32(value) >= p;
+}
+
+bool multiple_of_power_of_5_64(u64 value, u32 p) {
+    return pow5_factor_64(value) >= p;
+}
+
+bool multiple_of_power_of_2_32(u32 value, u32 p) {
+    if (p == (0 as u32)) {
+        return true;
+    }
+    return (value & (((1 as u32) << p) - (1 as u32))) == (0 as u32);
+}
+
+bool multiple_of_power_of_2_64(u64 value, u32 p) {
+    if (p == (0 as u32)) {
+        return true;
+    }
+    return (value & (((1 as u64) << p) - (1 as u64))) == (0 as u64);
+}
+
+U64Pair double_pow5_inv_split2(u32 index) {
+    U64Pair[15] table = [
+        {1, 2305843009213693952},
+        {5955668970331000884, 1784059615882449851},
+        {8982663654677661702, 1380349269358112757},
+        {7286864317269821294, 2135987035920910082},
+        {7005857020398200553, 1652639921975621497},
+        {17965325103354776697, 1278668206209430417},
+        {8928596168509315048, 1978643211784836272},
+        {10075671573058298858, 1530901034580419511},
+        {597001226353042382, 1184477304306571148},
+        {1527430471115325346, 1832889850782397517},
+        {12533209867169019542, 1418129833677084982},
+        {5577825024675947042, 2194449627517475473},
+        {11006974540203867551, 1697873161311732311},
+        {10313493231639821582, 1313665730009899186},
+        {12701016819766672773, 2032799256770390445}
+    ];
+    return table[index as i64];
+}
+
+u32 pow5_inv_offset(u32 index) {
+    u32[22] table = [
+        1414808916 as u32,
+        67458373 as u32,
+        268701696 as u32,
+        4195348 as u32,
+        1073807360 as u32,
+        1091917141 as u32,
+        1108 as u32,
+        65604 as u32,
+        1073741824 as u32,
+        1140850753 as u32,
+        1346716752 as u32,
+        1431634004 as u32,
+        1365595476 as u32,
+        1073758208 as u32,
+        16777217 as u32,
+        66816 as u32,
+        1364284433 as u32,
+        89478484 as u32,
+        1346442496 as u32,
+        1074003968 as u32,
+        84148496 as u32,
+        0 as u32
+    ];
+    return table[index as i64];
+}
+
+U64Pair double_pow5_split2(u32 index) {
+    U64Pair[13] table = [
+        {0, 1152921504606846976},
+        {0, 1490116119384765625},
+        {1032610780636961552, 1925929944387235853},
+        {7910200175544436838, 1244603055572228341},
+        {16941905809032713930, 1608611746708759036},
+        {13024893955298202172, 2079081953128979843},
+        {6607496772837067824, 1343575221513417750},
+        {17332926989895652603, 1736530273035216783},
+        {13037379183483547984, 2244412773384604712},
+        {1605989338741628675, 1450417759929778918},
+        {9630225068416591280, 1874621017369538693},
+        {665883850346957067, 1211445438634777304},
+        {14931890668723713708, 1565756531257009982}
+    ];
+    return table[index as i64];
+}
+
+u32 pow5_offset(u32 index) {
+    u32[21] table = [
+        0 as u32,
+        0 as u32,
+        0 as u32,
+        0 as u32,
+        1073741824 as u32,
+        1500076437 as u32,
+        1431590229 as u32,
+        1448432917 as u32,
+        1091896580 as u32,
+        1079333904 as u32,
+        1146442053 as u32,
+        1146111296 as u32,
+        1163220304 as u32,
+        1073758208 as u32,
+        2521039936 as u32,
+        1431721317 as u32,
+        1413824581 as u32,
+        1075134801 as u32,
+        1431671125 as u32,
+        1363170645 as u32,
+        261 as u32
+    ];
+    return table[index as i64];
+}
+
+u64 double_pow5_table(u32 index) {
+    u64[26] table = [
+        1,
+        5,
+        25,
+        125,
+        625,
+        3125,
+        15625,
+        78125,
+        390625,
+        1953125,
+        9765625,
+        48828125,
+        244140625,
+        1220703125,
+        6103515625,
+        30517578125,
+        152587890625,
+        762939453125,
+        3814697265625,
+        19073486328125,
+        95367431640625,
+        476837158203125,
+        2384185791015625,
+        11920928955078125,
+        59604644775390625,
+        298023223876953125
+    ];
+    return table[index as i64];
+}
+
+U64Pair double_compute_pow5(u32 i) {
+    u32 base = i / (26 as u32);
+    u32 base2 = base * (26 as u32);
+    u32 offset = i - base2;
+    U64Pair mul = double_pow5_split2(base);
+    if (offset == (0 as u32)) {
+        return mul;
+    }
+
+    u64 m = double_pow5_table(offset);
+    u128 b0 = (m as u128) * (mul.low as u128);
+    u128 b2 = (m as u128) * (mul.high as u128);
+    i32 delta = pow5bits(i as i32) - pow5bits(base2 as i32);
+    u32 offset_bits = (pow5_offset(i / (16 as u32)) >> ((i % (16 as u32)) * (2 as u32))) & (3 as u32);
+    u128 shifted = (b0 >> delta) + (b2 << (64 - delta)) + (offset_bits as u128);
+    return {shifted as u64, (shifted >> 64) as u64};
+}
+
+U64Pair double_compute_inv_pow5(u32 i) {
+    u32 base = (i + (25 as u32)) / (26 as u32);
+    u32 base2 = base * (26 as u32);
+    u32 offset = base2 - i;
+    U64Pair mul = double_pow5_inv_split2(base);
+    if (offset == (0 as u32)) {
+        return mul;
+    }
+
+    u64 m = double_pow5_table(offset);
+    u128 b0 = (m as u128) * ((mul.low - (1 as u64)) as u128);
+    u128 b2 = (m as u128) * (mul.high as u128);
+    i32 delta = pow5bits(base2 as i32) - pow5bits(i as i32);
+    u32 offset_bits = (pow5_inv_offset(i / (16 as u32)) >> ((i % (16 as u32)) * (2 as u32))) & (3 as u32);
+    u128 shifted = (b0 >> delta) + (b2 << (64 - delta)) + (1 as u128) + (offset_bits as u128);
+    return {shifted as u64, (shifted >> 64) as u64};
+}
+
+u64 mul_shift64(u64 m, U64Pair mul, i32 j) {
+    u128 b0 = (m as u128) * (mul.low as u128);
+    u128 b2 = (m as u128) * (mul.high as u128);
+    return ((((b0 >> 64) + b2) >> (j - 64)) as u64);
+}
+
+u64 mul_shift_all64(u64 m, U64Pair mul, i32 j, &mut u64 vp, &mut u64 vm, u32 mm_shift) {
+    *vp = mul_shift64(m * (4 as u64) + (2 as u64), mul, j);
+    *vm = mul_shift64(m * (4 as u64) - (1 as u64) - (mm_shift as u64), mul, j);
+    return mul_shift64(m * (4 as u64), mul, j);
+}
+
+u32 mul_shift32(u32 m, u64 factor, i32 shift) {
+    u128 product = (m as u128) * (factor as u128);
+    return (product >> shift) as u32;
+}
+
+u32 mul_pow5_inv_div_pow2(u32 m, u32 q, i32 j) {
+    U64Pair mul = double_compute_inv_pow5(q);
+    return mul_shift32(m, mul.high + (1 as u64), j);
+}
+
+u32 mul_pow5_div_pow2(u32 m, u32 i, i32 j) {
+    U64Pair mul = double_compute_pow5(i);
+    return mul_shift32(m, mul.high, j);
+}
+
+bool d2d_small_int(u64 ieee_mantissa, u32 ieee_exponent, &mut FloatingDecimal64 out) {
+    u64 m2 = ((1 as u64) << 52) | ieee_mantissa;
+    i32 e2 = (ieee_exponent as i32) - 1023 - 52;
+
+    if (e2 > 0 || e2 < -52) {
+        return false;
+    }
+
+    u64 mask = (((1 as u64) << (0 - e2)) - (1 as u64));
+    if ((m2 & mask) != (0 as u64)) {
+        return false;
+    }
+
+    out.mantissa = m2 >> (0 - e2);
+    out.exponent = 0;
+    return true;
+}
+
+FloatingDecimal64 d2d(u64 ieee_mantissa, u32 ieee_exponent) {
+    i32 e2 = 0;
+    u64 m2 = 0 as u64;
+    if (ieee_exponent == (0 as u32)) {
+        e2 = 1 - 1023 - 52 - 2;
+        m2 = ieee_mantissa;
+    } else {
+        e2 = (ieee_exponent as i32) - 1023 - 52 - 2;
+        m2 = ((1 as u64) << 52) | ieee_mantissa;
+    }
+
+    bool even = (m2 & (1 as u64)) == (0 as u64);
+    bool accept_bounds = even;
+    u64 mv = (4 as u64) * m2;
+    u32 mm_shift = 0 as u32;
+    if (ieee_mantissa != (0 as u64) || ieee_exponent <= (1 as u32)) {
+        mm_shift = 1 as u32;
+    }
+
+    u64 vr = 0 as u64;
+    u64 vp = 0 as u64;
+    u64 vm = 0 as u64;
+    i32 e10 = 0;
+    bool vm_is_trailing_zeros = false;
+    bool vr_is_trailing_zeros = false;
+
+    if (e2 >= 0) {
+        u32 q = log10_pow2(e2);
+        if (e2 > 3) {
+            q = q - (1 as u32);
+        }
+        e10 = q as i32;
+        i32 k = 125 + pow5bits(q as i32) - 1;
+        i32 i = 0 - e2 + (q as i32) + k;
+        U64Pair pow5 = double_compute_inv_pow5(q);
+        vr = mul_shift_all64(m2, pow5, i, &mut vp, &mut vm, mm_shift);
+
+        if (q <= (21 as u32)) {
+            u64 mv_mod5 = mv % (5 as u64);
+            if (mv_mod5 == (0 as u64)) {
+                vr_is_trailing_zeros = multiple_of_power_of_5_64(mv, q);
+            } else {
+                if (accept_bounds) {
+                    vm_is_trailing_zeros = multiple_of_power_of_5_64(mv - (1 as u64) - (mm_shift as u64), q);
+                } else {
+                    if (multiple_of_power_of_5_64(mv + (2 as u64), q)) {
+                        vp = vp - (1 as u64);
+                    }
+                }
+            }
+        }
+    } else {
+        u32 q = log10_pow5(0 - e2);
+        if ((0 - e2) > 1) {
+            q = q - (1 as u32);
+        }
+        e10 = (q as i32) + e2;
+        i32 i = (0 - e2) - (q as i32);
+        i32 k = pow5bits(i) - 125;
+        i32 j = (q as i32) - k;
+        U64Pair pow5 = double_compute_pow5(i as u32);
+        vr = mul_shift_all64(m2, pow5, j, &mut vp, &mut vm, mm_shift);
+
+        if (q <= (1 as u32)) {
+            vr_is_trailing_zeros = true;
+            if (accept_bounds) {
+                vm_is_trailing_zeros = mm_shift == (1 as u32);
+            } else {
+                vp = vp - (1 as u64);
+            }
+        } else {
+            if (q < (63 as u32)) {
+                vr_is_trailing_zeros = multiple_of_power_of_2_64(mv, q);
+            }
+        }
+    }
+
+    i32 removed = 0;
+    u32 last_removed_digit = 0 as u32;
+    u64 output = 0 as u64;
+
+    if (vm_is_trailing_zeros || vr_is_trailing_zeros) {
+        while (true) {
+            u64 vp_div10 = vp / (10 as u64);
+            u64 vm_div10 = vm / (10 as u64);
+            if (vp_div10 <= vm_div10) {
+                break;
+            }
+
+            u32 vm_mod10 = (vm % (10 as u64)) as u32;
+            u64 vr_div10 = vr / (10 as u64);
+            u32 vr_mod10 = (vr % (10 as u64)) as u32;
+
+            if (vm_mod10 != (0 as u32)) {
+                vm_is_trailing_zeros = false;
+            }
+            if (last_removed_digit != (0 as u32)) {
+                vr_is_trailing_zeros = false;
+            }
+
+            last_removed_digit = vr_mod10;
+            vr = vr_div10;
+            vp = vp_div10;
+            vm = vm_div10;
+            removed++;
+        }
+
+        if (vm_is_trailing_zeros) {
+            while (true) {
+                u64 vm_div10 = vm / (10 as u64);
+                u32 vm_mod10 = (vm % (10 as u64)) as u32;
+                if (vm_mod10 != (0 as u32)) {
+                    break;
+                }
+
+                u64 vp_div10 = vp / (10 as u64);
+                u64 vr_div10 = vr / (10 as u64);
+                u32 vr_mod10 = (vr % (10 as u64)) as u32;
+
+                if (last_removed_digit != (0 as u32)) {
+                    vr_is_trailing_zeros = false;
+                }
+
+                last_removed_digit = vr_mod10;
+                vr = vr_div10;
+                vp = vp_div10;
+                vm = vm_div10;
+                removed++;
+            }
+        }
+
+        if (vr_is_trailing_zeros && last_removed_digit == (5 as u32) && (vr % (2 as u64)) == (0 as u64)) {
+            last_removed_digit = 4 as u32;
+        }
+
+        output = vr;
+        if ((vr == vm && (!accept_bounds || !vm_is_trailing_zeros)) || last_removed_digit >= (5 as u32)) {
+            output = output + (1 as u64);
+        }
+    } else {
+        bool round_up = false;
+        u64 vp_div100 = vp / (100 as u64);
+        u64 vm_div100 = vm / (100 as u64);
+        if (vp_div100 > vm_div100) {
+            u64 vr_div100 = vr / (100 as u64);
+            u32 vr_mod100 = (vr % (100 as u64)) as u32;
+            round_up = vr_mod100 >= (50 as u32);
+            vr = vr_div100;
+            vp = vp_div100;
+            vm = vm_div100;
+            removed = removed + 2;
+        }
+
+        while (true) {
+            u64 vp_div10 = vp / (10 as u64);
+            u64 vm_div10 = vm / (10 as u64);
+            if (vp_div10 <= vm_div10) {
+                break;
+            }
+
+            u64 vr_div10 = vr / (10 as u64);
+            u32 vr_mod10 = (vr % (10 as u64)) as u32;
+            round_up = vr_mod10 >= (5 as u32);
+            vr = vr_div10;
+            vp = vp_div10;
+            vm = vm_div10;
+            removed++;
+        }
+
+        output = vr;
+        if (vr == vm || round_up) {
+            output = output + (1 as u64);
+        }
+    }
+
+    return {output, e10 + removed};
+}
+
+FloatingDecimal32 f2d(u32 ieee_mantissa, u32 ieee_exponent) {
+    i32 e2 = 0;
+    u32 m2 = 0 as u32;
+    if (ieee_exponent == (0 as u32)) {
+        e2 = 1 - 127 - 23 - 2;
+        m2 = ieee_mantissa;
+    } else {
+        e2 = (ieee_exponent as i32) - 127 - 23 - 2;
+        m2 = ((1 as u32) << 23) | ieee_mantissa;
+    }
+
+    bool even = (m2 & (1 as u32)) == (0 as u32);
+    bool accept_bounds = even;
+    u32 mv = (4 as u32) * m2;
+    u32 mp = (4 as u32) * m2 + (2 as u32);
+    u32 mm_shift = 0 as u32;
+    if (ieee_mantissa != (0 as u32) || ieee_exponent <= (1 as u32)) {
+        mm_shift = 1 as u32;
+    }
+    u32 mm = (4 as u32) * m2 - (1 as u32) - mm_shift;
+
+    u32 vr = 0 as u32;
+    u32 vp = 0 as u32;
+    u32 vm = 0 as u32;
+    i32 e10 = 0;
+    bool vm_is_trailing_zeros = false;
+    bool vr_is_trailing_zeros = false;
+    u32 last_removed_digit = 0 as u32;
+
+    if (e2 >= 0) {
+        u32 q = log10_pow2(e2);
+        e10 = q as i32;
+        i32 k = 61 + pow5bits(q as i32) - 1;
+        i32 i = 0 - e2 + (q as i32) + k;
+        vr = mul_pow5_inv_div_pow2(mv, q, i);
+        vp = mul_pow5_inv_div_pow2(mp, q, i);
+        vm = mul_pow5_inv_div_pow2(mm, q, i);
+
+        if (q != (0 as u32) && ((vp - (1 as u32)) / (10 as u32)) <= (vm / (10 as u32))) {
+            i32 l = 61 + pow5bits((q - (1 as u32)) as i32) - 1;
+            last_removed_digit = mul_pow5_inv_div_pow2(
+                mv,
+                q - (1 as u32),
+                0 - e2 + (q as i32) - 1 + l
+            ) % (10 as u32);
+        }
+
+        if (q <= (9 as u32)) {
+            if ((mv % (5 as u32)) == (0 as u32)) {
+                vr_is_trailing_zeros = multiple_of_power_of_5_32(mv, q);
+            } else {
+                if (accept_bounds) {
+                    vm_is_trailing_zeros = multiple_of_power_of_5_32(mm, q);
+                } else {
+                    if (multiple_of_power_of_5_32(mp, q)) {
+                        vp = vp - (1 as u32);
+                    }
+                }
+            }
+        }
+    } else {
+        u32 q = log10_pow5(0 - e2);
+        e10 = (q as i32) + e2;
+        i32 i = (0 - e2) - (q as i32);
+        i32 k = pow5bits(i) - 61;
+        i32 j = (q as i32) - k;
+        vr = mul_pow5_div_pow2(mv, i as u32, j);
+        vp = mul_pow5_div_pow2(mp, i as u32, j);
+        vm = mul_pow5_div_pow2(mm, i as u32, j);
+
+        if (q != (0 as u32) && ((vp - (1 as u32)) / (10 as u32)) <= (vm / (10 as u32))) {
+            i32 next_j = (q as i32) - 1 - (pow5bits(i + 1) - 61);
+            last_removed_digit = mul_pow5_div_pow2(mv, (i + 1) as u32, next_j) % (10 as u32);
+        }
+
+        if (q <= (1 as u32)) {
+            vr_is_trailing_zeros = true;
+            if (accept_bounds) {
+                vm_is_trailing_zeros = mm_shift == (1 as u32);
+            } else {
+                vp = vp - (1 as u32);
+            }
+        } else {
+            if (q < (31 as u32)) {
+                vr_is_trailing_zeros = multiple_of_power_of_2_32(mv, q - (1 as u32));
+            }
+        }
+    }
+
+    i32 removed = 0;
+    u32 output = 0 as u32;
+
+    if (vm_is_trailing_zeros || vr_is_trailing_zeros) {
+        while ((vp / (10 as u32)) > (vm / (10 as u32))) {
+            if ((vm % (10 as u32)) != (0 as u32)) {
+                vm_is_trailing_zeros = false;
+            }
+            if (last_removed_digit != (0 as u32)) {
+                vr_is_trailing_zeros = false;
+            }
+
+            last_removed_digit = vr % (10 as u32);
+            vr = vr / (10 as u32);
+            vp = vp / (10 as u32);
+            vm = vm / (10 as u32);
+            removed++;
+        }
+
+        if (vm_is_trailing_zeros) {
+            while ((vm % (10 as u32)) == (0 as u32)) {
+                if (last_removed_digit != (0 as u32)) {
+                    vr_is_trailing_zeros = false;
+                }
+
+                last_removed_digit = vr % (10 as u32);
+                vr = vr / (10 as u32);
+                vp = vp / (10 as u32);
+                vm = vm / (10 as u32);
+                removed++;
+            }
+        }
+
+        if (vr_is_trailing_zeros && last_removed_digit == (5 as u32) && (vr % (2 as u32)) == (0 as u32)) {
+            last_removed_digit = 4 as u32;
+        }
+
+        output = vr;
+        if ((vr == vm && (!accept_bounds || !vm_is_trailing_zeros)) || last_removed_digit >= (5 as u32)) {
+            output = output + (1 as u32);
+        }
+    } else {
+        while ((vp / (10 as u32)) > (vm / (10 as u32))) {
+            last_removed_digit = vr % (10 as u32);
+            vr = vr / (10 as u32);
+            vp = vp / (10 as u32);
+            vm = vm / (10 as u32);
+            removed++;
+        }
+
+        output = vr;
+        if (vr == vm || last_removed_digit >= (5 as u32)) {
+            output = output + (1 as u32);
+        }
+    }
+
+    return {output, e10 + removed};
+}
+
+bool append_exponent(char* out, i64 capacity, &mut i64 len, i32 exponent) {
+    if (!checked_push_char(out, capacity, &mut len, 'e')) {
+        return false;
+    }
+
+    i32 abs_exp = exponent;
+    if (exponent < 0) {
+        if (!checked_push_char(out, capacity, &mut len, '-')) {
+            return false;
+        }
+        abs_exp = 0 - exponent;
+    } else {
+        if (!checked_push_char(out, capacity, &mut len, '+')) {
+            return false;
+        }
+    }
+
+    if (abs_exp >= 100) {
+        if (!checked_push_digit(out, capacity, &mut len, (abs_exp / 100) as i64)) {
+            return false;
+        }
+        if (!checked_push_digit(out, capacity, &mut len, ((abs_exp / 10) % 10) as i64)) {
+            return false;
+        }
+        return checked_push_digit(out, capacity, &mut len, (abs_exp % 10) as i64);
+    }
+
+    if (!checked_push_digit(out, capacity, &mut len, (abs_exp / 10) as i64)) {
+        return false;
+    }
+    return checked_push_digit(out, capacity, &mut len, (abs_exp % 10) as i64);
+}
+
+bool append_fixed_decimal(char* out, i64 capacity, &mut i64 len, u64 mantissa, i32 exponent) {
+    u32 digits = decimal_length_u64(mantissa);
+    if (exponent >= 0) {
+        if (!checked_append_u64_digits(out, capacity, &mut len, mantissa)) {
+            return false;
+        }
+        i32 i = 0;
+        while (i < exponent) {
+            if (!checked_push_char(out, capacity, &mut len, '0')) {
+                return false;
+            }
+            i++;
+        }
+        return true;
+    }
+
+    i32 dot_pos = (digits as i32) + exponent;
+    if (dot_pos > 0) {
+        i64 right_digits = (digits as i64) - (dot_pos as i64);
+        u64 divisor = pow10_u64(right_digits);
+        u64 left = mantissa / divisor;
+        u64 right = mantissa % divisor;
+        if (!checked_append_u64_digits(out, capacity, &mut len, left)) {
+            return false;
+        }
+        if (!checked_push_char(out, capacity, &mut len, '.')) {
+            return false;
+        }
+        return checked_append_u64_zero_padded(out, capacity, &mut len, right, right_digits);
+    }
+
+    if (!checked_push_char(out, capacity, &mut len, '0')) {
+        return false;
+    }
+    if (!checked_push_char(out, capacity, &mut len, '.')) {
+        return false;
+    }
+
+    i32 zeroes = 0 - dot_pos;
+    i32 i = 0;
+    while (i < zeroes) {
+        if (!checked_push_char(out, capacity, &mut len, '0')) {
+            return false;
+        }
+        i++;
+    }
+    return checked_append_u64_digits(out, capacity, &mut len, mantissa);
+}
+
+bool append_scientific_decimal(char* out, i64 capacity, &mut i64 len, u64 mantissa, i32 exponent) {
+    u32 digits = decimal_length_u64(mantissa);
+    if (digits == (1 as u32)) {
+        if (!checked_append_u64_digits(out, capacity, &mut len, mantissa)) {
+            return false;
+        }
+    } else {
+        i64 tail_digits = (digits as i64) - 1;
+        u64 divisor = pow10_u64(tail_digits);
+        u64 first = mantissa / divisor;
+        u64 rest = mantissa % divisor;
+        if (!checked_push_digit(out, capacity, &mut len, first as i64)) {
+            return false;
+        }
+        if (!checked_push_char(out, capacity, &mut len, '.')) {
+            return false;
+        }
+        if (!checked_append_u64_zero_padded(out, capacity, &mut len, rest, tail_digits)) {
+            return false;
+        }
+    }
+
+    i32 scientific_exponent = exponent + (digits as i32) - 1;
+    return append_exponent(out, capacity, &mut len, scientific_exponent);
+}
+
+i64 format_general(char* out, i64 capacity, bool sign, u64 mantissa, i32 exponent) {
+    if (out == ptr.null<char>() || capacity <= 0) {
+        return -1;
+    }
+
+    i64 len = 0;
+    zero_terminate(out, capacity);
+
+    if (sign) {
+        if (!checked_push_char(out, capacity, &mut len, '-')) {
+            return -1;
+        }
+    }
+
+    u32 digits = decimal_length_u64(mantissa);
+    i32 scientific_exponent = exponent + (digits as i32) - 1;
+    bool use_scientific = scientific_exponent < -4 || scientific_exponent >= 6;
+
+    if (use_scientific) {
+        if (!append_scientific_decimal(out, capacity, &mut len, mantissa, exponent)) {
+            return -1;
+        }
+        return len;
+    }
+
+    if (!append_fixed_decimal(out, capacity, &mut len, mantissa, exponent)) {
+        return -1;
+    }
+    return len;
+}
+
+i64 write_special(char* out, i64 capacity, bool sign, bool exponent_all_ones, bool mantissa_nonzero) {
+    if (out == ptr.null<char>() || capacity <= 0) {
+        return -1;
+    }
+
+    i64 len = 0;
+    zero_terminate(out, capacity);
+
+    if (mantissa_nonzero) {
+        if (!checked_append_literal(out, capacity, &mut len, "nan")) {
+            return -1;
+        }
+        return len;
+    }
+
+    if (sign) {
+        if (!checked_push_char(out, capacity, &mut len, '-')) {
+            return -1;
+        }
+    }
+
+    if (exponent_all_ones) {
+        if (!checked_append_literal(out, capacity, &mut len, "inf")) {
+            return -1;
+        }
+        return len;
+    }
+
+    if (!checked_push_char(out, capacity, &mut len, '0')) {
+        return -1;
+    }
+    return len;
+}
+
+export i64 write_f64(char* out, i64 capacity, f64 value) {
+    u64 bits = f64_to_bits(value);
+    bool sign = ((bits >> 63) & (1 as u64)) != (0 as u64);
+    u64 ieee_mantissa = bits & (((1 as u64) << 52) - (1 as u64));
+    u32 ieee_exponent = ((bits >> 52) & (((1 as u64) << 11) - (1 as u64))) as u32;
+
+    if (ieee_exponent == (((1 as u32) << 11) - (1 as u32)) || (ieee_exponent == (0 as u32) && ieee_mantissa == (0 as u64))) {
+        return write_special(out, capacity, sign, ieee_exponent == (((1 as u32) << 11) - (1 as u32)), ieee_mantissa != (0 as u64));
+    }
+
+    FloatingDecimal64 fd = {0 as u64, 0};
+    if (d2d_small_int(ieee_mantissa, ieee_exponent, &mut fd)) {
+        while ((fd.mantissa % (10 as u64)) == (0 as u64)) {
+            fd.mantissa = fd.mantissa / (10 as u64);
+            fd.exponent++;
+        }
+    } else {
+        fd = d2d(ieee_mantissa, ieee_exponent);
+    }
+
+    return format_general(out, capacity, sign, fd.mantissa, fd.exponent);
+}
+
+export i64 write_f32(char* out, i64 capacity, f32 value) {
+    u32 bits = f32_to_bits(value);
+    bool sign = ((bits >> 31) & (1 as u32)) != (0 as u32);
+    u32 ieee_mantissa = bits & (((1 as u32) << 23) - (1 as u32));
+    u32 ieee_exponent = (bits >> 23) & (((1 as u32) << 8) - (1 as u32));
+
+    if (ieee_exponent == (((1 as u32) << 8) - (1 as u32)) || (ieee_exponent == (0 as u32) && ieee_mantissa == (0 as u32))) {
+        return write_special(out, capacity, sign, ieee_exponent == (((1 as u32) << 8) - (1 as u32)), ieee_mantissa != (0 as u32));
+    }
+
+    FloatingDecimal32 fd = f2d(ieee_mantissa, ieee_exponent);
+    return format_general(out, capacity, sign, fd.mantissa as u64, fd.exponent);
+}
