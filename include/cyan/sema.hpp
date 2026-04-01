@@ -187,6 +187,11 @@ class SemanticAnalyzer {
         const Type* type = nullptr;
     };
 
+    struct ViewShape {
+        const Type* type = nullptr;
+        std::vector<ViewLeafInfo> leaves;
+    };
+
     enum class MergePolicy : std::uint8_t {
         Join,
         Exact,
@@ -273,15 +278,34 @@ class SemanticAnalyzer {
                        ast::MemberExpr& member)
         -> std::expected<const Type*, Diagnostic>;
     [[nodiscard]] auto typeContainsViews(const Type* type) const -> bool;
-    auto collectViewLeafInfos(const Type* type,
-                              std::vector<std::uint32_t> prefix = {}) const
-        -> std::vector<ViewLeafInfo>;
+    [[nodiscard]] auto viewShape(const Type* type) const -> const ViewShape&;
+    [[nodiscard]] auto collectViewLeafInfos(const Type* type) const
+        -> const std::vector<ViewLeafInfo>&;
     auto resolveDependencyPath(ast::DependencyPath& path, const Type* root_type,
                                std::optional<std::size_t> parameter_index,
                                bool allow_borrow_projection = false)
         -> std::expected<void, Diagnostic>;
     auto validateReturnDependencies(ast::FunctionDecl& decl)
         -> std::expected<void, Diagnostic>;
+    [[nodiscard]] auto
+    findViewBinding(std::vector<ViewLeafBinding>& bindings,
+                    const std::vector<std::uint32_t>& path) const
+        -> ViewLeafBinding*;
+    [[nodiscard]] auto
+    findViewBinding(const std::vector<ViewLeafBinding>& bindings,
+                    const std::vector<std::uint32_t>& path) const
+        -> const ViewLeafBinding*;
+    [[nodiscard]] auto bindingPlaces(const ViewLeafBinding& binding) const
+        -> const std::vector<ast::ResolvedPlace>*;
+    auto extendBindingsWithProjectedPointee(
+        FunctionState& state, std::vector<ViewLeafBinding>& bindings,
+        const Type* parameter_type, bool clear_mut_source_locals,
+        SourceRange range) -> std::expected<void, Diagnostic>;
+    auto buildLeafDependencyBinding(
+        const ast::ReturnDependency& dependency,
+        const std::vector<ViewLeafBinding>& source_bindings,
+        bool include_target_prefix, SourceRange range) const
+        -> std::expected<ViewLeafBinding, Diagnostic>;
     [[nodiscard]] auto viewSlotKey(bool is_external, std::size_t root_id,
                                    const std::vector<std::uint32_t>& path) const
         -> std::string;
@@ -563,6 +587,7 @@ class SemanticAnalyzer {
     std::unordered_map<const ast::Module*, bool> building_visible_scopes;
     std::unordered_map<std::string, std::vector<ast::FunctionDecl*>>
         package_impls;
+    mutable std::unordered_map<const Type*, ViewShape> view_shapes;
     std::unordered_map<std::string, ast::StructDecl*> instantiated_structs;
     std::unordered_map<std::string, ast::EnumDecl*> instantiated_enums;
     std::unordered_map<std::string, ast::FunctionDecl*> instantiated_functions;

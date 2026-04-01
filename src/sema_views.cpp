@@ -52,65 +52,185 @@ auto SemanticAnalyzer::typeContainsViews(const Type* type) const -> bool {
     }
 }
 
-auto SemanticAnalyzer::collectViewLeafInfos(
-    const Type* type, std::vector<std::uint32_t> prefix) const
-    -> std::vector<ViewLeafInfo> {
-    std::vector<ViewLeafInfo> leaves;
+auto SemanticAnalyzer::viewShape(const Type* type) const -> const ViewShape& {
+    static const ViewShape empty_shape{};
     if (type == nullptr) {
-        return leaves;
-    }
-    if (is_view_like_type(types, type)) {
-        leaves.push_back(ViewLeafInfo{std::move(prefix), type});
-        return leaves;
+        return empty_shape;
     }
 
-    type = types.unqualify(type);
-    switch (type->kind) {
-    case TypeKind::Array: {
-        if (type->array_size == 0) {
-            break;
-        }
-        auto next_prefix = prefix;
-        next_prefix.push_back(INDEX_FIELD_SENTINEL);
-        auto element_leaves =
-            collectViewLeafInfos(type->element_type, std::move(next_prefix));
-        leaves.insert(leaves.end(), element_leaves.begin(),
-                      element_leaves.end());
-        break;
+    const auto* shape_key = types.unqualify(type);
+    if (const auto it = view_shapes.find(shape_key); it != view_shapes.end()) {
+        return it->second;
     }
-    case TypeKind::Struct:
-        for (std::size_t index = 0; index < type->struct_decl->fields.size();
-             ++index) {
-            auto next_prefix = prefix;
-            next_prefix.push_back(static_cast<std::uint32_t>(index));
-            auto field_leaves = collectViewLeafInfos(
-                type->struct_decl->fields[index].resolved_type,
-                std::move(next_prefix));
-            leaves.insert(leaves.end(), field_leaves.begin(),
-                          field_leaves.end());
+
+    ViewShape shape;
+    shape.type = shape_key;
+    std::function<std::vector<ViewLeafInfo>(const Type*,
+                                            std::vector<std::uint32_t>)>
+        collect =
+            [&](const Type* current_type, std::vector<std::uint32_t> prefix)
+        -> std::vector<ViewLeafInfo> {
+        std::vector<ViewLeafInfo> leaves;
+        if (current_type == nullptr) {
+            return leaves;
         }
-        break;
-    case TypeKind::Enum:
-        for (std::size_t index = 0; index < type->enum_decl->variants.size();
-             ++index) {
-            const auto& variant = type->enum_decl->variants[index];
-            if (variant.resolved_type == nullptr ||
-                !typeContainsViews(variant.resolved_type)) {
-                continue;
+        if (is_view_like_type(types, current_type)) {
+            leaves.push_back(ViewLeafInfo{std::move(prefix), current_type});
+            return leaves;
+        }
+
+        current_type = types.unqualify(current_type);
+        switch (current_type->kind) {
+        case TypeKind::Array: {
+            if (current_type->array_size == 0) {
+                break;
             }
             auto next_prefix = prefix;
-            next_prefix.push_back(ENUM_PAYLOAD_SENTINEL);
-            next_prefix.push_back(static_cast<std::uint32_t>(index));
-            auto payload_leaves = collectViewLeafInfos(variant.resolved_type,
-                                                       std::move(next_prefix));
-            leaves.insert(leaves.end(), payload_leaves.begin(),
-                          payload_leaves.end());
+            next_prefix.push_back(INDEX_FIELD_SENTINEL);
+            auto element_leaves =
+                collect(current_type->element_type, std::move(next_prefix));
+            leaves.insert(leaves.end(),
+                          std::make_move_iterator(element_leaves.begin()),
+                          std::make_move_iterator(element_leaves.end()));
+            break;
         }
-        break;
-    default:
-        break;
+        case TypeKind::Struct:
+            for (std::size_t index = 0;
+                 index < current_type->struct_decl->fields.size(); ++index) {
+                auto next_prefix = prefix;
+                next_prefix.push_back(static_cast<std::uint32_t>(index));
+                auto field_leaves = collect(
+                    current_type->struct_decl->fields[index].resolved_type,
+                    std::move(next_prefix));
+                leaves.insert(leaves.end(),
+                              std::make_move_iterator(field_leaves.begin()),
+                              std::make_move_iterator(field_leaves.end()));
+            }
+            break;
+        case TypeKind::Enum:
+            for (std::size_t index = 0;
+                 index < current_type->enum_decl->variants.size(); ++index) {
+                const auto& variant = current_type->enum_decl->variants[index];
+                if (variant.resolved_type == nullptr) {
+                    continue;
+                }
+                auto payload_leaves = collect(variant.resolved_type, {});
+                if (payload_leaves.empty()) {
+                    continue;
+                }
+                for (auto& leaf : payload_leaves) {
+                    leaf.path.insert(leaf.path.begin(),
+                                     static_cast<std::uint32_t>(index));
+                    leaf.path.insert(leaf.path.begin(), ENUM_PAYLOAD_SENTINEL);
+                    leaf.path.insert(leaf.path.begin(), prefix.begin(),
+                                     prefix.end());
+                }
+                leaves.insert(leaves.end(),
+                              std::make_move_iterator(payload_leaves.begin()),
+                              std::make_move_iterator(payload_leaves.end()));
+            }
+            break;
+        default:
+            break;
+        }
+        return leaves;
+    };
+    shape.leaves = collect(shape_key, {});
+    const auto [inserted_it, _] =
+        view_shapes.emplace(shape_key, std::move(shape));
+    return inserted_it->second;
+}
+
+auto SemanticAnalyzer::collectViewLeafInfos(const Type* type) const
+    -> const std::vector<ViewLeafInfo>& {
+    return viewShape(type).leaves;
+}
+
+auto SemanticAnalyzer::findViewBinding(
+    std::vector<ViewLeafBinding>& bindings,
+    const std::vector<std::uint32_t>& path) const -> ViewLeafBinding* {
+    const auto it =
+        std::ranges::find_if(bindings, [&](const ViewLeafBinding& binding) {
+            return binding.path == path;
+        });
+    return it == bindings.end() ? nullptr : &(*it);
+}
+
+auto SemanticAnalyzer::findViewBinding(
+    const std::vector<ViewLeafBinding>& bindings,
+    const std::vector<std::uint32_t>& path) const -> const ViewLeafBinding* {
+    const auto it =
+        std::ranges::find_if(bindings, [&](const ViewLeafBinding& binding) {
+            return binding.path == path;
+        });
+    return it == bindings.end() ? nullptr : &(*it);
+}
+
+auto SemanticAnalyzer::bindingPlaces(const ViewLeafBinding& binding) const
+    -> const std::vector<ast::ResolvedPlace>* {
+    if (binding.type != nullptr &&
+        is_direct_shared_view_slice(types, binding.type) &&
+        !binding.element_sources.empty()) {
+        return &binding.element_sources;
     }
-    return leaves;
+    if (!binding.source_places.empty()) {
+        return &binding.source_places;
+    }
+    return nullptr;
+}
+
+auto SemanticAnalyzer::extendBindingsWithProjectedPointee(
+    FunctionState& state, std::vector<ViewLeafBinding>& bindings,
+    const Type* parameter_type, bool clear_mut_source_locals, SourceRange range)
+    -> std::expected<void, Diagnostic> {
+    if (parameter_type == nullptr || parameter_type->kind != TypeKind::Borrow ||
+        parameter_type->element_type == nullptr) {
+        return {};
+    }
+
+    auto* top_level_binding = findViewBinding(bindings, {});
+    if (top_level_binding == nullptr) {
+        return unexpected_result<void>(
+            "dependency source is missing a tracked borrow or slice leaf",
+            range);
+    }
+    auto projected_bindings = collectProjectedViewBindings(
+        state, top_level_binding->source_places, parameter_type->element_type);
+    if (!projected_bindings) {
+        return std::unexpected(projected_bindings.error());
+    }
+    if (clear_mut_source_locals && parameter_type->is_mut) {
+        for (auto& binding : *projected_bindings) {
+            binding.source_local_id.reset();
+        }
+    }
+    bindings.insert(bindings.end(),
+                    std::make_move_iterator(projected_bindings->begin()),
+                    std::make_move_iterator(projected_bindings->end()));
+    return {};
+}
+
+auto SemanticAnalyzer::buildLeafDependencyBinding(
+    const ast::ReturnDependency& dependency,
+    const std::vector<ViewLeafBinding>& source_bindings,
+    bool include_target_prefix, SourceRange range) const
+    -> std::expected<ViewLeafBinding, Diagnostic> {
+    const auto* source_binding =
+        findViewBinding(source_bindings, dependency.source.resolved_path);
+    if (source_binding == nullptr) {
+        return unexpected_result<ViewLeafBinding>(
+            "dependency source is missing a tracked borrow or slice leaf",
+            range);
+    }
+
+    return ViewLeafBinding{
+        .path = include_target_prefix ? dependency.target.resolved_path
+                                      : std::vector<std::uint32_t>{},
+        .source_places = source_binding->source_places,
+        .source_local_id = source_binding->source_local_id,
+        .element_sources = source_binding->element_sources,
+        .type = dependency.target.resolved_type,
+    };
 }
 
 auto SemanticAnalyzer::viewSlotKey(bool is_external, std::size_t root_id,
@@ -686,15 +806,6 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                                                          .parameter_index] =
                     true;
             }
-            auto find_binding =
-                [](std::vector<ViewLeafBinding>& candidates,
-                   const std::vector<std::uint32_t>& path) -> ViewLeafBinding* {
-                const auto it = std::ranges::find_if(
-                    candidates, [&](const ViewLeafBinding& binding) {
-                        return binding.path == path;
-                    });
-                return it == candidates.end() ? nullptr : &(*it);
-            };
 
             for (const auto& dependency : call->function->return_dependencies) {
                 if (!dependency.target.is_return) {
@@ -711,38 +822,13 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                         return std::unexpected(argument_bindings.error());
                     }
                     if (include_projected_argument_bindings[parameter_index]) {
-                        const auto* parameter_type =
+                        auto extended = extendBindingsWithProjectedPointee(
+                            state, *argument_bindings,
                             call->function->parameters[parameter_index]
-                                .resolved_type;
-                        if (parameter_type != nullptr &&
-                            parameter_type->kind == TypeKind::Borrow &&
-                            parameter_type->element_type != nullptr) {
-                            const auto top_level_it = std::ranges::find_if(
-                                *argument_bindings,
-                                [](const ViewLeafBinding& binding) {
-                                    return binding.path.empty();
-                                });
-                            if (top_level_it == argument_bindings->end()) {
-                                return unexpected_result<
-                                    std::vector<ViewLeafBinding>>(
-                                    "call dependency source is missing a "
-                                    "tracked borrow or slice leaf",
-                                    expr.range);
-                            }
-                            auto projected_bindings =
-                                collectProjectedViewBindings(
-                                    state, top_level_it->source_places,
-                                    parameter_type->element_type);
-                            if (!projected_bindings) {
-                                return std::unexpected(
-                                    projected_bindings.error());
-                            }
-                            argument_bindings->insert(
-                                argument_bindings->end(),
-                                std::make_move_iterator(
-                                    projected_bindings->begin()),
-                                std::make_move_iterator(
-                                    projected_bindings->end()));
+                                .resolved_type,
+                            false, expr.range);
+                        if (!extended) {
+                            return std::unexpected(extended.error());
                         }
                     }
                     cached_arguments[parameter_index] =
@@ -750,37 +836,13 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                     argument_ready[parameter_index] = true;
                 }
 
-                const auto target_leaves =
-                    collectViewLeafInfos(dependency.target.resolved_type);
-                const auto source_leaves =
-                    collectViewLeafInfos(dependency.source.resolved_type);
-                for (std::size_t index = 0; index < target_leaves.size();
-                     ++index) {
-                    auto source_path = dependency.source.resolved_path;
-                    source_path.insert(source_path.end(),
-                                       source_leaves[index].path.begin(),
-                                       source_leaves[index].path.end());
-                    auto* source_binding = find_binding(
-                        cached_arguments[parameter_index], source_path);
-                    if (source_binding == nullptr) {
-                        return unexpected_result<std::vector<ViewLeafBinding>>(
-                            "call dependency source is missing a tracked "
-                            "borrow or slice leaf",
-                            expr.range);
-                    }
-
-                    auto target_path = dependency.target.resolved_path;
-                    target_path.insert(target_path.end(),
-                                       target_leaves[index].path.begin(),
-                                       target_leaves[index].path.end());
-                    bindings.push_back(ViewLeafBinding{
-                        .path = std::move(target_path),
-                        .source_places = source_binding->source_places,
-                        .source_local_id = source_binding->source_local_id,
-                        .element_sources = source_binding->element_sources,
-                        .type = target_leaves[index].type,
-                    });
+                auto binding = buildLeafDependencyBinding(
+                    dependency, cached_arguments[parameter_index], true,
+                    expr.range);
+                if (!binding) {
+                    return std::unexpected(binding.error());
                 }
+                bindings.push_back(std::move(*binding));
             }
             return bindings;
         }

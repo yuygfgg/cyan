@@ -442,6 +442,7 @@ struct FunctionDecl {
     BlockPtr body;
     std::vector<std::size_t> exit_drop_local_ids;
     const Type* resolved_return_type = nullptr;
+    // After semantic validation this is normalized to leaf-level mappings.
     std::vector<ReturnDependency> return_dependencies;
     std::vector<ReturnDependency> declared_return_dependencies;
     const FunctionDecl* template_decl = nullptr;

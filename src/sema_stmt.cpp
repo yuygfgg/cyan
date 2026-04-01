@@ -558,28 +558,6 @@ auto SemanticAnalyzer::analyzeUpdate(FunctionState& state,
 auto SemanticAnalyzer::validateMutableParameterDependencies(
     FunctionState& state, SourceRange range)
     -> std::expected<void, Diagnostic> {
-    auto find_binding =
-        [](std::vector<ViewLeafBinding>& bindings,
-           const std::vector<std::uint32_t>& path) -> ViewLeafBinding* {
-        const auto it =
-            std::ranges::find_if(bindings, [&](const ViewLeafBinding& binding) {
-                return binding.path == path;
-            });
-        return it == bindings.end() ? nullptr : &(*it);
-    };
-    auto binding_places =
-        [&](const ViewLeafBinding& binding) -> std::vector<ast::ResolvedPlace> {
-        if (binding.type != nullptr &&
-            is_direct_shared_view_slice(types, binding.type) &&
-            !binding.element_sources.empty()) {
-            return binding.element_sources;
-        }
-        if (!binding.source_places.empty()) {
-            return binding.source_places;
-        }
-        return {};
-    };
-
     std::unordered_map<std::size_t, std::vector<ViewLeafBinding>>
         cached_parameter_bindings;
     std::vector<bool> include_projected_parameter_bindings(
@@ -602,26 +580,12 @@ auto SemanticAnalyzer::validateMutableParameterDependencies(
             if (!bindings) {
                 return std::unexpected(bindings.error());
             }
-            if (include_projected_parameter_bindings[parameter_index] &&
-                parameter.resolved_type != nullptr &&
-                parameter.resolved_type->kind == TypeKind::Borrow &&
-                parameter.resolved_type->element_type != nullptr) {
-                const auto local_index =
-                    findLocalById(state, parameter.local_id);
-                if (!local_index.has_value()) {
-                    return unexpected_result<std::vector<ViewLeafBinding>*>(
-                        "invalid depends source parameter", range);
+            if (include_projected_parameter_bindings[parameter_index]) {
+                auto extended = extendBindingsWithProjectedPointee(
+                    state, *bindings, parameter.resolved_type, false, range);
+                if (!extended) {
+                    return std::unexpected(extended.error());
                 }
-                auto projected_bindings = collectProjectedViewBindings(
-                    state, topLevelOrigins(state.locals[*local_index]),
-                    parameter.resolved_type->element_type);
-                if (!projected_bindings) {
-                    return std::unexpected(projected_bindings.error());
-                }
-                bindings->insert(
-                    bindings->end(),
-                    std::make_move_iterator(projected_bindings->begin()),
-                    std::make_move_iterator(projected_bindings->end()));
             }
             cached_parameter_bindings.emplace(parameter_index,
                                               std::move(*bindings));
@@ -666,52 +630,44 @@ auto SemanticAnalyzer::validateMutableParameterDependencies(
             return std::unexpected(actual_bindings.error());
         }
 
-        const auto target_leaves =
-            collectViewLeafInfos(dependency.target.resolved_type);
-        const auto source_leaves =
-            collectViewLeafInfos(dependency.source.resolved_type);
-        for (std::size_t leaf_index = 0; leaf_index < target_leaves.size();
-             ++leaf_index) {
-            auto source_path = dependency.source.resolved_path;
-            source_path.insert(source_path.end(),
-                               source_leaves[leaf_index].path.begin(),
-                               source_leaves[leaf_index].path.end());
-            auto* source_binding = find_binding(**source_bindings, source_path);
-            if (source_binding == nullptr) {
-                return make_error("depends source path is missing a tracked "
-                                  "borrow or slice leaf",
-                                  range);
-            }
+        const auto* source_binding =
+            findViewBinding(**source_bindings, dependency.source.resolved_path);
+        if (source_binding == nullptr) {
+            return make_error("depends source path is missing a tracked borrow "
+                              "or slice leaf",
+                              range);
+        }
 
-            auto* actual_binding =
-                find_binding(*actual_bindings, target_leaves[leaf_index].path);
-            if (actual_binding == nullptr) {
-                return make_error("depends target path is missing a tracked "
-                                  "borrow or slice leaf",
-                                  range);
-            }
+        const auto* actual_binding = findViewBinding(*actual_bindings, {});
+        if (actual_binding == nullptr) {
+            return make_error("depends target path is missing a tracked borrow "
+                              "or slice leaf",
+                              range);
+        }
 
-            const auto actual_places = binding_places(*actual_binding);
-            const auto expected_places = binding_places(*source_binding);
-            if (actual_places.empty()) {
-                return make_error("mutable parameter borrow or slice has no "
-                                  "tracked source",
-                                  range);
-            }
-            const auto every_actual_is_covered = std::ranges::all_of(
-                actual_places, [&](const ast::ResolvedPlace& actual_place) {
-                    return std::ranges::any_of(
-                        expected_places,
-                        [&](const ast::ResolvedPlace& expected_place) {
-                            return is_same_or_subplace(actual_place,
-                                                       expected_place);
-                        });
-                });
-            if (expected_places.empty() || !every_actual_is_covered) {
-                return make_error("mutable parameter borrow or slice does not "
-                                  "match its declared depends source",
-                                  range);
-            }
+        const auto* actual_places = bindingPlaces(*actual_binding);
+        const auto* expected_places = bindingPlaces(*source_binding);
+        if (actual_places == nullptr) {
+            return make_error(
+                "mutable parameter borrow or slice has no tracked "
+                "source",
+                range);
+        }
+        const auto every_actual_is_covered = std::ranges::all_of(
+            *actual_places, [&](const ast::ResolvedPlace& actual_place) {
+                return expected_places != nullptr &&
+                       std::ranges::any_of(
+                           *expected_places,
+                           [&](const ast::ResolvedPlace& expected_place) {
+                               return is_same_or_subplace(actual_place,
+                                                          expected_place);
+                           });
+            });
+        if (expected_places == nullptr || !every_actual_is_covered) {
+            return make_error(
+                "mutable parameter borrow or slice does not match "
+                "its declared depends source",
+                range);
         }
     }
 
@@ -800,20 +756,13 @@ auto SemanticAnalyzer::analyzeReturn(FunctionState& state,
                     }
                     return std::unexpected(bindings.error());
                 }
-                if (include_projected_parameter_bindings[parameter_index] &&
-                    parameter.resolved_type != nullptr &&
-                    parameter.resolved_type->kind == TypeKind::Borrow &&
-                    parameter.resolved_type->element_type != nullptr) {
-                    auto projected_bindings = collectProjectedViewBindings(
-                        state, topLevelOrigins(state.locals[*local_index]),
-                        parameter.resolved_type->element_type);
-                    if (!projected_bindings) {
-                        return std::unexpected(projected_bindings.error());
+                if (include_projected_parameter_bindings[parameter_index]) {
+                    auto extended = extendBindingsWithProjectedPointee(
+                        state, *bindings, parameter.resolved_type, false,
+                        stmt.value->range);
+                    if (!extended) {
+                        return std::unexpected(extended.error());
                     }
-                    bindings->insert(
-                        bindings->end(),
-                        std::make_move_iterator(projected_bindings->begin()),
-                        std::make_move_iterator(projected_bindings->end()));
                 }
 
                 if (overwrite_existing) {
@@ -869,15 +818,6 @@ auto SemanticAnalyzer::analyzeReturn(FunctionState& state,
     if (typeContainsViews(state.return_type)) {
         std::vector<ViewLeafBinding> expected_bindings;
 
-        auto find_binding =
-            [](std::vector<ViewLeafBinding>& bindings,
-               const std::vector<std::uint32_t>& path) -> ViewLeafBinding* {
-            const auto it = std::ranges::find_if(
-                bindings, [&](const ViewLeafBinding& binding) {
-                    return binding.path == path;
-                });
-            return it == bindings.end() ? nullptr : &(*it);
-        };
         const auto return_dependency_count =
             std::ranges::count_if(state.function->return_dependencies,
                                   [](const ast::ReturnDependency& dependency) {
@@ -906,18 +846,16 @@ auto SemanticAnalyzer::analyzeReturn(FunctionState& state,
                 if (!pointee_bindings) {
                     return std::unexpected(pointee_bindings.error());
                 }
-                const auto pointee_it = std::ranges::find_if(
-                    *pointee_bindings, [](const ViewLeafBinding& binding) {
-                        return binding.path.empty();
-                    });
-                if (pointee_it == pointee_bindings->end()) {
+                const auto* pointee_binding =
+                    findViewBinding(*pointee_bindings, {});
+                if (pointee_binding == nullptr) {
                     continue;
                 }
-                const auto& pointee_sources =
-                    !pointee_it->element_sources.empty()
-                        ? pointee_it->element_sources
-                        : pointee_it->source_places;
-                for (const auto& pointee_source : pointee_sources) {
+                const auto* pointee_sources = bindingPlaces(*pointee_binding);
+                if (pointee_sources == nullptr) {
+                    continue;
+                }
+                for (const auto& pointee_source : *pointee_sources) {
                     if (std::ranges::find(sources, pointee_source) ==
                         sources.end()) {
                         sources.push_back(pointee_source);
@@ -937,84 +875,48 @@ auto SemanticAnalyzer::analyzeReturn(FunctionState& state,
             const auto parameter_index = *dependency.source.parameter_index;
             auto& parameter_bindings =
                 cached_return_source_parameters.at(parameter_index);
-            const auto target_leaves =
-                collectViewLeafInfos(dependency.target.resolved_type);
-            const auto source_leaves =
-                collectViewLeafInfos(dependency.source.resolved_type);
-            for (std::size_t index = 0; index < target_leaves.size(); ++index) {
-                auto source_path = dependency.source.resolved_path;
-                source_path.insert(source_path.end(),
-                                   source_leaves[index].path.begin(),
-                                   source_leaves[index].path.end());
-                auto* source_binding =
-                    find_binding(parameter_bindings, source_path);
-                if (source_binding == nullptr) {
-                    return make_error("depends source path is missing a "
-                                      "tracked borrow or slice leaf",
-                                      stmt.value->range);
-                }
-                auto source_element_sources = source_binding->element_sources;
-                if (is_direct_shared_view_slice(types,
-                                                target_leaves[index].type)) {
-                    auto shared_sources = resolve_shared_slice_sources(
-                        *source_binding, source_leaves[index].type);
-                    if (!shared_sources) {
-                        return std::unexpected(shared_sources.error());
-                    }
-                    source_element_sources = std::move(*shared_sources);
-                }
-                auto target_path = dependency.target.resolved_path;
-                target_path.insert(target_path.end(),
-                                   target_leaves[index].path.begin(),
-                                   target_leaves[index].path.end());
-                expected_bindings.push_back(ViewLeafBinding{
-                    .path = std::move(target_path),
-                    .source_places = source_binding->source_places,
-                    .source_local_id = source_binding->source_local_id,
-                    .element_sources = std::move(source_element_sources),
-                    .type = target_leaves[index].type,
-                });
+            auto binding = buildLeafDependencyBinding(
+                dependency, parameter_bindings, true, stmt.value->range);
+            if (!binding) {
+                return std::unexpected(binding.error());
             }
+            if (is_direct_shared_view_slice(types, binding->type)) {
+                auto shared_sources = resolve_shared_slice_sources(
+                    *binding, dependency.source.resolved_type);
+                if (!shared_sources) {
+                    return std::unexpected(shared_sources.error());
+                }
+                binding->element_sources = std::move(*shared_sources);
+            }
+            expected_bindings.push_back(std::move(*binding));
         }
 
-        auto binding_places = [&](const ViewLeafBinding& binding)
-            -> std::vector<ast::ResolvedPlace> {
-            if (binding.type != nullptr &&
-                is_direct_shared_view_slice(types, binding.type) &&
-                !binding.element_sources.empty()) {
-                return binding.element_sources;
-            }
-            if (!binding.source_places.empty()) {
-                return binding.source_places;
-            }
-            return {};
-        };
-
         for (auto& actual_binding : actual_bindings) {
-            auto* expected_binding =
-                find_binding(expected_bindings, actual_binding.path);
+            const auto* expected_binding =
+                findViewBinding(expected_bindings, actual_binding.path);
             if (expected_binding == nullptr) {
                 return make_error("returned borrow or slice path is not "
                                   "covered by depends clause",
                                   stmt.value->range);
             }
-            const auto actual_places = binding_places(actual_binding);
-            const auto expected_places = binding_places(*expected_binding);
-            if (actual_places.empty()) {
+            const auto* actual_places = bindingPlaces(actual_binding);
+            const auto* expected_places = bindingPlaces(*expected_binding);
+            if (actual_places == nullptr) {
                 return make_error(
                     "returned borrow or slice has no tracked source",
                     stmt.value->range);
             }
             const auto every_actual_is_covered = std::ranges::all_of(
-                actual_places, [&](const ast::ResolvedPlace& actual_place) {
-                    return std::ranges::any_of(
-                        expected_places,
-                        [&](const ast::ResolvedPlace& expected_place) {
-                            return is_same_or_subplace(actual_place,
-                                                       expected_place);
-                        });
+                *actual_places, [&](const ast::ResolvedPlace& actual_place) {
+                    return expected_places != nullptr &&
+                           std::ranges::any_of(
+                               *expected_places,
+                               [&](const ast::ResolvedPlace& expected_place) {
+                                   return is_same_or_subplace(actual_place,
+                                                              expected_place);
+                               });
                 });
-            if (expected_places.empty() || !every_actual_is_covered) {
+            if (expected_places == nullptr || !every_actual_is_covered) {
                 if (actual_binding.path.empty() &&
                     return_dependency_count == 1) {
                     const auto return_dependency_it = std::ranges::find_if(
