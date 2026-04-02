@@ -1819,6 +1819,78 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
+    if (call.callee == "fn_ptr" && builtin_available) {
+        if (state.unchecked_depth == 0) {
+            return unexpected_result<const Type*>(
+                "fn_ptr() is only allowed in unchecked blocks", expr.range);
+        }
+        if (call.arguments.size() != 1) {
+            return unexpected_result<const Type*>(
+                "fn_ptr() expects exactly one argument", expr.range);
+        }
+
+        auto* target_name =
+            std::get_if<ast::NameExpr>(&call.arguments[0]->node);
+        if (target_name == nullptr) {
+            return unexpected_result<const Type*>(
+                "fn_ptr() requires a function name argument", expr.range);
+        }
+
+        if (auto* direct_function = findVisibleFunction(target_name->name);
+            direct_function != nullptr) {
+            if (!call.explicit_type_arguments.empty()) {
+                return unexpected_result<const Type*>(
+                    "fn_ptr() explicit type arguments require a generic "
+                    "function target",
+                    expr.range);
+            }
+            call.function = direct_function;
+        } else if (auto* template_decl =
+                       findVisibleFunctionTemplate(target_name->name);
+                   template_decl != nullptr) {
+            if (call.explicit_type_arguments.size() !=
+                template_decl->type_parameters.size()) {
+                return unexpected_result<const Type*>(
+                    "wrong number of explicit type arguments for '" +
+                        target_name->name + "'",
+                    expr.range);
+            }
+
+            TypeBindings type_bindings;
+            for (std::size_t index = 0;
+                 index < call.explicit_type_arguments.size(); ++index) {
+                auto resolved_type =
+                    resolveType(*call.explicit_type_arguments[index]);
+                if (!resolved_type) {
+                    return std::unexpected(resolved_type.error());
+                }
+                type_bindings.emplace(template_decl->type_parameters[index],
+                                      *resolved_type);
+            }
+
+            auto instantiated =
+                instantiateFunctionTemplate(*template_decl, type_bindings);
+            if (!instantiated) {
+                return std::unexpected(instantiated.error());
+            }
+            call.function = *instantiated;
+        } else {
+            return unexpected_result<const Type*>(
+                "fn_ptr() requires a visible function target", expr.range);
+        }
+
+        if (call.function != nullptr &&
+            call.function->intrinsic_lowering.has_value()) {
+            return unexpected_result<const Type*>(
+                "fn_ptr() cannot target intrinsic-lowered functions",
+                expr.range);
+        }
+
+        call.builtin_kind = ast::BuiltinCallKind::FunctionPointer;
+        expr.resolved_type = types.getPointer(types.voidType());
+        expr.resolved_place.reset();
+        return expr.resolved_type;
+    }
     if (call.callee == "subslice" && builtin_available) {
         if (call.arguments.size() != 3) {
             return unexpected_result<const Type*>(

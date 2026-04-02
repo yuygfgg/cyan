@@ -1,0 +1,9 @@
+i64 plus_one(i64 value) {
+    return value + 1;
+}
+
+i64 main() {
+    i64 raw = 0;
+    raw = fn_ptr(plus_one) as i64;
+    return raw;
+}

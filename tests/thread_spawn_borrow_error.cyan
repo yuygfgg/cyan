@@ -1,0 +1,14 @@
+import /std.thread;
+
+struct BorrowTask {
+    &i64 value;
+};
+
+impl run_once(&mut BorrowTask task) {}
+
+i64 main() {
+    i64 value = 7;
+    BorrowTask task = {&value};
+    spawn(task);
+    return 0;
+}

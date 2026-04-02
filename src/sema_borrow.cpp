@@ -227,10 +227,18 @@ auto SemanticAnalyzer::borrowSourceLocalId(FunctionState& state,
             const auto* deref =
                 std::get_if<ast::UnaryExpr>(&unary->operand->node);
             if (deref == nullptr || deref->op != ast::UnaryOp::Dereference) {
-                return std::optional<std::size_t>{};
+                return borrowSourceLocalId(state, *unary->operand);
             }
             return borrowSourceLocalId(state, *deref->operand);
         }
+    }
+    if (const auto* member = std::get_if<ast::MemberExpr>(&expr.node);
+        member != nullptr) {
+        return borrowSourceLocalId(state, *member->base);
+    }
+    if (const auto* index = std::get_if<ast::IndexExpr>(&expr.node);
+        index != nullptr) {
+        return borrowSourceLocalId(state, *index->base);
     }
 
     auto expr_type = analyzeExpr(state, expr);
@@ -265,7 +273,7 @@ auto SemanticAnalyzer::borrowSourceLocalId(FunctionState& state,
                     std::get_if<ast::UnaryExpr>(&unary.operand->node);
                 if (deref == nullptr ||
                     deref->op != ast::UnaryOp::Dereference) {
-                    return std::optional<std::size_t>{};
+                    return borrowSourceLocalId(state, *unary.operand);
                 }
                 return borrowSourceLocalId(state, *deref->operand);
             },
@@ -1396,8 +1404,9 @@ auto SemanticAnalyzer::sharedReborrowParentLocalIds(const FunctionState& state,
     }
 
     const auto& source_local = state.locals[*source_index];
-    if (!source_local.in_scope || !mayBeLive(source_local.status) ||
-        source_local.type == nullptr) {
+    if (!source_local.in_scope || source_local.type == nullptr ||
+        source_local.status == LocalState::Status::Uninitialized ||
+        source_local.status == LocalState::Status::Unavailable) {
         return {};
     }
 
@@ -1414,11 +1423,20 @@ auto SemanticAnalyzer::sharedReborrowParentLocalIds(const FunctionState& state,
         return {};
     }
 
+    const auto is_ancestor_or_same =
+        [&](const ast::ResolvedPlace& candidate_place,
+            const ast::ResolvedPlace& source_place) {
+            return placesOverlap(candidate_place, source_place) &&
+                   candidate_place.fields.size() <= source_place.fields.size();
+        };
+
     std::vector<std::size_t> parent_local_ids;
     for (const auto& candidate : state.locals) {
         if (candidate.unique_id == source_local.unique_id ||
-            !candidate.in_scope || !mayBeLive(candidate.status) ||
-            !is_borrow_like_type(candidate.type) || !candidate.type->is_mut ||
+            !candidate.in_scope || candidate.type == nullptr ||
+            candidate.status == LocalState::Status::Uninitialized ||
+            candidate.status == LocalState::Status::Unavailable ||
+            !is_borrow_like_type(candidate.type) ||
             candidate.is_interior_mut_borrow) {
             continue;
         }
@@ -1431,7 +1449,8 @@ auto SemanticAnalyzer::sharedReborrowParentLocalIds(const FunctionState& state,
                 return std::ranges::any_of(
                     candidate_origins,
                     [&](const ast::ResolvedPlace& candidate_place) {
-                        return placesOverlap(source_place, candidate_place);
+                        return is_ancestor_or_same(candidate_place,
+                                                   source_place);
                     });
             });
         if (overlaps) {

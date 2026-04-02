@@ -1,0 +1,38 @@
+import /std.sync;
+import /std.thread;
+
+struct SharedState {
+    Mutex<i64> total;
+};
+
+struct ArcTask {
+    Arc<SharedState> state;
+    i64 value;
+};
+
+impl run_once(&mut ArcTask task) {
+    i64 value = task.value;
+    &SharedState state = arc_get(&task.state);
+    MutexGuard<i64> guard = lock(&state.total);
+    *guard.data = *guard.data + value;
+}
+
+i64 main() {
+    SharedState initial = {mutex_new(0)};
+    Arc<SharedState> root = arc_new(initial);
+
+    ArcTask left = {arc_clone(&root), 4};
+    ArcTask middle = {arc_clone(&root), 7};
+    ArcTask right = {arc_clone(&root), 9};
+
+    JoinHandle a = spawn(left);
+    JoinHandle b = spawn(middle);
+    JoinHandle c = spawn(right);
+    join(&mut a);
+    join(&mut b);
+    join(&mut c);
+
+    &SharedState state = arc_get(&root);
+    MutexGuard<i64> guard = lock(&state.total);
+    return *guard.data - 20;
+}

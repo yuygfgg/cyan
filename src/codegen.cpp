@@ -848,7 +848,8 @@ class LLVMCodegen {
 
     auto declareFunctions(ast::Package& package)
         -> std::expected<void, Diagnostic> {
-        auto declare_decl = [&](ast::Decl& decl) {
+        auto declare_decl =
+            [&](ast::Decl& decl) -> std::expected<void, Diagnostic> {
             if (auto* function_decl = std::get_if<ast::FunctionDecl>(&decl);
                 function_decl != nullptr &&
                 function_decl->type_parameters.empty() &&
@@ -862,18 +863,37 @@ class LLVMCodegen {
                 auto* function_type = llvm::FunctionType::get(
                     lowerType(function_decl->resolved_return_type),
                     parameter_types, false);
+                if (auto* existing =
+                        module.getFunction(function_decl->linkage_name);
+                    existing != nullptr) {
+                    if (existing->getFunctionType() != function_type) {
+                        return std::unexpected(Diagnostic(
+                            "conflicting declarations for function '" +
+                                function_decl->name + "'",
+                            function_decl->range));
+                    }
+                    function_map[function_decl] = existing;
+                    return {};
+                }
                 function_map[function_decl] = llvm::Function::Create(
                     function_type, llvm::Function::ExternalLinkage,
                     function_decl->linkage_name, module);
             }
+            return {};
         };
         for (const auto& module_decl : package.modules) {
             for (auto& decl : module_decl->declarations) {
-                declare_decl(decl);
+                auto declared = declare_decl(decl);
+                if (!declared) {
+                    return std::unexpected(declared.error());
+                }
             }
         }
         for (auto& decl : package.instantiated_declarations) {
-            declare_decl(*decl);
+            auto declared = declare_decl(*decl);
+            if (!declared) {
+                return std::unexpected(declared.error());
+            }
         }
         return {};
     }
@@ -2344,6 +2364,18 @@ class LLVMCodegen {
         return slice_value;
     }
 
+    auto emitFunctionPointerBuiltin(ast::CallExpr& call) -> llvm::Value* {
+        if (call.function == nullptr) {
+            return nullptr;
+        }
+        const auto function_it = function_map.find(call.function);
+        if (function_it == function_map.end()) {
+            return nullptr;
+        }
+        return llvm::ConstantExpr::getBitCast(
+            function_it->second, llvm::PointerType::get(context, 0));
+    }
+
     auto emitExpr(ast::Expr& expr) -> llvm::Value* {
         ScopedDebugLocation debug_location(*this, expr.range);
         if (expr.resolved_type != nullptr &&
@@ -2569,6 +2601,10 @@ class LLVMCodegen {
                     return nullptr;
                 },
                 [&](ast::CallExpr& call) -> llvm::Value* {
+                    if (call.builtin_kind ==
+                        ast::BuiltinCallKind::FunctionPointer) {
+                        return emitFunctionPointerBuiltin(call);
+                    }
                     if (call.builtin_kind != ast::BuiltinCallKind::None &&
                         call.builtin_kind != ast::BuiltinCallKind::Len &&
                         call.builtin_kind != ast::BuiltinCallKind::Subslice &&

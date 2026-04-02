@@ -1,0 +1,25 @@
+import /std.sync;
+import /std.thread;
+
+struct CountTask {
+    Arc<Mutex<i64>> total;
+};
+
+impl run_once(&mut CountTask task) {
+    &Mutex<i64> total = arc_get(&task.total);
+    MutexGuard<i64> guard = lock(total);
+    *guard.data = *guard.data + 1;
+}
+
+i64 main() {
+    Arc<Mutex<i64>> root = arc_new(mutex_new(0));
+
+    CountTask task = {arc_clone(&root)};
+    JoinHandle handle = spawn(task);
+    join(&mut handle);
+    join(&mut handle);
+
+    &Mutex<i64> total = arc_get(&root);
+    MutexGuard<i64> guard = lock(total);
+    return *guard.data - 1;
+}

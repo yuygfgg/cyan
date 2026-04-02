@@ -1,285 +1,268 @@
 # Threading Plan
 
-This note records the current threading surface and the next design target.
-The current implementation is intentionally narrow. The real design work now is
-preparing a safe and useful `spawn` model on top of the pieces that already
-exist.
+This note records the threading design after choosing a non-hole `spawn`
+implementation.
 
-## What Exists Now
+The important constraint is now explicit:
 
-The current concurrency MVP is in place:
+- `spawn(...)` must not be a compiler-only special form
+- the compiler may provide small general-purpose primitives
+- the stdlib remains responsible for task ownership and API shape
+- the native runtime remains a separate library that the build links in
 
-- `shared T*`, atomics, `Rc<T>`, `Arc<T>`, and `Mutex<T>` exist
-- `/std.thread` exports:
-  - `interface<T> void run_task(&T task);`
-  - `interface thread_shared = share - local;`
-  - `interface thread_sendable = send - local;`
-  - `interface threaded_runnable = run_task + thread_shared;`
-  - `void parallel_do([]&threaded_runnable tasks);`
-- interface composition is now part of the language, so the thread boundary is
-  expressed in stdlib rather than through compiler special-casing
-- nominal thread properties use:
-  - `impl local(Type);`
-  - `unchecked impl send(Type);`
-  - `unchecked impl share(Type);`
+That gives Cyan two distinct concurrency layers:
 
-This gives Cyan one good concurrency primitive today: blocking fork-join over
-borrowed tasks.
+- `parallel_do(...)`: borrowed, blocking, lexical fork-join
+- `spawn(...)`: owned, non-lexical task submission with later `join`
 
-## Current Limits
+## Status
 
-The current model still stops at blocking borrowed work:
+Phase 1 is implemented:
 
-- `parallel_do(...)` is immediate fork-join only
-- there is no handle that can outlive the call
-- there is no late `join`
-- there is no dynamic set of spawned tasks
-- there is no general owned-task `spawn`
-- the runtime strategy is still narrow and not yet designed as a general task
-  executor
+- `/std.thread` now exposes owned-task spawn/join APIs
+- the native runtime now has a small executor shared by `parallel_do(...)` and
+  `spawn(...)`
+- the compiler gained one general builtin, `fn_ptr(...)`
+- no `spawn`-specific compiler lowering was added
 
-That is acceptable for the MVP. It is not enough for a real thread API.
+## Surface API
 
-## Design Direction
-
-The next step should not be another ad hoc helper beside `parallel_do(...)`.
-It should be a second, clearly separate layer:
-
-- `parallel_do(...)` stays the borrowed, blocking, lexical primitive
-- `spawn(...)` becomes the owned, non-lexical primitive
-
-That split matters because the two models have different safety boundaries.
-
-`parallel_do(...)` works because the caller keeps ownership of every task value
-and the call does not return until all work is done. The runtime may borrow the
-task slice temporarily because the slice dies exactly when the call ends.
-
-`spawn(...)` is different. Once the call returns, the runtime may still be
-executing the task. That means the runtime must own the task object, its
-dispatch metadata, and its completion state. Borrowed task values are not
-enough.
-
-## Safety Model For `spawn`
-
-The current interface/property system is already close to what `spawn(...)`
-needs.
-
-The important distinction is now:
-
-- `thread_shared = share - local`
-- `thread_sendable = send - local`
-
-This should stay the core rule:
-
-- `parallel_do(...)` requires `thread_shared`
-- future `spawn(...)` requires `thread_sendable`
-
-That gives the language two separate thread boundaries:
-
-- shared-access boundary
-- ownership-transfer boundary
-
-This separation is the main preparation already completed.
-
-## Proposed `spawn` Contract
-
-The first `spawn(...)` should use owned tasks and completion-only handles.
-
-Recommended surface:
+The current thread surface is:
 
 ```cyan
+interface<T> void run_task(&T task);
 interface<T> void run_once(&mut T task);
+
+interface thread_shared = share - local;
+interface thread_sendable = send - local;
+interface threaded_runnable = run_task + thread_shared;
 interface spawnable = run_once + thread_sendable;
 
 struct JoinHandle {
-    // opaque
+    void* raw;
 };
 
+void parallel_do([]&threaded_runnable tasks);
 JoinHandle spawn<T>(T task);
 void join(&mut JoinHandle handle);
 ```
 
-### Why A New `run_once`
+`JoinHandle` is completion-only in phase 1. Dropping an unjoined handle detaches
+it.
 
-`run_task(&T task)` is a good fit for borrowed fork-join work. It is less good
-as the basis of owned spawned work.
+## Why This Design
 
-For spawned tasks, `run_once(&mut T task)` is a better semantic contract:
+The key design choice is that `spawn(...)` is an ordinary generic stdlib
+function, not a compiler hole.
 
-- the runtime owns the task object
-- the task runs exactly once
-- mutation of owned task state during execution is natural
-- the task object is dropped after completion
+That matters because the real ownership transition happens in library code:
 
-This keeps `parallel_do(...)` and `spawn(...)` from pretending to be the same
-thing when they are not.
+- `spawn<T>(T task)` checks `spawnable`
+- stdlib heap-allocates storage for `T`
+- stdlib moves `task` into that heap payload
+- stdlib passes the payload and two thunk addresses into the runtime
 
-### Why `JoinHandle` Should Be Completion-Only First
+The runtime only sees erased pointers. It does not need to understand Cyan
+types, generic instantiations, or interface dispatch layout for owned tasks.
 
-A first `spawn(...)` does not need typed task results.
+## Stdlib Work
 
-Today, Cyan callable interfaces carry one receiver type parameter and a fixed
-return type. That is enough for `run_task` and `run_once`. It is not yet a good
-basis for a generic "`spawn` returns `R`" protocol.
+`/std.thread` now contains the owned-task layer:
 
-So the first phase should keep the model simple:
+- `run_once(&mut T)` for one-shot owned execution
+- `spawnable = run_once + thread_sendable`
+- `JoinHandle`
+- `spawn<T>(T task)`
+- `join(&mut JoinHandle handle)`
+- `drop JoinHandle` as detach-on-drop
 
-- the task owns whatever state it needs
-- shared output can go through `Arc<T>`, `Mutex<T>`, atomics, or future
-  channels/promises
-- `JoinHandle` only tracks completion
+The implementation strategy is:
 
-Typed result-bearing spawn can come later once there is a clearer design for
-generic task result protocols.
+```cyan
+void spawn_run_once<T>(T* task) { ... }
+void spawn_drop<T>(T* task) { ... }
 
-## Runtime Work Needed For `spawn`
+JoinHandle spawn<T>(T task) {
+    require_spawnable(&mut task);
+    T* payload = malloc(sizeof(T)) as T*;
+    *payload = task;
+    void* handle = cyan_runtime_spawn(payload as void*,
+                                      fn_ptr<T>(spawn_run_once),
+                                      fn_ptr<T>(spawn_drop));
+    ...
+}
+```
 
-This is the part that matters most. The current `parallel_do(...)` runtime ABI
-is borrowed and blocking. It cannot be stretched into `spawn(...)` safely.
+Important details:
 
-Today the runtime effectively receives a slice of interface values:
+- `spawn<T>` stays fully generic in stdlib
+- per-`T` run/drop thunks are also ordinary generic Cyan functions
+- `spawn(...)` requires ownership transfer via `thread_sendable`, not
+  `thread_shared`
+- if the runtime cannot enqueue a task, stdlib falls back to inline
+  run-and-drop so task semantics still complete
 
-- data pointer
-- dispatch pointer
+No extra stdlib module was required for phase 1. Existing `Arc<T>`, `Mutex<T>`,
+atomics, and `shared T*` remain the ways to communicate results back to the
+caller.
 
-That is enough for immediate execution. It is not enough for a detached owned
-task.
+## Runtime Work
 
-`spawn(...)` needs a heap-owned task record with at least:
+The native runtime is still required. The build must always link it.
 
-- pointer to the heap-allocated task payload
-- dispatch entry for `run_once`
-- destructor for the payload
-- completion flag or latch
-- storage for join state
+The important change is that it is no longer just a narrow `parallel_do(...)`
+helper. It is now a small executor substrate.
+
+Current runtime exports:
+
+```c
+int cyan_runtime_parallel_do(const void *tasks, int64_t count);
+void *cyan_runtime_spawn(void *payload, void *run_fn, void *drop_fn);
+void cyan_runtime_join(void *handle);
+void cyan_runtime_detach(void *handle);
+```
+
+Current runtime responsibilities:
+
+- worker pool
+- global task queue
+- wait-group state for blocking `parallel_do(...)`
+- join state for owned spawned tasks
+- task records carrying:
+  - payload pointer
+  - run thunk pointer
+  - drop thunk pointer
+  - optional wait-group pointer
+  - optional join-state pointer
 
 Conceptually:
 
 ```text
-TaskRecord {
-    payload_ptr
-    run_once_fn
-    drop_fn
-    state
+Task {
+    payload
+    run
+    drop
+    group
+    join_state
 }
 ```
 
-The current interface fat pointer should remain the calling convention for
-erased borrows. `spawn(...)` should use a different internal runtime record for
-owned tasks.
+This keeps the runtime ABI simple:
 
-## Executor Strategy
+- all owned-task execution is `void* payload + void* thunk pointers`
+- no struct-passing ABI research is needed
+- no typed function pointer ABI is needed
+- `parallel_do(...)` and `spawn(...)` share one executor backend
 
-Preparing for `spawn(...)` is the right time to stop thinking in terms of
-"special runtime for `parallel_do(...)`" and start thinking in terms of one
-executor used by both layers.
+Waiting threads help execute queued tasks while waiting on a wait-group or
+join-state. That avoids dead time and makes nested parallel usage less fragile.
 
-The executor should eventually provide:
+## Compiler Work
 
-- a worker pool
-- a queue for owned tasks
-- a task-group or latch for blocking fork-join calls
-- join state for `JoinHandle`
+The compiler needed one minimal general-purpose feature:
 
-That lets both APIs share one substrate:
+```cyan
+fn_ptr(...)
+```
 
-- `parallel_do(...)` submits borrowed work to a temporary task-group and waits
-- `spawn(...)` submits owned work and returns a handle
+Rules:
 
-This also fixes the current long-term runtime problem: repeatedly creating OS
-threads for nested parallel work does not scale.
+- returns `void*`
+- only allowed in `unchecked`
+- argument must be a visible function name
+- explicit type arguments are allowed when the target is a generic function
 
-## Relationship Between `parallel_do` And `spawn`
+Examples:
 
-These APIs should stay distinct in semantics even if they share a runtime.
+```cyan
+fn_ptr(plus_one)
+fn_ptr<T>(spawn_run_once)
+```
 
-`parallel_do(...)` should continue to mean:
+Codegen lowers this to the function symbol address, bitcast to `void*`.
 
-- task values may borrow from the caller
-- the caller blocks until all tasks complete
-- no handle escapes the call
+This is enough for runtime callback registration. It is intentionally smaller
+than adding first-class typed function pointer support.
 
-`spawn(...)` should mean:
+The compiler does not know anything special about `spawn(...)`. It only knows
+how to instantiate normal generic functions and how to materialize raw function
+addresses for `fn_ptr(...)`.
 
-- the task value is moved into runtime ownership
-- execution may outlive the call site
-- the caller gets an explicit completion handle
+## Language Changes
 
-Trying to collapse these into one polymorphic API would blur the boundary that
-actually keeps the model understandable.
+No new language syntax was required for phase 1.
 
-## What Not To Do Next
+What already existed and was sufficient:
 
-The next step should not be:
+- callable interfaces with `&T` and `&mut T` receivers
+- interface composition
+- nominal `local/send/share` markers
+- generic function instantiation
 
-- a second `parallel_do2(...)`
-- a fake `spawn(...)` implemented as "create one OS thread per call"
-- a borrowed `spawn(...)` without real runtime ownership
-- a handle API that secretly still depends on caller stack storage
+That means:
 
-Those would spend complexity without establishing the right model.
+- `run_once(&mut T)` is just another callable interface
+- `spawnable = run_once + thread_sendable` is just another interface alias
+- `spawn<T>(T task)` is just another generic stdlib function
 
-## Recommended Stages
+The only new compiler-exposed surface is `fn_ptr(...)`, which is an unchecked
+escape hatch, not a new type-system feature.
 
-### Stage 1: Keep Current Borrowed Surface Stable
+## Safety Boundary
 
-Do not grow `parallel_do(...)` beyond its current role.
+The ownership split remains:
 
-### Stage 2: Introduce An Executor
+- `parallel_do(...)` requires `thread_shared`
+- `spawn(...)` requires `thread_sendable`
 
-Refactor the runtime around:
+That is the right boundary:
 
-- worker pool
-- queue
-- task-group/latch
-- owned task record
+- borrowed fork-join work may share access
+- owned spawned work must be movable across the thread boundary
 
-`parallel_do(...)` may continue to expose the same API while switching to the
-new backend.
+Important current behavior:
 
-### Stage 3: Add Owned Spawn
+- borrows are not `send`
+- slices are not `send`
+- so ordinary borrowed data is rejected by `spawn(...)`
 
-Add:
+`shared T*` is still `send`. That is acceptable for phase 1 because producing a
+`shared T*` already requires `unchecked`. The unsafety stays at pointer
+creation, not at `spawn(...)` itself.
 
-- `run_once`
-- `spawnable`
-- `JoinHandle`
-- `spawn`
-- `join`
+## What This Deliberately Avoids
 
-Keep it completion-only.
+This plan does not do any of the following:
 
-### Stage 4: Add Result-Carrying Concurrency Primitives
+- no `spawn`-specific compiler lowering
+- no hidden compiler-generated owned-task record type
+- no "one OS thread per spawn call" implementation
+- no first-class typed function pointer feature in phase 1
+- no typed result-bearing `JoinHandle<T>` yet
 
-Once owned spawn exists, build higher-level result transport on top:
+Those can all wait.
 
-- channels
-- promises/futures
-- typed result handles if the language grows the right abstraction for them
+## Remaining Work
 
-### Stage 5: Revisit Scoped Threads Only If Needed
+Phase 1 is enough to make owned background work possible, but it is not the end
+of the threading story.
 
-After owned `spawn(...)` exists, reconsider whether Cyan still needs a more
-expressive scoped-thread API. It may turn out that:
+Next steps:
 
-- `parallel_do(...)` handles borrowed fork-join well enough
-- owned `spawn(...)` handles long-lived background work well enough
-
-If so, there may be no need to add a third model immediately.
+- result transport primitives such as channels or futures
+- possibly a later typed function-pointer feature if user code needs it
+- possibly typed result-bearing join handles once the callable/result model is
+  clearer
 
 ## Summary
 
-The important part that is already done is small:
+The chosen design is:
 
-- thread boundaries are now expressed in stdlib with interface composition
-- `local/send/share` exist as nominal thread properties
-- `parallel_do(...)` is a working borrowed fork-join primitive
+- keep the native runtime
+- keep `parallel_do(...)` borrowed and blocking
+- add owned `spawn(...)` in stdlib, not in the compiler
+- pass owned-task thunks into the runtime through `fn_ptr(...)`
+- keep the compiler change minimal and general-purpose
 
-The important part that should come next is larger:
-
-- treat `spawn(...)` as an owned-task model, not an extension of borrowed
-  `parallel_do(...)`
-- introduce `run_once + thread_sendable`
-- add an opaque `JoinHandle`
-- build one executor substrate for both blocking fork-join and owned spawned
-  work
+That is the smallest change set that gives Cyan a real owned-task model without
+turning `spawn(...)` into a special language hole.

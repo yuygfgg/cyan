@@ -188,6 +188,7 @@ enum class BuiltinCallKind : std::uint8_t {
     Len,
     Subslice,
     RawData,
+    FunctionPointer,
     AtomicRelaxedOrder,
     AtomicAcquireOrder,
     AtomicReleaseOrder,

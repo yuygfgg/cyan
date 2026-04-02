@@ -1,0 +1,13 @@
+extern {
+    i64 call_i64(void* raw, i64 value);
+}
+
+i64 plus_one(i64 value) {
+    return value + 1;
+}
+
+i64 main() {
+    unchecked {
+        return call_i64(fn_ptr(plus_one), 41) - 42;
+    }
+}

@@ -1,0 +1,10 @@
+extern {
+    //@lower intrinsic=llvm.memcpy llvm_return=void arg3=false return=arg0
+    char* memcpy(char* dst, const char* src, i64 size);
+}
+
+i64 main() {
+    unchecked {
+        return fn_ptr(memcpy) as i64;
+    }
+}

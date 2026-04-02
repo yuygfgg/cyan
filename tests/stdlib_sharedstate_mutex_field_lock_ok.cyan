@@ -1,0 +1,17 @@
+import /std.sync;
+
+struct SharedState {
+    Mutex<i64> total;
+};
+
+void add_one(&SharedState state) {
+    MutexGuard<i64> guard = lock(&state.total);
+    *guard.data = *guard.data + 1;
+}
+
+i64 main() {
+    SharedState state = {mutex_new(0)};
+    add_one(&state);
+    MutexGuard<i64> guard = lock(&state.total);
+    return *guard.data - 1;
+}

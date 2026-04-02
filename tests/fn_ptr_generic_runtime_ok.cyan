@@ -1,0 +1,13 @@
+extern {
+    i64 call_i64(void* raw, i64 value);
+}
+
+T id<T>(T value) {
+    return value;
+}
+
+i64 main() {
+    unchecked {
+        return call_i64(fn_ptr<i64>(id), 17) - 17;
+    }
+}

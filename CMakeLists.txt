@@ -1,5 +1,23 @@
 cmake_minimum_required(VERSION 3.28)
 
+if(APPLE AND (NOT DEFINED CMAKE_OSX_SYSROOT OR CMAKE_OSX_SYSROOT STREQUAL ""))
+    execute_process(
+        COMMAND xcrun --sdk macosx --show-sdk-path
+        OUTPUT_VARIABLE CYAN_MACOS_SDK_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE CYAN_MACOS_SDK_RESULT
+    )
+    if(CYAN_MACOS_SDK_RESULT EQUAL 0 AND NOT CYAN_MACOS_SDK_PATH STREQUAL "")
+        set(
+            CMAKE_OSX_SYSROOT
+            "${CYAN_MACOS_SDK_PATH}"
+            CACHE PATH "macOS SDK root"
+            FORCE
+        )
+    endif()
+endif()
+
 project(cyan LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)

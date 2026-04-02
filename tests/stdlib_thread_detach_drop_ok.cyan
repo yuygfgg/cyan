@@ -1,0 +1,27 @@
+import /std.thread;
+
+struct SignalTask {
+    shared i64* flag;
+};
+
+impl run_once(&mut SignalTask task) {
+    atomic_store(task.flag, 1, atomic_release());
+}
+
+i64 main() {
+    i64 flag = 0;
+    i64* raw_flag = &mut flag;
+    shared i64* flag_ptr;
+    unchecked {
+        flag_ptr = raw_flag as shared i64*;
+    }
+
+    {
+        SignalTask task = {flag_ptr};
+        JoinHandle handle = spawn(task);
+    }
+
+    while (atomic_load(flag_ptr, atomic_acquire()) == 0) {
+    }
+    return flag - 1;
+}

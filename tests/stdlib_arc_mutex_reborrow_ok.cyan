@@ -1,0 +1,21 @@
+import /std.sync;
+
+struct Box {
+    Arc<Mutex<i64>> total;
+    i64 value;
+};
+
+void bump(&mut Box box) {
+    i64 value = box.value;
+    &Mutex<i64> total = arc_get(&box.total);
+    MutexGuard<i64> guard = lock(total);
+    *guard.data = *guard.data + value;
+}
+
+i64 main() {
+    Box box = {arc_new(mutex_new(0)), 9};
+    bump(&mut box);
+    &Mutex<i64> total = arc_get(&box.total);
+    MutexGuard<i64> guard = lock(total);
+    return *guard.data - 9;
+}
