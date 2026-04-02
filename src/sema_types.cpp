@@ -1,5 +1,8 @@
 #include "sema_detail.hpp"
 
+#include <unordered_map>
+#include <unordered_set>
+
 namespace cyan {
 
 using namespace detail;
@@ -155,6 +158,7 @@ auto SemanticAnalyzer::instantiateFunctionTemplate(
     instantiated_decl.impl_target_name = decl.impl_target_name;
     instantiated_decl.interface_decl = decl.interface_decl;
     instantiated_decl.intrinsic_lowering = decl.intrinsic_lowering;
+    instantiated_decl.is_unchecked = decl.is_unchecked;
     instantiated_decl.is_export = decl.is_export;
     instantiated_decl.is_extern = decl.is_extern;
     instantiated_decl.owner_module = decl.owner_module;
@@ -508,6 +512,10 @@ auto SemanticAnalyzer::validateResolvedImplSignature(ast::FunctionDecl& decl,
     }
 
     if (decl.name == "drop") {
+        if (decl.is_unchecked) {
+            return make_error("impl drop cannot be declared unchecked",
+                              decl.name_range);
+        }
         if (target_type->kind != TypeKind::Struct &&
             target_type->kind != TypeKind::Enum) {
             return make_error("impl drop receiver must be a struct or enum "
@@ -538,6 +546,17 @@ auto SemanticAnalyzer::validateResolvedImplSignature(ast::FunctionDecl& decl,
         return make_error("missing interface metadata for impl '" + decl.name +
                               "'",
                           decl.range);
+    }
+    if (interface_decl->is_unchecked && !decl.is_unchecked) {
+        return make_error("impl for unchecked interface '" +
+                              interface_decl->name +
+                              "' must be declared unchecked",
+                          decl.name_range);
+    }
+    if (!interface_decl->is_unchecked && decl.is_unchecked) {
+        return make_error("impl for safe interface '" + interface_decl->name +
+                              "' must not be declared unchecked",
+                          decl.name_range);
     }
     if (decl.resolved_return_type != interface_decl->resolved_return_type) {
         return make_error("impl return type must match interface '" +
@@ -589,6 +608,239 @@ auto SemanticAnalyzer::interfaceReceiverType(const Type* argument_type) const
     return concrete_type;
 }
 
+auto SemanticAnalyzer::typeHasThreadProperty(
+    const Type* type, ast::ThreadPropertyKind kind) const -> bool {
+    if (type == nullptr) {
+        return false;
+    }
+
+    const auto* nominal_type = types.unqualify(type);
+    if ((nominal_type->kind != TypeKind::Struct ||
+         nominal_type->struct_decl == nullptr) &&
+        (nominal_type->kind != TypeKind::Enum ||
+         nominal_type->enum_decl == nullptr)) {
+        return false;
+    }
+
+    const auto property_it = package_property_impls.find(kind);
+    if (property_it == package_property_impls.end()) {
+        return false;
+    }
+
+    const ast::Module* actual_owner_module = nullptr;
+    std::string_view actual_base_name;
+    std::vector<const Type*> actual_type_arguments;
+    if (nominal_type->kind == TypeKind::Struct) {
+        const auto* actual_decl = nominal_type->struct_decl;
+        const auto* canonical_decl =
+            actual_decl->template_decl != nullptr ? actual_decl->template_decl
+                                                  : actual_decl;
+        actual_owner_module = canonical_decl->owner_module;
+        actual_base_name = canonical_decl->name;
+        if (actual_decl->template_decl != nullptr) {
+            actual_type_arguments = actual_decl->type_arguments;
+        }
+    } else {
+        const auto* actual_decl = nominal_type->enum_decl;
+        const auto* canonical_decl =
+            actual_decl->template_decl != nullptr ? actual_decl->template_decl
+                                                  : actual_decl;
+        actual_owner_module = canonical_decl->owner_module;
+        actual_base_name = canonical_decl->name;
+        if (actual_decl->template_decl != nullptr) {
+            actual_type_arguments = actual_decl->type_arguments;
+        }
+    }
+
+    for (const auto* property_decl : property_it->second) {
+        if (property_decl == nullptr || property_decl->target_type == nullptr ||
+            property_decl->impl_target_module != actual_owner_module ||
+            property_decl->impl_target_name != actual_base_name) {
+            continue;
+        }
+
+        if (property_decl->target_type->type_arguments.size() !=
+            actual_type_arguments.size()) {
+            continue;
+        }
+
+        std::unordered_map<std::string_view, const Type*> type_bindings;
+        bool matches = true;
+        for (std::size_t index = 0;
+             index < property_decl->target_type->type_arguments.size();
+             ++index) {
+            const auto& pattern =
+                *property_decl->target_type->type_arguments[index];
+            if (pattern.kind != ast::TypeSyntax::Kind::Named ||
+                !pattern.type_arguments.empty()) {
+                matches = false;
+                break;
+            }
+
+            const auto parameter_it =
+                std::ranges::find(property_decl->type_parameters, pattern.name);
+            if (parameter_it == property_decl->type_parameters.end()) {
+                matches = false;
+                break;
+            }
+
+            const auto binding_it = type_bindings.find(pattern.name);
+            if (binding_it != type_bindings.end()) {
+                if (binding_it->second != actual_type_arguments[index]) {
+                    matches = false;
+                    break;
+                }
+                continue;
+            }
+            type_bindings.emplace(pattern.name, actual_type_arguments[index]);
+        }
+
+        if (matches) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+auto SemanticAnalyzer::typeContainsLocalProperty(const Type* type) const
+    -> bool {
+    std::unordered_map<const Type*, bool> memo;
+    std::unordered_set<const Type*> active;
+
+    const auto recurse = [&](const Type* current,
+                             const auto& self) -> bool {
+        if (current == nullptr) {
+            return false;
+        }
+
+        current = types.unqualify(current);
+        if (const auto memo_it = memo.find(current); memo_it != memo.end()) {
+            return memo_it->second;
+        }
+        if (typeHasThreadProperty(current, ast::ThreadPropertyKind::Local)) {
+            memo.emplace(current, true);
+            return true;
+        }
+        if (!active.insert(current).second) {
+            return false;
+        }
+
+        bool contains_local = false;
+        switch (current->kind) {
+        case TypeKind::Void:
+        case TypeKind::Integer:
+        case TypeKind::Float:
+        case TypeKind::Char:
+        case TypeKind::Bool:
+        case TypeKind::Interface:
+            contains_local = false;
+            break;
+        case TypeKind::Borrow:
+        case TypeKind::Slice:
+        case TypeKind::Array:
+            contains_local =
+                self(current->element_type, self);
+            break;
+        case TypeKind::Pointer:
+            contains_local =
+                current->is_shared &&
+                self(current->element_type, self);
+            break;
+        case TypeKind::Struct:
+            contains_local = std::ranges::any_of(
+                current->struct_decl->fields, [&](const auto& field) {
+                    return self(field.resolved_type, self);
+                });
+            break;
+        case TypeKind::Enum:
+            contains_local = std::ranges::any_of(
+                current->enum_decl->variants, [&](const auto& variant) {
+                    return variant.resolved_type != nullptr &&
+                           self(variant.resolved_type, self);
+                });
+            break;
+        }
+
+        active.erase(current);
+        memo.emplace(current, contains_local);
+        return contains_local;
+    };
+
+    return recurse(type, recurse);
+}
+
+auto SemanticAnalyzer::typeIsThreadShareSafe(const Type* type) const
+    -> bool {
+    std::unordered_map<const Type*, bool> memo;
+    std::unordered_set<const Type*> active;
+
+    const auto recurse = [&](const Type* current,
+                             const auto& self) -> bool {
+        if (current == nullptr) {
+            return false;
+        }
+
+        current = types.unqualify(current);
+        if (const auto memo_it = memo.find(current); memo_it != memo.end()) {
+            return memo_it->second;
+        }
+        if (typeHasThreadProperty(current, ast::ThreadPropertyKind::Local)) {
+            memo.emplace(current, false);
+            return false;
+        }
+        if (typeHasThreadProperty(current, ast::ThreadPropertyKind::Share)) {
+            memo.emplace(current, true);
+            return true;
+        }
+        if (!active.insert(current).second) {
+            return true;
+        }
+
+        bool share_safe = false;
+        switch (current->kind) {
+        case TypeKind::Void:
+        case TypeKind::Integer:
+        case TypeKind::Float:
+        case TypeKind::Char:
+        case TypeKind::Bool:
+            share_safe = true;
+            break;
+        case TypeKind::Interface:
+            share_safe = false;
+            break;
+        case TypeKind::Borrow:
+        case TypeKind::Slice:
+        case TypeKind::Array:
+            share_safe = self(current->element_type, self);
+            break;
+        case TypeKind::Pointer:
+            share_safe = current->is_shared &&
+                         self(current->element_type, self);
+            break;
+        case TypeKind::Struct:
+            share_safe = std::ranges::all_of(
+                current->struct_decl->fields, [&](const auto& field) {
+                    return self(field.resolved_type, self);
+                });
+            break;
+        case TypeKind::Enum:
+            share_safe = std::ranges::all_of(
+                current->enum_decl->variants, [&](const auto& variant) {
+                    return variant.resolved_type == nullptr ||
+                           self(variant.resolved_type, self);
+                });
+            break;
+        }
+
+        active.erase(current);
+        memo.emplace(current, share_safe);
+        return share_safe;
+    };
+
+    return recurse(type, recurse);
+}
+
 auto SemanticAnalyzer::findImplForType(const ast::InterfaceDecl& interface_decl,
                                        const Type* receiver_type)
     -> std::expected<ast::FunctionDecl*, Diagnostic> {
@@ -601,7 +853,8 @@ auto SemanticAnalyzer::findImplForType(const ast::InterfaceDecl& interface_decl,
     }
 
     const auto impl_it = package_impls.find(make_impl_key(
-        interface_decl.name, impl_target_group_key(types, concrete_type)));
+        interface_decl.name, interface_decl.owner_module,
+        impl_target_group_key(types, concrete_type)));
     const auto concrete_name = types.describe(concrete_type);
     if (impl_it == package_impls.end()) {
         return unexpected_result<ast::FunctionDecl*>(
@@ -698,6 +951,22 @@ auto SemanticAnalyzer::coerceExprToInterface(FunctionState& state,
     auto impl = findImplForType(*interface_type->interface_decl, *source_type);
     if (!impl) {
         return std::unexpected(impl.error());
+    }
+    if (interface_type->interface_decl != nullptr &&
+        interface_type->interface_decl->owner_module != nullptr &&
+        interface_type->interface_decl->owner_module->module_name ==
+            "std.thread" &&
+        interface_type->interface_decl->name == "run_task") {
+        if (typeContainsLocalProperty(concrete_source_type)) {
+            return unexpected_result<void>(
+                "thread task type contains a local thread-affine value",
+                expr.range);
+        }
+        if (!typeIsThreadShareSafe(concrete_source_type)) {
+            return unexpected_result<void>(
+                "thread task type is not safe to share across threads",
+                expr.range);
+        }
     }
 
     expr.interface_source_type = (*source_type)->kind == TypeKind::Borrow
@@ -880,6 +1149,11 @@ auto SemanticAnalyzer::matchTypePattern(
     const ast::TypeSyntax& pattern, const ast::Module& owner_module,
     const std::vector<std::string>& type_parameters, const Type* actual_type,
     TypeBindings& type_bindings) -> std::expected<void, Diagnostic> {
+    if (actual_type == nullptr) {
+        return make_error("generic argument does not match parameter type",
+                          pattern.range);
+    }
+
     switch (pattern.kind) {
     case ast::TypeSyntax::Kind::Named: {
         if (pattern.type_arguments.empty() &&
@@ -992,7 +1266,8 @@ auto SemanticAnalyzer::matchTypePattern(
                           pattern.range);
     }
     case ast::TypeSyntax::Kind::Pointer: {
-        if (actual_type->kind != TypeKind::Pointer) {
+        if (actual_type->kind != TypeKind::Pointer ||
+            actual_type->is_shared != pattern.is_shared) {
             return make_error("generic argument does not match parameter type",
                               pattern.range);
         }

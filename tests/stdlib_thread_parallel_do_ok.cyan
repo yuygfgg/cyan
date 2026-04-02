@@ -1,0 +1,28 @@
+import /std.thread;
+
+struct AddTask {
+    shared i64* total;
+    i64 value;
+};
+
+impl run_task(&AddTask task) {
+    atomic_fetch_add(task.total, task.value, atomic_seq_cst());
+}
+
+i64 main() {
+    i64 total = 0;
+    i64* raw_total = &mut total;
+    shared i64* total_ptr;
+    unchecked {
+        total_ptr = raw_total as shared i64*;
+    }
+
+    AddTask left = {total_ptr, 4};
+    AddTask middle = {total_ptr, 7};
+    AddTask right = {total_ptr, 9};
+
+    parallel_do([]);
+    parallel_do([left, middle, right]);
+
+    return total - 20;
+}

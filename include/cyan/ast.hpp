@@ -53,6 +53,12 @@ enum class CastKind : std::uint8_t {
     OwnerBorrow,
 };
 
+enum class ThreadPropertyKind : std::uint8_t {
+    Local,
+    Send,
+    Share,
+};
+
 struct TypeSyntax;
 struct Expr;
 struct Stmt;
@@ -175,6 +181,7 @@ enum class BuiltinCallKind : std::uint8_t {
     None,
     Len,
     Subslice,
+    RawData,
     AtomicRelaxedOrder,
     AtomicAcquireOrder,
     AtomicReleaseOrder,
@@ -425,6 +432,7 @@ struct InterfaceDecl {
     std::vector<Parameter> parameters;
     const Type* resolved_return_type = nullptr;
     bool receiver_is_mut = false;
+    bool is_unchecked = false;
     bool is_export = false;
     const Module* owner_module = nullptr;
 };
@@ -469,8 +477,22 @@ struct FunctionDecl {
     std::string impl_target_name;
     const InterfaceDecl* interface_decl = nullptr;
     std::optional<IntrinsicLowering> intrinsic_lowering;
+    bool is_unchecked = false;
     bool is_export = false;
     bool is_extern = false;
+    const Module* owner_module = nullptr;
+};
+
+struct PropertyImplDecl {
+    SourceRange range;
+    ThreadPropertyKind property_kind = ThreadPropertyKind::Local;
+    SourceRange property_name_range;
+    std::vector<std::string> type_parameters;
+    std::vector<SourceRange> type_parameter_ranges;
+    TypeSyntaxPtr target_type;
+    std::string impl_target_name;
+    const Module* impl_target_module = nullptr;
+    bool is_unchecked = false;
     const Module* owner_module = nullptr;
 };
 
@@ -487,7 +509,8 @@ struct ImportDecl {
     Module* imported_module = nullptr;
 };
 
-using Decl = std::variant<StructDecl, EnumDecl, InterfaceDecl, FunctionDecl>;
+using Decl = std::variant<StructDecl, EnumDecl, InterfaceDecl, FunctionDecl,
+                          PropertyImplDecl>;
 
 struct Module {
     const SourceFile* source = nullptr;

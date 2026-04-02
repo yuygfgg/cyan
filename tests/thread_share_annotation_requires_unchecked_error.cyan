@@ -1,0 +1,9 @@
+struct OpaqueHandle {
+    void* raw;
+};
+
+impl share(OpaqueHandle);
+
+i64 main() {
+    return 0;
+}

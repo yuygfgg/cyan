@@ -1,0 +1,20 @@
+import /std.thread;
+
+struct GLContext {
+    i64 id;
+};
+
+impl local(GLContext);
+
+struct RenderTask {
+    GLContext ctx;
+};
+
+impl run_task(&RenderTask task) {}
+
+i64 main() {
+    GLContext ctx = {1};
+    RenderTask task = {ctx};
+    parallel_do([task]);
+    return 0;
+}

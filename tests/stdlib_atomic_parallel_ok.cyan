@@ -1,0 +1,38 @@
+import /std.thread;
+
+struct CasTask {
+    shared i64* total;
+    i64 loops;
+};
+
+impl run_task(&CasTask task) {
+    i64 i = 0;
+    while (i < task.loops) {
+        while (true) {
+            i64 seen = atomic_load(task.total, atomic_acquire());
+            i64 previous = atomic_compare_exchange(
+                task.total, seen, seen + 1, atomic_acq_rel(), atomic_acquire());
+            if (previous == seen) {
+                break;
+            }
+        }
+        i = i + 1;
+    }
+}
+
+i64 main() {
+    i64 total = 0;
+    i64* raw_total = &mut total;
+    shared i64* total_ptr;
+    unchecked {
+        total_ptr = raw_total as shared i64*;
+    }
+
+    CasTask first = {total_ptr, 2000};
+    CasTask second = {total_ptr, 2000};
+    CasTask third = {total_ptr, 2000};
+    CasTask fourth = {total_ptr, 2000};
+
+    parallel_do([first, second, third, fourth]);
+    return total - 8000;
+}

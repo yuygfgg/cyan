@@ -1,0 +1,14 @@
+unchecked interface<T> i64 measure(&T value);
+
+struct Box {
+    i64 value;
+};
+
+unchecked impl measure(&Box box) {
+    return box.value;
+}
+
+i64 main() {
+    Box box = {9};
+    return measure(box) - 9;
+}

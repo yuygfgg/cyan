@@ -1,0 +1,47 @@
+extern {
+    void* malloc(i64 size);
+    void free(void* ptr);
+}
+
+export struct Rc<T> {
+    i64* strong;
+    T* data;
+};
+
+impl local<T>(Rc<T>);
+
+export Rc<T> rc_new<T>(T value) {
+    i64* strong;
+    T* data;
+    unchecked {
+        strong = malloc(sizeof(i64)) as i64*;
+        data = malloc(sizeof(T)) as T*;
+        *strong = 1;
+        *data = value;
+    }
+    return {strong, data};
+}
+
+export Rc<T> rc_clone<T>(&Rc<T> rc) {
+    unchecked {
+        *rc.strong = *rc.strong + 1;
+    }
+    return {rc.strong, rc.data};
+}
+
+export &T rc_get<T>(&Rc<T> rc) depends(return on rc) {
+    unchecked {
+        return rc.data as &T on rc;
+    }
+}
+
+impl drop<T>(&mut Rc<T> self) {
+    unchecked {
+        *self.strong = *self.strong - 1;
+        if (*self.strong == 0) {
+            drop(self.data as &mut T on self);
+            free(self.data as void*);
+            free(self.strong as void*);
+        }
+    }
+}

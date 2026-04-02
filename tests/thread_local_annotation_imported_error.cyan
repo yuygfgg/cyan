@@ -1,0 +1,17 @@
+import modules.external_score as ext;
+import /std.thread;
+
+impl local(ext.Score);
+
+struct RenderTask {
+    ext.Score score;
+};
+
+impl run_task(&RenderTask task) {}
+
+i64 main() {
+    ext.Score score = {1};
+    RenderTask task = {score};
+    parallel_do([task]);
+    return 0;
+}

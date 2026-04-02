@@ -1,0 +1,18 @@
+import /std.sync;
+
+struct Token {
+    &mut i64 counter;
+};
+
+impl drop(&mut Token token) {
+    *token.counter = *token.counter + 1;
+}
+
+i64 main() {
+    i64 count = 0;
+    {
+        Token token = {&mut count};
+        Mutex<Token> mutex = mutex_new(token);
+    }
+    return count - 1;
+}

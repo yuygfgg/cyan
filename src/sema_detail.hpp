@@ -66,6 +66,9 @@ auto is_same_or_subplace(const ast::ResolvedPlace& candidate,
                          const ast::ResolvedPlace& base) -> bool;
 auto make_impl_key(std::string_view interface_name, std::string_view type_name)
     -> std::string;
+auto make_impl_key(std::string_view interface_name,
+                   const ast::Module* interface_module,
+                   std::string_view type_name) -> std::string;
 auto is_borrow_like_type(const Type* type) -> bool;
 auto is_view_like_type(const TypeContext& types, const Type* type) -> bool;
 auto is_direct_shared_view_slice(const TypeContext& types, const Type* type)

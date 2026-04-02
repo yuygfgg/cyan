@@ -1,0 +1,98 @@
+extern {
+    void* malloc(i64 size);
+    void free(void* ptr);
+}
+
+export struct Arc<T> {
+    shared i64* strong;
+    shared T* data;
+};
+
+export Arc<T> arc_new<T>(T value) {
+    i64* raw_strong;
+    T* raw_data;
+    shared i64* strong;
+    shared T* data;
+    unchecked {
+        raw_strong = malloc(sizeof(i64)) as i64*;
+        raw_data = malloc(sizeof(T)) as T*;
+        *raw_strong = 1;
+        *raw_data = value;
+        strong = raw_strong as shared i64*;
+        data = raw_data as shared T*;
+    }
+    return {strong, data};
+}
+
+export Arc<T> arc_clone<T>(&Arc<T> arc) {
+    atomic_fetch_add(arc.strong, 1, atomic_relaxed());
+    return {arc.strong, arc.data};
+}
+
+export &T arc_get<T>(&Arc<T> arc) depends(return on arc) {
+    unchecked {
+        return arc.data as &T on arc;
+    }
+}
+
+impl drop<T>(&mut Arc<T> self) {
+    i64 previous = atomic_fetch_sub(self.strong, 1, atomic_release());
+    if (previous != 1) {
+        return;
+    }
+    atomic_fence(atomic_acquire());
+    unchecked {
+        drop(self.data as &mut T on self);
+        free(self.data as void*);
+        free(self.strong as void*);
+    }
+}
+
+export struct Mutex<T> {
+    shared i64* locked;
+    shared T* data;
+};
+
+export struct MutexGuard<T> {
+    shared i64* locked;
+    &mut T data;
+};
+
+export Mutex<T> mutex_new<T>(T value) {
+    i64* raw_locked;
+    T* raw_data;
+    shared i64* locked;
+    shared T* data;
+    unchecked {
+        raw_locked = malloc(sizeof(i64)) as i64*;
+        raw_data = malloc(sizeof(T)) as T*;
+        *raw_locked = 0;
+        *raw_data = value;
+        locked = raw_locked as shared i64*;
+        data = raw_data as shared T*;
+    }
+    return {locked, data};
+}
+
+export MutexGuard<T> lock<T>(&Mutex<T> mutex)
+    depends(return.data on mutex) {
+    while (atomic_compare_exchange(
+               mutex.locked, 0, 1, atomic_acquire(), atomic_acquire()) != 0) {
+    }
+
+    unchecked {
+        return {mutex.locked, mutex.data as &mut T on mutex};
+    }
+}
+
+impl drop<T>(&mut MutexGuard<T> self) {
+    atomic_store(self.locked, 0, atomic_release());
+}
+
+impl drop<T>(&mut Mutex<T> self) {
+    unchecked {
+        drop(self.data as &mut T on self);
+        free(self.data as void*);
+        free(self.locked as void*);
+    }
+}

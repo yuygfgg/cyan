@@ -1,0 +1,17 @@
+interface<T> i64 local(&T value);
+
+struct Box {
+    i64 value;
+};
+
+impl local(&Box box) {
+    return box.value;
+}
+
+i64 main() {
+    Box box = {17};
+    if (local(box) != 17) {
+        return 1;
+    }
+    return 0;
+}

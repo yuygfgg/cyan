@@ -132,6 +132,29 @@ auto Parser::parseModule() -> ast::Module {
 
 auto Parser::parseDecls(bool is_export)
     -> std::expected<std::vector<ast::Decl>, Diagnostic> {
+    if (match(TokenKind::KwUnchecked)) {
+        if (check(TokenKind::KwImpl)) {
+            auto decl = parseImplDecl(is_export, true);
+            if (!decl) {
+                return std::unexpected(decl.error());
+            }
+            std::vector<ast::Decl> decls;
+            decls.emplace_back(std::move(*decl));
+            return decls;
+        }
+        if (check(TokenKind::KwInterface)) {
+            auto decl = parseInterfaceDecl(is_export, true);
+            if (!decl) {
+                return std::unexpected(decl.error());
+            }
+            std::vector<ast::Decl> decls;
+            decls.emplace_back(std::move(*decl));
+            return decls;
+        }
+        return std::unexpected(Diagnostic(
+            "expected 'impl' or 'interface' after 'unchecked'",
+            previous().range));
+    }
     if (check(TokenKind::KwImpl)) {
         auto decl = parseImplDecl(is_export);
         if (!decl) {
@@ -174,7 +197,7 @@ auto Parser::parseDecls(bool is_export)
     return decls;
 }
 
-auto Parser::parseInterfaceDecl(bool is_export)
+auto Parser::parseInterfaceDecl(bool is_export, bool is_unchecked)
     -> std::expected<ast::InterfaceDecl, Diagnostic> {
     const auto begin = advance().range.begin;
     auto type_parameters = parseTypeParameters();
@@ -204,6 +227,7 @@ auto Parser::parseInterfaceDecl(bool is_export)
     decl.return_type = std::move(*return_type);
     decl.name = name->text;
     decl.name_range = name->range;
+    decl.is_unchecked = is_unchecked;
     decl.is_export = is_export;
 
     auto lparen =
@@ -634,34 +658,104 @@ auto Parser::parseParameterList(std::vector<ast::Parameter>& parameters)
     return {};
 }
 
-auto Parser::parseImplDecl(bool is_export)
-    -> std::expected<ast::FunctionDecl, Diagnostic> {
+auto Parser::parseImplDecl(bool is_export, bool is_unchecked)
+    -> std::expected<ast::Decl, Diagnostic> {
     const auto impl_token = advance();
-    auto interface_name = parseInterfaceName();
+    const auto parse_impl_name =
+        [&]() -> std::expected<std::pair<std::string, SourceRange>, Diagnostic> {
+        if (check(TokenKind::KwDrop)) {
+            const auto token = advance();
+            return std::pair<std::string, SourceRange>{token.text, token.range};
+        }
+        auto first = parseIdentifier();
+        if (!first) {
+            return std::unexpected(first.error());
+        }
+        std::string name = first->text;
+        auto range = first->range;
+        while (match(TokenKind::Dot)) {
+            auto part = parseIdentifier();
+            if (!part) {
+                return std::unexpected(part.error());
+            }
+            name += '.';
+            name += part->text;
+            range.end = part->range.end;
+        }
+        return std::pair<std::string, SourceRange>{std::move(name), range};
+    };
+    auto interface_name = parse_impl_name();
     if (!interface_name) {
         return std::unexpected(interface_name.error());
     }
 
-    ast::FunctionDecl decl;
-    decl.range =
-        source_file.range(impl_token.range.begin, interface_name->range.end);
-    decl.name = interface_name->text;
-    decl.name_range = interface_name->range;
-    decl.impl_target_kind = ast::ImplTargetKind::Named;
-    decl.is_export = is_export;
-
+    std::vector<std::string> type_parameters;
+    std::vector<SourceRange> type_parameter_ranges;
     if (check(TokenKind::Less)) {
-        auto type_parameters = parseTypeParameters();
-        if (!type_parameters) {
-            return std::unexpected(type_parameters.error());
+        auto parsed_type_parameters = parseTypeParameters();
+        if (!parsed_type_parameters) {
+            return std::unexpected(parsed_type_parameters.error());
         }
-        decl.type_parameters.reserve(type_parameters->size());
-        decl.type_parameter_ranges.reserve(type_parameters->size());
-        for (const auto& type_parameter : *type_parameters) {
-            decl.type_parameters.push_back(type_parameter.text);
-            decl.type_parameter_ranges.push_back(type_parameter.range);
+        type_parameters.reserve(parsed_type_parameters->size());
+        type_parameter_ranges.reserve(parsed_type_parameters->size());
+        for (const auto& type_parameter : *parsed_type_parameters) {
+            type_parameters.push_back(type_parameter.text);
+            type_parameter_ranges.push_back(type_parameter.range);
         }
     }
+
+    const auto is_property_name =
+        interface_name->first == "local" || interface_name->first == "send" ||
+        interface_name->first == "share";
+    if (is_property_name) {
+        const auto fallback_index = index;
+        const auto property_lparen =
+            expect(TokenKind::LParen, "expected '(' after impl name");
+        if (!property_lparen) {
+            return std::unexpected(property_lparen.error());
+        }
+
+        auto target_type = parseType();
+        if (target_type && check(TokenKind::RParen)) {
+            auto property_rparen = advance();
+            if (match(TokenKind::Semicolon)) {
+                ast::PropertyImplDecl decl;
+                decl.range =
+                    source_file.range(impl_token.range.begin,
+                                      previous().range.end);
+                decl.property_name_range = interface_name->second;
+                decl.type_parameters = std::move(type_parameters);
+                decl.type_parameter_ranges = std::move(type_parameter_ranges);
+                decl.target_type = std::move(*target_type);
+                decl.is_unchecked = is_unchecked;
+                if (decl.target_type != nullptr &&
+                    decl.target_type->kind == ast::TypeSyntax::Kind::Named) {
+                    decl.impl_target_name = decl.target_type->name;
+                }
+                if (interface_name->first == "local") {
+                    decl.property_kind = ast::ThreadPropertyKind::Local;
+                } else if (interface_name->first == "send") {
+                    decl.property_kind = ast::ThreadPropertyKind::Send;
+                } else {
+                    decl.property_kind = ast::ThreadPropertyKind::Share;
+                }
+                static_cast<void>(property_rparen);
+                return ast::Decl(std::move(decl));
+            }
+        }
+        index = fallback_index;
+    }
+
+    ast::FunctionDecl decl;
+    decl.range =
+        source_file.range(impl_token.range.begin, interface_name->second.end);
+    decl.name = interface_name->first;
+    decl.name_range = interface_name->second;
+    decl.impl_target_kind = ast::ImplTargetKind::Named;
+    decl.is_unchecked = is_unchecked;
+    decl.is_export = is_export;
+    decl.type_parameters = std::move(type_parameters);
+    decl.type_parameter_ranges = std::move(type_parameter_ranges);
 
     auto lparen = expect(TokenKind::LParen, "expected '(' after impl name");
     if (!lparen) {
@@ -695,7 +789,7 @@ auto Parser::parseImplDecl(bool is_export)
     }
     decl.range.end = (*body)->range.end;
     decl.body = std::move(*body);
-    return decl;
+    return ast::Decl(std::move(decl));
 }
 
 auto Parser::parseBlock() -> std::expected<ast::BlockPtr, Diagnostic> {
@@ -2248,6 +2342,7 @@ auto Parser::canStartTopLevelDecl(TokenKind kind) const -> bool {
     case TokenKind::KwImport:
     case TokenKind::KwExport:
     case TokenKind::KwExtern:
+    case TokenKind::KwUnchecked:
     case TokenKind::KwImpl:
     case TokenKind::KwInterface:
     case TokenKind::KwStruct:

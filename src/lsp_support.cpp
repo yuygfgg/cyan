@@ -795,6 +795,37 @@ class ModuleTraversal {
                                    &function_decl);
                     }
                 },
+                [&](const ast::PropertyImplDecl& property_decl) {
+                    std::vector<TypeParameterInfo> type_parameters;
+                    type_parameters.reserve(
+                        property_decl.type_parameters.size());
+                    for (std::size_t index = 0;
+                         index < property_decl.type_parameters.size() &&
+                         index < property_decl.type_parameter_ranges.size();
+                         ++index) {
+                        type_parameters.push_back(TypeParameterInfo{
+                            .name = property_decl.type_parameters[index],
+                            .declaration_range =
+                                property_decl.type_parameter_ranges[index]});
+                    }
+
+                    for (std::size_t index = 0;
+                         index < property_decl.type_parameters.size() &&
+                         index < property_decl.type_parameter_ranges.size();
+                         ++index) {
+                        emit(LSPSymbolOccurrence{
+                            .kind = LSPSymbolKind::TypeParameter,
+                            .role = LSPSymbolRole::Declaration,
+                            .name = property_decl.type_parameters[index],
+                            .range = property_decl.type_parameter_ranges[index],
+                            .declaration_range =
+                                property_decl.type_parameter_ranges[index],
+                        });
+                    }
+                    if (property_decl.target_type != nullptr) {
+                        visitType(*property_decl.target_type, type_parameters);
+                    }
+                },
             },
             decl);
     }

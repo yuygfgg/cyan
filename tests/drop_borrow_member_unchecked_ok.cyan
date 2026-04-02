@@ -1,0 +1,41 @@
+struct Token {
+    i64 id;
+};
+
+struct PtrBox {
+    shared Token* ptr;
+};
+
+struct Holder {
+    &mut Token token;
+};
+
+&mut Token borrow_token(&PtrBox box) depends(return on box) {
+    unchecked {
+        return box.ptr as &mut Token on box;
+    }
+}
+
+impl drop(&mut Token token) {
+    record_drop(token.id);
+}
+
+impl drop(&mut Holder holder) {
+    unchecked {
+        drop(holder.token);
+    }
+}
+
+extern {
+    shared Token* token_ptr();
+    void record_drop(i64 value);
+    i64 dropped_ok();
+}
+
+i64 main() {
+    PtrBox box = {token_ptr()};
+    {
+        Holder holder = {borrow_token(&box)};
+    }
+    return dropped_ok();
+}

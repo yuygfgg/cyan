@@ -33,14 +33,14 @@ class Parser {
         -> std::expected<ast::ImportDecl, Diagnostic>;
     auto parseExternDecls()
         -> std::expected<std::vector<ast::Decl>, Diagnostic>;
-    auto parseInterfaceDecl(bool is_export)
+    auto parseInterfaceDecl(bool is_export, bool is_unchecked = false)
         -> std::expected<ast::InterfaceDecl, Diagnostic>;
     auto parseStructDecls(bool is_export)
         -> std::expected<std::vector<ast::Decl>, Diagnostic>;
     auto parseEnumDecls(bool is_export)
         -> std::expected<std::vector<ast::Decl>, Diagnostic>;
-    auto parseImplDecl(bool is_export)
-        -> std::expected<ast::FunctionDecl, Diagnostic>;
+    auto parseImplDecl(bool is_export, bool is_unchecked = false)
+        -> std::expected<ast::Decl, Diagnostic>;
     auto parseFunctionDecl(bool is_export, bool is_extern)
         -> std::expected<ast::FunctionDecl, Diagnostic>;
     auto parseParameterList(std::vector<ast::Parameter>& parameters)

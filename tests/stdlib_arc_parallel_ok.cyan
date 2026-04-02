@@ -1,0 +1,44 @@
+import /std.sync;
+import /std.thread;
+
+struct SharedState {
+    shared i64* total;
+};
+
+struct ArcTask {
+    Arc<SharedState> state;
+    i64 loops;
+};
+
+impl run_task(&ArcTask task) {
+    &SharedState state = arc_get(&task.state);
+    i64 i = 0;
+    while (i < task.loops) {
+        atomic_fetch_add(state.total, 1, atomic_seq_cst());
+        i = i + 1;
+    }
+}
+
+i64 main() {
+    i64 total = 0;
+    i64* raw_total = &mut total;
+    shared i64* total_ptr;
+    unchecked {
+        total_ptr = raw_total as shared i64*;
+    }
+
+    SharedState state = {total_ptr};
+    Arc<SharedState> root = arc_new(state);
+
+    ArcTask first = {arc_clone(&root), 5000};
+    ArcTask second = {arc_clone(&root), 5000};
+    ArcTask third = {arc_clone(&root), 5000};
+    ArcTask fourth = {arc_clone(&root), 5000};
+    ArcTask fifth = {arc_clone(&root), 5000};
+    ArcTask sixth = {arc_clone(&root), 5000};
+    ArcTask seventh = {arc_clone(&root), 5000};
+    ArcTask eighth = {arc_clone(&root), 5000};
+
+    parallel_do([first, second, third, fourth, fifth, sixth, seventh, eighth]);
+    return total - 40000;
+}

@@ -91,6 +91,14 @@ auto split_qualified_name(std::string_view name) -> std::vector<std::string> {
     return parts;
 }
 
+auto last_qualified_name_segment(std::string_view name) -> std::string_view {
+    const auto separator = name.rfind('.');
+    if (separator == std::string_view::npos) {
+        return name;
+    }
+    return name.substr(separator + 1);
+}
+
 } // namespace
 
 SemanticAnalyzer::SemanticAnalyzer(TypeContext& types) : types(types) {}
@@ -304,6 +312,7 @@ auto SemanticAnalyzer::analyze(ast::Package& package) -> SemanticAnalysis {
     building_export_scopes.clear();
     building_visible_scopes.clear();
     package_impls.clear();
+    package_property_impls.clear();
     instantiated_structs.clear();
     instantiated_enums.clear();
     instantiated_functions.clear();
@@ -328,6 +337,10 @@ auto SemanticAnalyzer::analyze(ast::Package& package) -> SemanticAnalysis {
     auto registered_impls = registerImplDeclarations(package);
     if (!registered_impls) {
         report(registered_impls.error());
+    }
+    auto registered_properties = registerPropertyImplDeclarations(package);
+    if (!registered_properties) {
+        report(registered_properties.error());
     }
 
     for (const auto& module : package.modules) {
@@ -365,7 +378,10 @@ auto SemanticAnalyzer::analyze(ast::Package& package) -> SemanticAnalysis {
                 continue;
             }
 
-            const auto* interface_decl = findVisibleInterface(function->name);
+            const auto* interface_decl = function->interface_decl;
+            if (interface_decl == nullptr) {
+                interface_decl = findVisibleInterface(function->name);
+            }
             if (interface_decl == nullptr) {
                 report(Diagnostic("unknown interface '" + function->name + "'",
                                   function->range));
@@ -398,62 +414,10 @@ auto SemanticAnalyzer::analyze(ast::Package& package) -> SemanticAnalysis {
             if (function == nullptr || !function->type_parameters.empty()) {
                 continue;
             }
-
-            ScopedModule scoped_module(active_module, function->owner_module);
-            if (function->return_type == nullptr) {
-                report(Diagnostic("impl is missing its interface return type",
-                                  function->range));
+            auto ensured_signature = ensureFunctionSignature(*function);
+            if (!ensured_signature) {
+                report(ensured_signature.error());
                 continue;
-            }
-            auto return_type = resolveType(*function->return_type);
-            if (!return_type) {
-                report(return_type.error());
-                continue;
-            }
-            function->resolved_return_type = *return_type;
-
-            bool has_parameter_errors = false;
-            for (auto& parameter : function->parameters) {
-                auto parameter_type = resolveType(*parameter.type);
-                if (!parameter_type) {
-                    report(parameter_type.error());
-                    has_parameter_errors = true;
-                    continue;
-                }
-                parameter.resolved_type = *parameter_type;
-            }
-            if (has_parameter_errors) {
-                continue;
-            }
-
-            auto validated_dependency = validateReturnDependencies(*function);
-            if (!validated_dependency) {
-                report(validated_dependency.error());
-                continue;
-            }
-
-            if (function->is_extern) {
-                auto validated_extern = validateExternSignature(*function);
-                if (!validated_extern) {
-                    report(validated_extern.error());
-                    continue;
-                }
-            }
-
-            if (function->impl_target_kind != ast::ImplTargetKind::None) {
-                const auto* target_type = interfaceReceiverType(
-                    function->parameters.empty()
-                        ? nullptr
-                        : function->parameters.front().resolved_type);
-                auto validated_impl =
-                    validateResolvedImplSignature(*function, target_type);
-                if (!validated_impl) {
-                    report(validated_impl.error());
-                    continue;
-                }
-                if (function->name == "drop") {
-                    types.registerDropFunction(target_type, function);
-                }
             }
         }
     }
@@ -537,6 +501,12 @@ auto SemanticAnalyzer::collectDeclarations(ast::Package& package)
                 if (!registered) {
                     report(registered.error());
                 }
+                continue;
+            }
+
+            if (auto* property_decl = std::get_if<ast::PropertyImplDecl>(&decl);
+                property_decl != nullptr) {
+                property_decl->owner_module = module.get();
                 continue;
             }
 
@@ -632,6 +602,9 @@ auto SemanticAnalyzer::buildExportScope(const ast::Module& module)
                        },
                        [&](const ast::FunctionDecl& function_decl) {
                            is_exported = function_decl.is_export;
+                       },
+                       [&](const ast::PropertyImplDecl&) {
+                           is_exported = false;
                        },
                    },
                    decl);
@@ -1021,6 +994,15 @@ auto SemanticAnalyzer::registerImplDeclarations(ast::Package& package)
                 }
             }
 
+            const auto interface_key_name =
+                function->interface_decl != nullptr
+                    ? function->interface_decl->name
+                    : std::string(last_qualified_name_segment(function->name));
+            const auto* interface_key_module =
+                function->interface_decl != nullptr
+                    ? function->interface_decl->owner_module
+                    : nullptr;
+
             const auto* receiver_pattern = implReceiverPattern(*function);
             if (receiver_pattern == nullptr) {
                 return std::unexpected(Diagnostic(
@@ -1087,7 +1069,8 @@ auto SemanticAnalyzer::registerImplDeclarations(ast::Package& package)
             }
 
             const auto key = make_impl_key(
-                function->name, impl_target_group_key(*receiver_pattern));
+                interface_key_name, interface_key_module,
+                impl_target_group_key(*receiver_pattern));
             auto& impls = package_impls[key];
             for (auto* existing_impl : impls) {
                 auto existing_pattern =
@@ -1102,12 +1085,196 @@ auto SemanticAnalyzer::registerImplDeclarations(ast::Package& package)
                 if (unify_patterns(*receiver_term, *existing_pattern,
                                    substitutions)) {
                     return std::unexpected(Diagnostic(
-                        "duplicate impl for interface '" + function->name +
+                        "duplicate impl for interface '" + interface_key_name +
                             "' on '" + function->impl_target_name + "'",
                         function->range));
                 }
             }
             impls.push_back(function);
+        }
+    }
+
+    return {};
+}
+
+auto SemanticAnalyzer::registerPropertyImplDeclarations(ast::Package& package)
+    -> std::expected<void, Diagnostic> {
+    const auto canonical_property_pattern =
+        [](const ast::PropertyImplDecl& decl) -> std::string {
+        std::unordered_map<std::string, std::size_t> parameter_indices;
+        for (std::size_t index = 0; index < decl.type_parameters.size();
+             ++index) {
+            parameter_indices.emplace(decl.type_parameters[index], index);
+        }
+        std::string pattern = decl.impl_target_name;
+        if (decl.target_type == nullptr || decl.target_type->type_arguments.empty()) {
+            return pattern;
+        }
+        pattern.push_back('<');
+        for (std::size_t index = 0; index < decl.target_type->type_arguments.size();
+             ++index) {
+            if (index != 0) {
+                pattern.push_back(',');
+            }
+            const auto& arg = *decl.target_type->type_arguments[index];
+            const auto it = parameter_indices.find(arg.name);
+            if (arg.kind == ast::TypeSyntax::Kind::Named &&
+                arg.type_arguments.empty() && it != parameter_indices.end()) {
+                pattern.push_back('$');
+                pattern += std::to_string(it->second);
+            } else {
+                pattern += describe_type_syntax(arg);
+            }
+        }
+        pattern.push_back('>');
+        return pattern;
+    };
+
+    for (const auto& module : package.modules) {
+        for (auto& decl : module->declarations) {
+            auto* property_decl = std::get_if<ast::PropertyImplDecl>(&decl);
+            if (property_decl == nullptr) {
+                continue;
+            }
+            ScopedModule scoped_module(active_module, property_decl->owner_module);
+
+            if (property_decl->target_type == nullptr ||
+                property_decl->target_type->kind != ast::TypeSyntax::Kind::Named) {
+                return std::unexpected(Diagnostic(
+                    "thread property impl target must be a nominal type",
+                    property_decl->range));
+            }
+            const auto& target_name = property_decl->target_type->name;
+
+            bool has_nominal_target_type = false;
+            std::optional<std::size_t> expected_type_argument_count;
+            const ast::Module* canonical_target_module = nullptr;
+            std::string canonical_target_name;
+            if (const auto* named = findNamedTypeInModule(
+                    *property_decl->owner_module, target_name);
+                named != nullptr) {
+                const auto* unqualified = types.unqualify(named);
+                if (unqualified->kind == TypeKind::Struct &&
+                    unqualified->struct_decl != nullptr) {
+                    const auto* canonical_decl =
+                        unqualified->struct_decl->template_decl != nullptr
+                            ? unqualified->struct_decl->template_decl
+                            : unqualified->struct_decl;
+                    has_nominal_target_type = true;
+                    expected_type_argument_count = 0;
+                    canonical_target_module = canonical_decl->owner_module;
+                    canonical_target_name = canonical_decl->name;
+                } else if (unqualified->kind == TypeKind::Enum &&
+                           unqualified->enum_decl != nullptr) {
+                    const auto* canonical_decl =
+                        unqualified->enum_decl->template_decl != nullptr
+                            ? unqualified->enum_decl->template_decl
+                            : unqualified->enum_decl;
+                    has_nominal_target_type = true;
+                    expected_type_argument_count = 0;
+                    canonical_target_module = canonical_decl->owner_module;
+                    canonical_target_name = canonical_decl->name;
+                }
+            }
+            if (auto* struct_template = findStructTemplateInModule(
+                    *property_decl->owner_module, target_name);
+                struct_template != nullptr) {
+                has_nominal_target_type = true;
+                expected_type_argument_count =
+                    struct_template->type_parameters.size();
+                canonical_target_module = struct_template->owner_module;
+                canonical_target_name = struct_template->name;
+            } else if (auto* enum_template = findEnumTemplateInModule(
+                           *property_decl->owner_module,
+                           target_name);
+                       enum_template != nullptr) {
+                has_nominal_target_type = true;
+                expected_type_argument_count =
+                    enum_template->type_parameters.size();
+                canonical_target_module = enum_template->owner_module;
+                canonical_target_name = enum_template->name;
+            }
+            if (!has_nominal_target_type || canonical_target_module == nullptr ||
+                canonical_target_name.empty()) {
+                return std::unexpected(Diagnostic(
+                    "unknown thread property target type '" + target_name + "'",
+                    property_decl->target_type->range));
+            }
+            property_decl->impl_target_module = canonical_target_module;
+            property_decl->impl_target_name = canonical_target_name;
+            if (property_decl->property_kind == ast::ThreadPropertyKind::Share &&
+                !property_decl->is_unchecked) {
+                return std::unexpected(Diagnostic(
+                    "impl share(...) must be declared unchecked",
+                    property_decl->property_name_range));
+            }
+            if (property_decl->property_kind != ast::ThreadPropertyKind::Share &&
+                property_decl->is_unchecked) {
+                return std::unexpected(Diagnostic(
+                    "only impl share(...) may be declared unchecked",
+                    property_decl->property_name_range));
+            }
+            if (expected_type_argument_count.has_value() &&
+                *expected_type_argument_count == 0 &&
+                !property_decl->target_type->type_arguments.empty()) {
+                return std::unexpected(Diagnostic(
+                    "type '" + property_decl->impl_target_name +
+                        "' is not generic",
+                    property_decl->target_type->range));
+            }
+            if (expected_type_argument_count.has_value() &&
+                *expected_type_argument_count != 0 &&
+                property_decl->target_type->type_arguments.empty()) {
+                return std::unexpected(Diagnostic(
+                    "generic type '" + property_decl->impl_target_name +
+                        "' requires explicit type arguments",
+                    property_decl->target_type->range));
+            }
+            if (expected_type_argument_count.has_value() &&
+                property_decl->target_type->type_arguments.size() !=
+                    *expected_type_argument_count) {
+                return std::unexpected(Diagnostic(
+                    "wrong number of type arguments for '" +
+                        property_decl->impl_target_name + "'",
+                    property_decl->target_type->range));
+            }
+
+            for (const auto& type_argument :
+                 property_decl->target_type->type_arguments) {
+                if (type_argument == nullptr) {
+                    continue;
+                }
+                const bool is_bare_type_parameter =
+                    type_argument->kind == ast::TypeSyntax::Kind::Named &&
+                    type_argument->type_arguments.empty() &&
+                    std::ranges::find(property_decl->type_parameters,
+                                      type_argument->name) !=
+                        property_decl->type_parameters.end();
+                if (!is_bare_type_parameter) {
+                    return std::unexpected(Diagnostic(
+                        "thread property impl target arguments must be bare "
+                        "type parameters",
+                        type_argument->range));
+                }
+            }
+
+            const auto pattern = canonical_property_pattern(*property_decl);
+            auto& decls = package_property_impls[property_decl->property_kind];
+            for (const auto* existing : decls) {
+                if (existing->owner_module != property_decl->owner_module ||
+                    existing->impl_target_module !=
+                        property_decl->impl_target_module ||
+                    existing->impl_target_name != property_decl->impl_target_name) {
+                    continue;
+                }
+                if (canonical_property_pattern(*existing) == pattern) {
+                    return std::unexpected(Diagnostic(
+                        "duplicate thread property impl for '" +
+                            property_decl->impl_target_name + "'",
+                        property_decl->range));
+                }
+            }
+            decls.push_back(property_decl);
         }
     }
 
@@ -1201,6 +1368,9 @@ auto SemanticAnalyzer::registerVisibleDecl(ModuleScope& scope, ast::Decl& decl,
 
     auto* function_decl = std::get_if<ast::FunctionDecl>(&decl);
     if (function_decl == nullptr) {
+        if (std::get_if<ast::PropertyImplDecl>(&decl) != nullptr) {
+            return {};
+        }
         return {};
     }
     if (function_decl->impl_target_kind != ast::ImplTargetKind::None) {
@@ -1708,6 +1878,83 @@ auto SemanticAnalyzer::validateExternSignature(const ast::FunctionDecl& decl)
                 parameter.range));
         }
     }
+    return {};
+}
+
+auto SemanticAnalyzer::ensureFunctionSignature(ast::FunctionDecl& decl)
+    -> std::expected<void, Diagnostic> {
+    ScopedModule scoped_module(active_module, decl.owner_module);
+
+    if (decl.impl_target_kind != ast::ImplTargetKind::None) {
+        if (decl.name == "drop") {
+            if (decl.return_type == nullptr) {
+                decl.return_type = make_type_syntax_from_type(types.voidType());
+            }
+        } else {
+            if (decl.interface_decl == nullptr) {
+                const auto* interface_decl = findVisibleInterface(decl.name);
+                if (interface_decl == nullptr) {
+                    return make_error("unknown interface '" + decl.name + "'",
+                                      decl.range);
+                }
+                decl.interface_decl = interface_decl;
+            }
+            if (decl.return_type == nullptr) {
+                decl.return_type =
+                    clone_type_syntax(*decl.interface_decl->return_type, {});
+            }
+        }
+    }
+
+    if (decl.return_type == nullptr) {
+        return make_error("impl is missing its interface return type",
+                          decl.range);
+    }
+
+    if (decl.resolved_return_type == nullptr) {
+        auto return_type = resolveType(*decl.return_type);
+        if (!return_type) {
+            return std::unexpected(return_type.error());
+        }
+        decl.resolved_return_type = *return_type;
+    }
+
+    for (auto& parameter : decl.parameters) {
+        if (parameter.resolved_type != nullptr) {
+            continue;
+        }
+        auto parameter_type = resolveType(*parameter.type);
+        if (!parameter_type) {
+            return std::unexpected(parameter_type.error());
+        }
+        parameter.resolved_type = *parameter_type;
+    }
+
+    auto validated_dependency = validateReturnDependencies(decl);
+    if (!validated_dependency) {
+        return std::unexpected(validated_dependency.error());
+    }
+
+    if (decl.is_extern) {
+        auto validated_extern = validateExternSignature(decl);
+        if (!validated_extern) {
+            return std::unexpected(validated_extern.error());
+        }
+    }
+
+    if (decl.impl_target_kind != ast::ImplTargetKind::None) {
+        const auto* target_type = interfaceReceiverType(
+            decl.parameters.empty() ? nullptr
+                                    : decl.parameters.front().resolved_type);
+        auto validated_impl = validateResolvedImplSignature(decl, target_type);
+        if (!validated_impl) {
+            return std::unexpected(validated_impl.error());
+        }
+        if (decl.name == "drop") {
+            types.registerDropFunction(target_type, &decl);
+        }
+    }
+
     return {};
 }
 

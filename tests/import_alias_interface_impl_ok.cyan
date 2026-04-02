@@ -1,0 +1,24 @@
+import modules.external_measure as ext;
+
+struct Box {
+    i64 value;
+};
+
+impl ext.measure(&Box box) {
+    return box.value;
+}
+
+i64 call_dyn(&ext.measure value) {
+    return ext.measure(value);
+}
+
+i64 main() {
+    Box box = {7};
+    if (ext.measure(box) != 7) {
+        return 1;
+    }
+    if (call_dyn(&box) != 7) {
+        return 2;
+    }
+    return 0;
+}

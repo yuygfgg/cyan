@@ -1,0 +1,14 @@
+import /std.rc;
+import /std.thread;
+
+struct RcTask {
+    Rc<i64> value;
+};
+
+impl run_task(&RcTask task) {}
+
+i64 main() {
+    RcTask task = {rc_new(3)};
+    parallel_do([task]);
+    return 0;
+}

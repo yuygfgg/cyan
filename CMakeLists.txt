@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(LLVM REQUIRED CONFIG)
+find_package(Threads REQUIRED)
 
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 
@@ -50,9 +51,24 @@ add_executable(
     src/type.cpp
 )
 
+add_library(
+    cyan_runtime
+    STATIC
+    runtime/thread_runtime.c
+)
+set_target_properties(
+    cyan_runtime
+    PROPERTIES
+    OUTPUT_NAME cyan_runtime
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+)
+target_link_libraries(cyan_runtime PUBLIC Threads::Threads)
+
 target_include_directories(cyan PRIVATE include)
 target_include_directories(cyan SYSTEM PRIVATE third_party/glaze/include)
 target_link_libraries(cyan PRIVATE ${LLVM_LIBS})
+add_dependencies(cyan cyan_runtime)
 
 add_executable(
     cyan_lsp_support_tests
@@ -82,6 +98,7 @@ target_include_directories(
     third_party/glaze/include
 )
 target_link_libraries(cyan_lsp_support_tests PRIVATE ${LLVM_LIBS})
+add_dependencies(cyan_lsp_support_tests cyan_runtime)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|AppleClang")
     target_compile_options(

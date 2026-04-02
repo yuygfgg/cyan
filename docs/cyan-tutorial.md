@@ -6,7 +6,7 @@ This tutorial is written against the repository as it exists today. The main tea
 
 The easiest way to use this document is to keep a terminal open beside it. When a section points at a standalone snippet such as `docs/snippets/hello_cyan.cyan`, run `cyan docs/snippets/hello_cyan.cyan --check` and read the code while the compiler stays honest.
 
-The current builtin modules are `/std.slice`, `/std.heap`, `/std.mem`, `/std.cstr`, `/std.file`, `/std.println`, `/std.ptr`, and `/std.strconv`. The standard library is still early in its development.
+The current builtin modules are `/std.slice`, `/std.heap`, `/std.mem`, `/std.cstr`, `/std.file`, `/std.println`, `/std.ptr`, `/std.strconv`, `/std.rc`, `/std.sync`, and `/std.thread`. The standard library is still early in its development.
 
 ## Built-In Types
 
@@ -851,13 +851,11 @@ The detail that matters for everyday use is the local bindings. `name` and `answ
 
 The same interface is open to your own types. The current stdlib exposes `StringBuilder` together with a few small helper functions so an external module can append text and numbers while implementing `fmt`. Built-in `fmt` support covers strings, booleans, characters, signed integers, unsigned integers, and floating-point values.
 
-Use an unqualified import here:
+An unqualified import keeps the example short:
 
 ```cyan
 import /std.println;
 ```
-
-That detail matters because `impl` names are written directly as `impl fmt(...)`. They are not written as `impl print.fmt(...)`.
 
 This standalone example is `docs/snippets/custom_fmt.cyan`.
 
@@ -909,6 +907,24 @@ impl measure(&Box<i64> box) {
 ```
 
 The compiler reports `duplicate impl for interface 'measure' on 'Box'`. That is Cyan refusing ambiguous dispatch. If two `impl` blocks could both claim the same receiver shape, the language makes you resolve the conflict instead of picking one silently.
+
+### `unchecked` Interface Contracts
+
+Some contracts depend on invariants that the compiler cannot prove from the signature alone. Cyan lets you mark that kind of contract directly on the interface:
+
+```cyan
+unchecked interface<T> void publish(&T value);
+```
+
+The matching implementations carry the same marker:
+
+```cyan
+unchecked impl publish(&ChannelWriter writer) {
+    // body
+}
+```
+
+The signature still goes through the ordinary interface checker. The `unchecked` marker says the deeper semantic promise behind the contract comes from the library author rather than from structural analysis.
 
 ## 9. `unchecked`, Raw Pointers, Null, And The C Boundary
 
@@ -1047,7 +1063,147 @@ i64 main() {
 
 The compiler reports `could not infer type argument for 'T'`. The fix is to write the type argument explicitly, for example `ptr.null<i64>()` or `ptr.null<void>()`.
 
-## 10. Practical Walkthrough: A Zero-Copy HTTP Request Parser
+## 10. Blocking Parallel Work With `parallel_do`
+
+### Why Cyan Starts Here
+
+Cyan's current threading surface centers on one straightforward tool: `parallel_do([]&run_task tasks);`. It launches a batch of tasks, waits for all of them to finish, and then returns to the caller. That gives you a direct way to express fork-join work while keeping the lifetime of borrowed inputs easy to see in the source.
+
+### Mental Model
+
+Think of `parallel_do(...)` as a foreman handing job cards to workers and then waiting at the door until every card comes back. The task values are the cards. The `run_task` interface is the one operation every card must support. Because the call is blocking, a task may still borrow data that lives in the caller. When several workers touch the same state, that shared state needs a synchronization shape such as `Mutex<T>`, `Arc<T>`, or atomics on `shared T*`.
+
+### The Code
+
+This file is `docs/snippets/threading_parallel_do.cyan`.
+
+```cyan
+import /std.sync;
+import /std.thread;
+
+struct AddTask {
+    &Mutex<i64> total;
+    i64 value;
+};
+
+impl run_task(&AddTask task) {
+    MutexGuard<i64> guard = lock(task.total);
+    *guard.data = *guard.data + task.value;
+}
+
+i64 main() {
+    Mutex<i64> total = mutex_new(0);
+    AddTask left = {&total, 4};
+    AddTask middle = {&total, 7};
+    AddTask right = {&total, 9};
+
+    parallel_do([left, middle, right]);
+
+    MutexGuard<i64> guard = lock(&total);
+    return *guard.data - 20;
+}
+```
+
+Run it the same way as the earlier snippets:
+
+```sh
+cyan docs/snippets/threading_parallel_do.cyan --check
+cyan docs/snippets/threading_parallel_do.cyan -o /tmp/threading_parallel_do.o
+```
+
+### Walkthrough
+
+`import /std.thread;` gives you `parallel_do(...)` and the `run_task` interface. `import /std.sync;` adds `Mutex`, `MutexGuard`, `Arc`, and the current synchronization helpers.
+
+`struct AddTask { &Mutex<i64> total; i64 value; };` says each task borrows one shared mutex and carries one increment. The important detail is the borrow. `AddTask` points at caller-owned state that must outlive the blocking call to `parallel_do(...)`.
+
+`impl run_task(&AddTask task)` is the thread entry point for `AddTask`. Cyan expresses that entry point through the ordinary interface mechanism. `lock(task.total)` returns a `MutexGuard<i64>`. While that guard is alive, `guard.data` is a mutable borrow to the protected value. When the guard leaves scope, its `drop` implementation releases the lock.
+
+`parallel_do([left, middle, right]);` builds a slice of tasks and runs them as one blocking batch. The key word is blocking. Control does not move to the next line until all three tasks have finished.
+
+The final `lock(&total)` is ordinary code again. The parallel phase is over, so it is safe to read the result and return it.
+
+### Two Other Common Shapes
+
+The mutex example covers one common pattern: several tasks borrowing one shared mutable value from the caller.
+
+The next common pattern is shared heap state through `Arc<T>`:
+
+```cyan
+struct SharedState {
+    Mutex<i64> total;
+};
+
+struct ArcTask {
+    Arc<SharedState> state;
+    i64 value;
+};
+
+impl run_task(&ArcTask task) {
+    &SharedState state = arc_get(&task.state);
+    MutexGuard<i64> guard = lock(&state.total);
+    *guard.data = *guard.data + task.value;
+}
+```
+
+`Arc<T>` gives several tasks shared ownership of one heap object. `arc_get(...)` turns the `Arc` back into a borrow so the task can read fields or lock an embedded mutex.
+
+Another common pattern is raw shared state plus atomics. When the shared value is a counter, flag, or pointer-sized coordination cell, `shared T*` is the raw building block:
+
+```cyan
+i64 counter = 0;
+shared i64* total;
+unchecked {
+    total = (&mut counter) as shared i64*;
+}
+atomic_fetch_add(total, 1, atomic_seq_cst());
+```
+
+The `shared` qualifier is the line that marks a raw pointer as intended for cross-thread access. Atomic operations only accept `shared` pointers.
+
+### Marking Types For Thread Boundaries
+
+Task types are still ordinary Cyan structs and enums. The thread-specific part is the contract at the boundary.
+
+When a type is tied to one thread by meaning rather than by storage shape, mark it with `impl local(...)`:
+
+```cyan
+struct GLContext {
+    i64 id;
+};
+
+impl local(GLContext);
+```
+
+That tells Cyan to treat the type as thread-affine. The marker composes through larger task shapes, so a task that contains `GLContext` directly or indirectly still carries that thread-affine meaning.
+
+When a nominal type is safe to share but its implementation is too opaque for a simple structural rule, mark it explicitly with `unchecked impl share(...)`:
+
+```cyan
+struct OpaqueHandle {
+    void* raw;
+};
+
+unchecked impl share(OpaqueHandle);
+```
+
+This is useful for low-level handles or wrappers whose semantics come from the library author rather than from the field list alone.
+
+The raw-pointer side follows the same idea. An ordinary `T*` is just a raw pointer. A `shared T*` is a raw pointer that is meant to participate in cross-thread coordination.
+
+### The Working Set
+
+The pieces that work together today are:
+
+- `/std.thread` with `run_task` and `parallel_do(...)`
+- `/std.sync` with `Mutex<T>`, `MutexGuard<T>`, `Arc<T>`, `arc_get(...)`, and `lock(...)`
+- `shared T*` for raw cross-thread state
+- atomic operations and memory-order constants
+- `impl local(...)` and `unchecked impl share(...)` for nominal thread properties
+
+That is enough to write blocking parallel loops, shared heap state, synchronized updates, and low-level atomic coordination in ordinary Cyan code.
+
+## 11. Practical Walkthrough: A Zero-Copy HTTP Request Parser
 
 ### Why This Example Matters
 
@@ -1156,7 +1312,7 @@ The companion document [Zero-Copy HTTP Walkthrough](http-zero-copy-walkthrough.m
 
 The repository also contains `examples/http_parse/main.cyan`, which runs the same basic design against a real loopback socket and prints the parsed fields with `/std.println`.
 
-## 11. Reading Cyan’s Error Messages
+## 12. Reading Cyan’s Error Messages
 
 The fastest way to get productive in Cyan is to learn how the compiler is thinking. The failing cases are good at exposing that thinking because each one is small and deliberate.
 
@@ -1172,7 +1328,7 @@ When Cyan says `default case is unreachable`, it is treating exhaustive pattern 
 
 When Cyan says `could not infer type argument for 'T'`, it usually means exactly what it says: the call site did not provide enough evidence. The fix is often to bind a value to a typed local or to spell the type argument explicitly.
 
-## 12. Where To Go Next
+## 13. Where To Go Next
 
 If you want one file that touches many language features in a compact space, read `examples/all_features.cyan`. It shows slices, `depends(...)`, interfaces, `switch`, `unchecked`, and `/std.println` in one program.
 

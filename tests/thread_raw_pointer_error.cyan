@@ -1,0 +1,15 @@
+import /std.thread;
+
+struct PtrTask {
+    i64* ptr;
+};
+
+impl run_task(&PtrTask task) {}
+
+i64 main() {
+    i64 value = 0;
+    i64* ptr = &mut value;
+    PtrTask task = {ptr};
+    parallel_do([task]);
+    return 0;
+}

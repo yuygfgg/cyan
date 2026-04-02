@@ -1,6 +1,7 @@
 # Threading Plan
 
-This note records the current concurrency MVP and the next design steps.
+This note records the current concurrency MVP and the immediate library surface
+to build on top of it.
 
 ## What Exists Now
 
@@ -17,25 +18,32 @@ concurrency primitives in Cyan code:
   `atomic_load`, `atomic_store`, `atomic_exchange`,
   `atomic_compare_exchange`, `atomic_fetch_add`, `atomic_fetch_sub`,
   `atomic_fetch_and`, `atomic_fetch_or`, `atomic_fetch_xor`, `atomic_fence`
+- nominal thread-affinity markers:
+  `impl local(Type);`, `unchecked impl share(Type);`, and generic forms such as
+  `impl local<T>(Rc<T>);`
+- task-boundary checking for `/std.thread.run_task` that rejects task receiver
+  types which recursively contain a `local` type or any field shape that is
+  not safe to share across threads
 
-These are enough to implement the internal mechanics of types such as:
+These are enough to implement the internal mechanics of concurrency-aware
+stdlib code such as:
 
-- `Rc<T>`
-- `Arc<T>`
-- `Mutex<T>`
-- thread handles and join handles
 - low-level runtime shims for OS threads and synchronization objects
+- blocking fork-join helpers
+- first-pass pointer-backed concurrency primitives such as `Rc<T>`, `Arc<T>`,
+  and `Mutex<T>`
 
 The current goal is to give Cyan enough built-in semantics to construct
-concurrency libraries without pushing those semantics into C shims.
+concurrency libraries with only a thin runtime shim where the host ABI makes
+that unavoidable.
 
 ## What Is Explicitly Not Solved Yet
 
 This MVP does not claim to solve the full safe threading model.
 
-The missing pieces are:
+The missing pieces are still:
 
-- scoped threads
+- general scoped threads
 - safe thread-boundary checking for high-level `spawn`
 - semantic thread-affinity types such as GL contexts or epoll handles
 - a first-class distinction between "movable to another thread" and
@@ -43,52 +51,47 @@ The missing pieces are:
 - an optimizer-visible interior-mutability marker comparable in role to
   `UnsafeCell`
 
-## Immediate Stdlib Direction
+## Immediate Stdlib Surface
 
-The expected next library work is:
+The first stdlib thread API should stay narrow:
 
-- add thread runtime bindings for create, dispatch, join, yield, and sleep
-- implement `Rc<T>` on raw `T*`
-- implement `Arc<T>` on `shared T*` plus atomics
-- implement `Mutex<T>` on `shared` runtime state plus owner-bound borrow casts
-- keep OS interaction and allocation details in stdlib/runtime code, not in the
-  language surface
+- `/std.thread` exports:
+  - `interface<T> void run_task(&T task);`
+  - `void parallel_do([]&run_task tasks);`
+- `/std.rc` exports:
+  - `Rc<T>`, `rc_new`, `rc_clone`, `rc_get`
+- `/std.sync` exports:
+  - `Arc<T>`, `arc_new`, `arc_clone`, `arc_get`
+  - `Mutex<T>`, `MutexGuard<T>`, `mutex_new`, `lock`
+- `parallel_do(...)` is blocking. It MUST NOT return until every submitted task
+  has completed.
+- The runtime may create or schedule worker threads internally, but that
+  detail stays behind the library boundary.
+- The primary use case is zero-copy fork-join over stack-borrowed read-only
+  data and similar partitioned work.
 
-The owner-bound borrow cast exists for exactly this style of code: internal
-pointer-backed abstractions that want their returned borrows to remain tied to
-an outer owner value for alias tracking.
+This one API shape is intentionally the whole immediate design. There is no
+separate `parallel_do2`, no scope object, and no general thread-handle API at
+this stage.
 
-## Next Language Step: Scoped Threads
+The owner-bound borrow cast exists for the lower layers that follow from this
+surface later, such as pointer-backed synchronization types that want returned
+borrows to remain tied to an outer owner value for alias tracking.
 
-Scoped threads remain the biggest missing capability.
+## Blocking Fork-Join Instead Of Scoped Threads
 
-Without them, parallel read-only work over stack-owned data has avoidable
-costs:
+This blocking fork-join combinator covers the highest-value scoped-thread use
+case without needing a full lexical thread-scope model.
 
-- deep copies
-- heap promotion into `Arc`
-- extra reference-count traffic
+The key property is that all task borrows stay inside one ordinary call:
 
-Before a full lexical scope model, there is a much smaller blocking fork-join
-step that covers the highest-value use case.
-
-The narrow shape is a stdlib combinator such as:
-
-- `thread.parallel_do(&task_a, &task_b)`
-
-where each argument is an erased task borrow or a generic task value with a
-known `run_task(...)` implementation. The library may create worker threads
-internally, but it MUST join them before `parallel_do` returns.
-
-This is much easier than a general scoped-thread model because the borrow
-lifetime does not escape the call site:
-
-- the caller lends borrows into one ordinary function call
+- the caller packages tasks into one `[]&run_task` slice
 - the function blocks until all worker threads have completed
 - once the call returns, those borrows are over
 
-This is enough to express zero-copy parallel reads over stack-owned data and
-similar fork-join patterns over disjoint mutable partitions.
+This is enough to express zero-copy parallel reads over stack-owned data.
+It also gives a direct substrate for higher-level library helpers such as a
+future `parallel_for(...)` built on top of task slicing.
 
 The performance profile depends heavily on the runtime strategy. A naive
 implementation that creates fresh OS threads on every `parallel_do(...)` call
@@ -102,7 +105,7 @@ a cheaper substrate, for example:
 That keeps the surface blocking and lexical while avoiding thread explosion in
 nested fork-join code.
 
-However, it is intentionally narrower than full scoped threads:
+However, this remains intentionally narrower than full scoped threads:
 
 - no handles that live past the immediate call
 - no late join
@@ -110,62 +113,61 @@ However, it is intentionally narrower than full scoped threads:
 - no dynamic thread sets built incrementally across a lexical region
 - no general API for "spawn now, join later inside the same scope"
 
-This blocking combinator also does not solve nominal thread-affinity concerns.
-Without future tags such as `@local`, values that are structurally harmless but
-semantically thread-bound cannot yet be rejected at the API boundary.
+If that extra expressive power becomes necessary later, a lexical scope model
+can still be added on top. This note does not commit to any scoped-thread API
+beyond the blocking `parallel_do(...)` shape above.
 
-The preferred immediate step is therefore:
+## Current Thread Boundary Rule
 
-- add one or more blocking fork-join combinators in stdlib/runtime
-- use them for stack-borrowing parallel read and partitioned-write workloads
-- postpone a general scope object or scope construct until the narrower shape
-  proves insufficient
+The current MVP has a negative nominal marker, `local`, and a positive escape
+ hatch, `share`.
 
-If the blocking combinator becomes common, the likely ergonomic surface is a
-small family rather than one universal primitive:
+Type authors can mark semantically thread-affine values directly:
 
-- `parallel_do(a, b)` for void tasks
-- fixed-arity variants such as `parallel_do3(...)` if needed
-- higher-level data-parallel helpers such as `parallel_for(...)` built on top
+```cyan
+struct GLContext {
+    i64 handle;
+};
 
-The generic or fixed-arity forms may also be a better fit than a homogeneous
-task slice, because they avoid forcing the caller to erase every task into an
-interface container up front.
+impl local(GLContext);
+```
 
-The broader model still points toward a lexical scope design once that extra
-expressive power is needed.
+Generic library wrappers can also opt into the same rule:
 
-The shape to pursue is:
+```cyan
+impl local<T>(Rc<T>);
+```
 
-- a scope object or scope construct that defines the lifetime of a thread set
-- spawned scoped threads whose handles cannot escape that scope
-- a rule that the scope must complete only after all spawned threads have
-  joined
-- borrow-based argument passing into scoped threads, so stack-owned read-only
-  and disjoint mutable partitions can be expressed without heap indirection
+When a value is coerced to `/std.thread.run_task`, the compiler now applies two
+checks:
 
-This fits Cyan better than importing Rust lifetimes directly, because it keeps
-the control structure lexical and explicit.
+- it rejects any reachable nominal type marked `local`
+- it requires the whole receiver type to be structurally share-safe
 
-## Next Language Step: Nominal Thread Properties
+The structural rule is currently:
 
-The current MVP intentionally avoids pretending that thread safety is a purely
-structural property.
+- scalars are share-safe
+- borrows, slices, and arrays inherit the element result
+- plain raw pointers are not share-safe
+- `shared T*` is share-safe only if `T` is share-safe
+- structs and enums are share-safe only if every reachable field or payload is
+  share-safe
+- `unchecked impl share(Type);` can opt a nominal type into the share-safe set directly
 
-The next design should add nominal properties or tags so type authors can state
-semantic threading constraints directly.
+This still does not implement a separate `send` dimension for future
+move-to-thread APIs such as `spawn`.
 
-Examples of the intended direction:
+## Library Status
 
-- `@local` or an equivalent marker for thread-affine values
-- explicit type-level declarations for "movable to another thread"
-- explicit type-level declarations for "shareable across threads"
-- conditional declarations for generic wrappers, for example a future `Arc<T>`
-  saying its thread properties depend on `T`
+The first `Rc`, `Arc`, and `Mutex` wrappers now have real drop hooks.
 
-Important constraint: this should not force every ordinary type to opt in by
-default with Java-style boilerplate. The common case should stay lightweight,
-even if automatic inference might cause unsafe code.
+The current library/runtime surface covers:
+
+- construction and borrowing shape
+- atomic operations and locking shape
+- blocking `parallel_do(...)`
+- task-boundary rejection for `local` or non-share-safe values
+- final reclamation of `Rc`, `Arc`, and `Mutex` payload storage
 
 ## Why `shared` Stayed Narrow
 

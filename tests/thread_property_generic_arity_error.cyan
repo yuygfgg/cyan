@@ -1,0 +1,7 @@
+import /std.rc;
+
+impl local(Rc);
+
+i64 main() {
+    return 0;
+}

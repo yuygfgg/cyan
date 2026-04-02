@@ -1,0 +1,46 @@
+import /std.thread;
+
+struct InnerTask {
+    shared i64* total;
+    i64 loops;
+};
+
+impl run_task(&InnerTask task) {
+    i64 i = 0;
+    while (i < task.loops) {
+        atomic_fetch_add(task.total, 1, atomic_seq_cst());
+        i = i + 1;
+    }
+}
+
+struct OuterTask {
+    shared i64* total;
+    i64 groups;
+    i64 loops;
+};
+
+impl run_task(&OuterTask task) {
+    i64 g = 0;
+    while (g < task.groups) {
+        InnerTask left = {task.total, task.loops};
+        InnerTask right = {task.total, task.loops};
+        parallel_do([left, right]);
+        g = g + 1;
+    }
+}
+
+i64 main() {
+    i64 total = 0;
+    i64* raw_total = &mut total;
+    shared i64* total_ptr;
+    unchecked {
+        total_ptr = raw_total as shared i64*;
+    }
+
+    OuterTask left = {total_ptr, 40, 10};
+    OuterTask right = {total_ptr, 40, 10};
+    OuterTask middle = {total_ptr, 40, 10};
+
+    parallel_do([left, right, middle]);
+    return total - 2400;
+}

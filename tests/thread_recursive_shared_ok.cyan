@@ -1,0 +1,23 @@
+import /std.ptr as ptr;
+import /std.thread;
+
+struct Node {
+    shared Node* next;
+};
+
+struct WalkTask {
+    Node head;
+};
+
+impl run_task(&WalkTask task) {}
+
+i64 main() {
+    shared Node* next;
+    unchecked {
+        next = ptr.null<Node>() as shared Node*;
+    }
+    Node head = {next};
+    WalkTask task = {head};
+    parallel_do([task]);
+    return 0;
+}

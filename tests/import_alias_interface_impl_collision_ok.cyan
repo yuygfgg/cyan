@@ -1,0 +1,40 @@
+import modules.external_measure as ext;
+
+interface<T> i64 measure(&T value);
+
+struct Box {
+    i64 value;
+};
+
+impl measure(&Box box) {
+    return box.value;
+}
+
+impl ext.measure(&Box box) {
+    return box.value + 10;
+}
+
+i64 call_local(&measure value) {
+    return measure(value);
+}
+
+i64 call_external(&ext.measure value) {
+    return ext.measure(value);
+}
+
+i64 main() {
+    Box box = {7};
+    if (measure(box) != 7) {
+        return 1;
+    }
+    if (ext.measure(box) != 17) {
+        return 2;
+    }
+    if (call_local(&box) != 7) {
+        return 3;
+    }
+    if (call_external(&box) != 17) {
+        return 4;
+    }
+    return 0;
+}

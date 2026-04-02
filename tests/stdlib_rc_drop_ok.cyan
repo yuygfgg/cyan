@@ -1,0 +1,19 @@
+import /std.rc;
+
+struct Token {
+    &mut i64 counter;
+};
+
+impl drop(&mut Token token) {
+    *token.counter = *token.counter + 1;
+}
+
+i64 main() {
+    i64 count = 0;
+    {
+        Token token = {&mut count};
+        Rc<Token> first = rc_new(token);
+        Rc<Token> second = rc_clone(&first);
+    }
+    return count - 1;
+}

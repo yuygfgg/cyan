@@ -1,0 +1,24 @@
+import /std.sync;
+import /std.thread;
+
+struct AddTask {
+    &Mutex<i64> total;
+    i64 value;
+};
+
+impl run_task(&AddTask task) {
+    MutexGuard<i64> guard = lock(task.total);
+    *guard.data = *guard.data + task.value;
+}
+
+i64 main() {
+    Mutex<i64> total = mutex_new(0);
+    AddTask left = {&total, 4};
+    AddTask middle = {&total, 7};
+    AddTask right = {&total, 9};
+
+    parallel_do([left, middle, right]);
+
+    MutexGuard<i64> guard = lock(&total);
+    return *guard.data - 20;
+}

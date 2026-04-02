@@ -1126,13 +1126,28 @@ class LLVMCodegen {
                 },
                 [&](ast::DropStmt& drop_stmt)
                     -> std::expected<void, Diagnostic> {
-                    auto* address = emitPlaceAddress(*drop_stmt.value);
+                    const Type* drop_type = drop_stmt.value->resolved_type;
+                    const auto* drop_base =
+                        drop_type == nullptr ? nullptr
+                                             : types.unqualify(drop_type);
+                    const auto is_whole_local_drop =
+                        drop_stmt.value->resolved_place.has_value() &&
+                        !drop_stmt.value->resolved_place->is_external &&
+                        drop_stmt.value->resolved_place->fields.empty();
+                    llvm::Value* address = nullptr;
+                    if (drop_base != nullptr &&
+                        drop_base->kind == TypeKind::Borrow &&
+                        !is_whole_local_drop) {
+                        address = emitExpr(*drop_stmt.value);
+                        drop_type = drop_base->element_type;
+                    } else {
+                        address = emitPlaceAddress(*drop_stmt.value);
+                    }
                     if (address == nullptr) {
                         return std::unexpected(Diagnostic(
                             "failed to emit drop", drop_stmt.value->range));
                     }
-                    auto dropped =
-                        emitDropValue(address, drop_stmt.value->resolved_type);
+                    auto dropped = emitDropValue(address, drop_type);
                     if (!dropped) {
                         return std::unexpected(dropped.error());
                     }
@@ -2100,6 +2115,17 @@ class LLVMCodegen {
         }
     }
 
+    auto emitRawDataBuiltin(ast::CallExpr& call) -> llvm::Value* {
+        if (call.arguments.size() != 1) {
+            return nullptr;
+        }
+        auto* slice_value = emitExpr(*call.arguments.front());
+        if (slice_value == nullptr) {
+            return nullptr;
+        }
+        return builder.CreateExtractValue(slice_value, {0}, "raw.data");
+    }
+
     auto emitSubsliceBuiltin(ast::CallExpr& call) -> llvm::Value* {
         if (call.arguments.size() != 3 ||
             call.arguments.front()->resolved_type == nullptr) {
@@ -2431,7 +2457,8 @@ class LLVMCodegen {
                 [&](ast::CallExpr& call) -> llvm::Value* {
                     if (call.builtin_kind != ast::BuiltinCallKind::None &&
                         call.builtin_kind != ast::BuiltinCallKind::Len &&
-                        call.builtin_kind != ast::BuiltinCallKind::Subslice) {
+                        call.builtin_kind != ast::BuiltinCallKind::Subslice &&
+                        call.builtin_kind != ast::BuiltinCallKind::RawData) {
                         return emitAtomicBuiltin(call);
                     }
                     if (call.builtin_kind == ast::BuiltinCallKind::Len) {
@@ -2451,6 +2478,9 @@ class LLVMCodegen {
                     }
                     if (call.builtin_kind == ast::BuiltinCallKind::Subslice) {
                         return emitSubsliceBuiltin(call);
+                    }
+                    if (call.builtin_kind == ast::BuiltinCallKind::RawData) {
+                        return emitRawDataBuiltin(call);
                     }
                     if (call.function != nullptr &&
                         call.function->intrinsic_lowering.has_value()) {
@@ -2804,7 +2834,7 @@ class LLVMCodegen {
 
     auto emitPlaceAddress(ast::Expr& expr) -> llvm::Value* {
         ScopedDebugLocation debug_location(*this, expr.range);
-        return std::visit(
+        auto* address = std::visit(
             Overloaded{
                 [&](ast::NameExpr& name) -> llvm::Value* {
                     auto local_id = name.local_id;
@@ -2898,9 +2928,32 @@ class LLVMCodegen {
                     }
                     return emitExpr(*unary.operand);
                 },
+                [&](ast::CastExpr& cast_expr) -> llvm::Value* {
+                    if (cast_expr.cast_kind != ast::CastKind::OwnerBorrow) {
+                        return nullptr;
+                    }
+                    return emitExpr(*cast_expr.operand);
+                },
                 [&](auto&) -> llvm::Value* { return nullptr; },
             },
             expr.node);
+        if (address != nullptr) {
+            return address;
+        }
+        if (expr.resolved_place.has_value() &&
+            expr.resolved_place->fields.empty()) {
+            if (const auto it = frame.locals.find(expr.resolved_place->root_id);
+                it != frame.locals.end()) {
+                if (expr.resolved_type != nullptr &&
+                    expr.resolved_type->kind == TypeKind::Borrow) {
+                    return builder.CreateLoad(lowerType(expr.resolved_type),
+                                              it->second.address,
+                                              "borrow.place.addr");
+                }
+                return it->second.address;
+            }
+        }
+        return nullptr;
     }
 
     auto emitBorrowOperand(ast::Expr& operand) -> llvm::Value* {

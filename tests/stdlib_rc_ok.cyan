@@ -1,0 +1,12 @@
+import /std.rc;
+
+i64 main() {
+    Rc<i64> value = rc_new(7);
+    {
+        Rc<i64> copy = rc_clone(&value);
+        if (*rc_get(&copy) != 7) {
+            return 1;
+        }
+    }
+    return *rc_get(&value) - 7;
+}

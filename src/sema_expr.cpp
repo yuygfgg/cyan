@@ -821,6 +821,11 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                      ++index) {
                     auto& element_expr = *init_list.elements[index];
                     const auto* field_type = fields[index].resolved_type;
+                    if (field_type == nullptr) {
+                        return unexpected_result<const Type*>(
+                            "initializer field type is unresolved",
+                            element_expr.range);
+                    }
                     bool move_existing_borrow = false;
 
                     if (field_type->kind == TypeKind::Borrow) {
@@ -1788,6 +1793,32 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
+    if (call.callee == "raw_data" && builtin_available) {
+        if (!call.explicit_type_arguments.empty()) {
+            return unexpected_result<const Type*>(
+                "explicit type arguments require a generic function",
+                expr.range);
+        }
+        if (call.arguments.size() != 1) {
+            return unexpected_result<const Type*>(
+                "raw_data() expects exactly one argument", expr.range);
+        }
+
+        auto argument_type = requireReadable(state, *call.arguments.front());
+        if (!argument_type) {
+            return std::unexpected(argument_type.error());
+        }
+        const auto* argument_base = types.unqualify(*argument_type);
+        if (argument_base->kind != TypeKind::Slice) {
+            return unexpected_result<const Type*>(
+                "raw_data() requires a slice argument", expr.range);
+        }
+
+        call.builtin_kind = ast::BuiltinCallKind::RawData;
+        expr.resolved_type = types.getPointer(types.getConst(types.voidType()));
+        expr.resolved_place.reset();
+        return expr.resolved_type;
+    }
     if (call.callee == "subslice" && builtin_available) {
         if (call.arguments.size() != 3) {
             return unexpected_result<const Type*>(
@@ -2469,6 +2500,10 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
     auto& resolved_function = *function;
     call.function = &resolved_function;
     call.callee = resolved_function.name;
+    auto ensured_signature = ensureFunctionSignature(resolved_function);
+    if (!ensured_signature) {
+        return std::unexpected(ensured_signature.error());
+    }
     if (resolved_function.resolved_return_type == nullptr ||
         std::ranges::any_of(resolved_function.parameters,
                             [](const ast::Parameter& parameter) {

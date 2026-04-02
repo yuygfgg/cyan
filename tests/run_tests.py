@@ -154,6 +154,8 @@ def run_case(binary: pathlib.Path, path: pathlib.Path) -> tuple[bool, str]:
             link_command.append(str(support_object))
         if runtime_lib.exists():
             link_command.append(str(runtime_lib))
+            if sys.platform != "darwin":
+                link_command.append("-pthread")
         link_command.extend(["-o", str(exe_path)])
         link_proc = subprocess.run(
             link_command,

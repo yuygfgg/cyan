@@ -233,6 +233,8 @@ class SemanticAnalyzer {
         -> std::expected<const ModuleScope*, Diagnostic>;
     auto registerImplDeclarations(ast::Package& package)
         -> std::expected<void, Diagnostic>;
+    auto registerPropertyImplDeclarations(ast::Package& package)
+        -> std::expected<void, Diagnostic>;
     auto analyzeStruct(ast::StructDecl& decl)
         -> std::expected<void, Diagnostic>;
     auto analyzeInterface(ast::InterfaceDecl& decl)
@@ -445,9 +447,17 @@ class SemanticAnalyzer {
         -> std::vector<std::pair<ast::EnumDecl*, std::size_t>>;
     auto validateExternSignature(const ast::FunctionDecl& decl)
         -> std::expected<void, Diagnostic>;
+    auto ensureFunctionSignature(ast::FunctionDecl& decl)
+        -> std::expected<void, Diagnostic>;
     auto findImplForType(const ast::InterfaceDecl& interface_decl,
                          const Type* receiver_type)
         -> std::expected<ast::FunctionDecl*, Diagnostic>;
+    [[nodiscard]] auto typeHasThreadProperty(
+        const Type* type, ast::ThreadPropertyKind kind) const -> bool;
+    [[nodiscard]] auto typeContainsLocalProperty(const Type* type) const
+        -> bool;
+    [[nodiscard]] auto typeIsThreadShareSafe(const Type* type) const
+        -> bool;
     auto ensureDropImplForType(const Type* type)
         -> std::expected<void, Diagnostic>;
     [[nodiscard]] auto implReceiverPattern(const ast::FunctionDecl& decl) const
@@ -588,6 +598,9 @@ class SemanticAnalyzer {
     std::unordered_map<const ast::Module*, bool> building_visible_scopes;
     std::unordered_map<std::string, std::vector<ast::FunctionDecl*>>
         package_impls;
+    std::unordered_map<ast::ThreadPropertyKind,
+                       std::vector<ast::PropertyImplDecl*>>
+        package_property_impls;
     mutable std::unordered_map<const Type*, ViewShape> view_shapes;
     std::unordered_map<std::string, ast::StructDecl*> instantiated_structs;
     std::unordered_map<std::string, ast::EnumDecl*> instantiated_enums;

@@ -72,7 +72,21 @@ auto is_same_or_subplace(const ast::ResolvedPlace& candidate,
 
 auto make_impl_key(std::string_view interface_name, std::string_view type_name)
     -> std::string {
-    return std::string(interface_name) + ":" + std::string(type_name);
+    return make_impl_key(interface_name, nullptr, type_name);
+}
+
+auto make_impl_key(std::string_view interface_name,
+                   const ast::Module* interface_module,
+                   std::string_view type_name) -> std::string {
+    std::string key;
+    if (interface_module != nullptr) {
+        key += interface_module->module_name;
+        key.push_back('|');
+    }
+    key += interface_name;
+    key.push_back(':');
+    key += type_name;
+    return key;
 }
 
 auto is_borrow_like_type(const Type* type) -> bool {
@@ -447,6 +461,7 @@ auto mangle_instantiation_name(const std::string& base_name,
 auto make_type_syntax_from_type(const Type* type) -> ast::TypeSyntaxPtr {
     auto syntax = std::make_unique<ast::TypeSyntax>();
     syntax->is_const = type->is_const;
+    syntax->resolved_type = type;
     switch (type->kind) {
     case TypeKind::Void:
     case TypeKind::Integer:
@@ -536,6 +551,7 @@ auto clone_type_syntax(
     clone->is_shared = type.is_shared;
     clone->is_const = type.is_const;
     clone->array_size = type.array_size;
+    clone->resolved_type = type.resolved_type;
     if (type.element_type != nullptr) {
         clone->element_type =
             clone_type_syntax(*type.element_type, type_bindings);

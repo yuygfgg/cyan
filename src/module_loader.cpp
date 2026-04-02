@@ -44,8 +44,17 @@ static constexpr char k_std_ryu_source[] = {
 static constexpr char k_std_ptr_source[] = {
 #embed "../stdlib/std/ptr.cyan"
     , 0};
+static constexpr char k_std_rc_source[] = {
+#embed "../stdlib/std/rc.cyan"
+    , 0};
 static constexpr char k_std_slice_source[] = {
 #embed "../stdlib/std/slice.cyan"
+    , 0};
+static constexpr char k_std_sync_source[] = {
+#embed "../stdlib/std/sync.cyan"
+    , 0};
+static constexpr char k_std_thread_source[] = {
+#embed "../stdlib/std/thread.cyan"
     , 0};
 
 struct PendingIntrinsicLowering {
@@ -83,8 +92,14 @@ auto builtin_module_sources()
              std::string_view(k_std_ryu_source, sizeof(k_std_ryu_source) - 1)},
             {"std.ptr",
              std::string_view(k_std_ptr_source, sizeof(k_std_ptr_source) - 1)},
+            {"std.rc",
+             std::string_view(k_std_rc_source, sizeof(k_std_rc_source) - 1)},
             {"std.slice", std::string_view(k_std_slice_source,
                                            sizeof(k_std_slice_source) - 1)},
+            {"std.sync",
+             std::string_view(k_std_sync_source, sizeof(k_std_sync_source) - 1)},
+            {"std.thread", std::string_view(k_std_thread_source,
+                                            sizeof(k_std_thread_source) - 1)},
         };
     return modules;
 }

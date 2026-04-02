@@ -1,0 +1,21 @@
+import /std.ptr as ptr;
+import /std.thread;
+
+struct OpaqueHandle {
+    void* raw;
+};
+
+unchecked impl share(OpaqueHandle);
+
+struct HandleTask {
+    OpaqueHandle handle;
+};
+
+impl run_task(&HandleTask task) {}
+
+i64 main() {
+    OpaqueHandle handle = {ptr.null<void>()};
+    HandleTask task = {handle};
+    parallel_do([task]);
+    return 0;
+}
