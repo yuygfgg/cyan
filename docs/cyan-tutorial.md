@@ -507,6 +507,16 @@ Cyan wants zero-copy parsing too, but it wants the source to spell out where ret
 
 If you know Rust, the closest mental bridge is lifetime relations. The difference is that Cyan writes the relation as an explicit dependency path in the function signature instead of hiding it behind separate lifetime parameter syntax.
 
+If you come from Java or Python, the mental gap is different. In those languages, a parser can cheaply return a small object whose fields refer to one backing string or byte array, and the garbage collector quietly keeps that backing storage alive. Cyan does not have that luxury. If a struct field is a slice, that field does **not** own the bytes. It is only a view. `depends(...)` is the line that tells the compiler which incoming storage keeps that view valid.
+
+### The One-Sentence Rule
+
+When you see `depends(...)`, read it as an answer to one question:
+
+> “Which input already owns the storage that this returned borrow or slice points into?”
+
+That is all. It is not about allocation. It is not about copying. It is not about who may mutate the bytes. It is only about provenance: where the view came from.
+
 ### Mental Model
 
 Take one strip of paper and write `cyan` across it. Now cut two clear plastic windows and place one over `cy` and one over `an`. The paper strip is the source buffer. The windows are slices. `depends(...)` is the label on the windows that says, “both of these windows are views into that paper strip.”
@@ -514,6 +524,14 @@ Take one strip of paper and write `cyan` across it. Now cut two clear plastic wi
 For aggregate returns, Cyan tracks **leaf views** inside the top-level shape. If a returned struct contains two slices, the compiler asks where each one came from. `depends(return on text)` is shorthand for, “every borrow or slice leaf inside the returned value comes from `text`.” A more specific path such as `depends(return.left on x, return.right on y)` says, “the leaves come from different places, and I want to say exactly which.”
 
 The same idea applies to output parameters. `depends(out on text)` means, “after this call, any borrow or slice fields stored inside `out` should be treated as views into `text`.”
+
+Another way to say the same thing is this:
+
+- the buffer or borrowed input is the **real owner**
+- the returned struct is a **bag of windows**
+- `depends(...)` is the **map from each window back to the real owner**
+
+If that map is wrong, you eventually get the worst kind of systems bug: code that still compiles, still looks reasonable, but is quietly reading the wrong storage. Cyan insists that the map live in the signature so the compiler can check it instead of trusting comments.
 
 ### The Code
 
@@ -568,23 +586,66 @@ i64 main() {
 
 ### Walkthrough
 
-Start with the data shapes. `Split` has two slice fields, `head` and `tail`. `View` has one slice field, `data`. Nothing in either struct owns bytes. That is the first habit to internalize. `depends(...)` is never about ownership transfer. It is about documenting which existing storage a view points into.
+Start with the data shapes. `Split` has two slice fields, `head` and `tail`. `View` has one slice field, `data`. Nothing in either struct owns bytes. That is the first habit to internalize.
+
+If you are used to Java classes or Python objects, that line deserves to be repeated:
+
+- `Split` is **not** storing two copied strings
+- `View` is **not** storing an independent buffer
+- both structs are storing **references into some other storage**
+
+That is why the dependency contract matters so much more here than it would in a garbage-collected language.
 
 Now look at `Split split_at([]const char text, i64 mid) depends(return on text)`. The parameter `text` is itself a slice view. The function promises to return a `Split`, whose two slice fields both point into `text`. That promise is what `depends(return on text)` means.
 
-The first branch, `if (mid <= 0)`, returns `{subslice(text, 0, 0), text}`. The empty prefix is still derived from `text`. That detail matters. Cyan represents “empty” with an empty slice derived from a real source.
+Read the branches with that contract in mind:
 
-The second branch, `if (mid >= len(text))`, returns the whole input as `head` and an empty suffix. Again, both fields still come from `text`.
+- `if (mid <= 0)` returns an empty prefix plus the whole input
+- `if (mid >= len(text))` returns the whole input plus an empty suffix
+- the final branch returns two smaller windows cut out of `text`
 
-The final `return` statement is the common case: `subslice(text, 0, mid)` and `subslice(text, mid, len(text) - mid)`. No copy happens. The function is only cutting windows onto the original bytes.
+In all three branches, the storage source stays the same. No new string is allocated. No bytes are copied. The function is only producing new views.
+
+The empty-slice case is especially worth noticing. `subslice(text, 0, 0)` is still treated as derived from `text`. Cyan does not treat “empty” as magical provenance-free data. An empty view is still a view.
 
 Now move to `void take_tail(&mut View out, []const char text, i64 mid) depends(out on text)`. This is the mutable-output form. `out` is a struct that contains a slice field. The dependency declaration tells the compiler how to reason about the fields written into that struct.
 
-Inside `take_tail`, `Split parts = split_at(text, mid);` produces two views into `text`. Then `out.data = parts.tail;` stores one of those views into `out`. Without `depends(out on text)`, Cyan would know that a write happened, but it would not know what provenance to assign to the new view stored in `out.data`.
+Inside `take_tail`, `Split parts = split_at(text, mid);` produces two views into `text`. Then `out.data = parts.tail;` stores one of those views into `out`.
+
+This is the key idea behind the HTTP parser later in the tutorial. A parser often fills an already-allocated output object in place:
+
+- `out.method` points into the request buffer
+- `out.path` points into the request buffer
+- `out.body` points into the request buffer
+
+`depends(out on bytes)` is how the function says all of that in one line.
 
 `main()` turns the abstract rule into something concrete. `[]const char word = subslice("cyan", 0, 4);` strips off the string literal terminator so the example focuses only on dependency tracking. `Split parts = split_at(word, 2);` produces `cy` and `an`. `View view = {empty};` creates a placeholder struct, and `take_tail(&mut view, word, 2);` rewrites the placeholder so that `view.data` becomes another view into `word`.
 
-The final checks prove the returned slices are reading the same source bytes we expect: `parts.head[0]` is `c`, `parts.tail[1]` is `n`, and `view.data[0]` is `a`.
+The final checks prove the returned slices are reading the same source bytes we expect:
+
+- `parts.head[0]` is `c`
+- `parts.tail[1]` is `n`
+- `view.data[0]` is `a`
+
+That is the practical payoff of `depends(...)`: the code gets to stay zero-copy, but the lifetime story is no longer hidden in the programmer’s head.
+
+### A Java/Python Reading Of The Same Example
+
+If the previous explanation still feels abstract, translate it into a more familiar object-oriented picture.
+
+Imagine you had a Java class like this:
+
+```java
+class Split {
+    ByteRange head;
+    ByteRange tail;
+}
+```
+
+and `ByteRange` were just `(buffer, start, length)`. Then `split_at(text, 2)` would return one `Split` whose two fields both point into the same original `buffer`.
+
+That is effectively what Cyan is doing, except Cyan makes the relationship compiler-visible. `depends(return on text)` is the proof that both `head` and `tail` are byte ranges into `text`, not detached storage.
 
 ### When Cyan Can Infer The Dependency
 
@@ -607,6 +668,8 @@ i64 main() {
 
 Why does this compile without `depends(return on x)`? Because there is only one plausible view source parameter: `x`. The compiler can infer the relation because there is no ambiguity. This is a convenience, not magic. As soon as more than one source could explain the returned view, you must be explicit.
 
+That last sentence matters. Many readers see one inferred case and overgeneralize. Do not. The inference rule is intentionally narrow. It exists to keep trivial identity-style helpers pleasant. It is not an invitation to write parser signatures that hide provenance.
+
 ### When Cyan Cannot Infer The Dependency
 
 The canonical failure looks like this:
@@ -618,6 +681,50 @@ The canonical failure looks like this:
 ```
 
 The compiler rejects it with `view-returning functions with multiple borrow or slice parameters require depends(return on <param>)`. Even though *you* can see that this particular body returns `x`, the signature leaves the relationship unstated while there are two possible sources in play. Cyan requires the contract to say it.
+
+This is a good place to pause and ask what disaster Cyan is preventing.
+
+Without that rule, a future edit like this would be frighteningly easy:
+
+- version 1 returns `x`
+- version 2 sometimes returns `y`
+- callers still read the old signature and assume the old relation
+
+`depends(...)` prevents the function contract from drifting away from the implementation.
+
+### Under The Hood: Forgetting `depends(...)` On A Struct Return
+
+The easiest hard failure to understand is an aggregate return. If a function returns a struct that contains slice fields, Cyan requires you to say where those fields came from.
+
+This version deliberately omits the contract:
+
+```cyan
+struct Split {
+    []const char head;
+    []const char tail;
+};
+
+Split split_at([]const char text, i64 mid) {
+    return {
+        subslice(text, 0, mid),
+        subslice(text, mid, len(text) - mid)
+    };
+}
+```
+
+The compiler rejects it with `functions returning aggregates with borrow or slice fields require an explicit depends clause`.
+
+That message is the compiler telling you, “I see that you are returning a struct full of views, but the signature never said where those views come from.” The fix is exactly the version you already saw:
+
+```cyan
+Split split_at([]const char text, i64 mid)
+    depends(return on text) {
+    return {
+        subslice(text, 0, mid),
+        subslice(text, mid, len(text) - mid)
+    };
+}
+```
 
 ### Precise Paths For Struct Fields
 
@@ -654,6 +761,15 @@ i64 main() {
 
 `return.left on x` and `return.right on y` are not verbosity for verbosity’s sake. They are the exact map the compiler needs. One field comes from `x`, the other from `y`.
 
+This is where the feature starts paying rent in real parsers and protocol decoders. A returned struct often mixes several sources:
+
+- a request buffer
+- a precomputed keyword slice
+- a fallback value
+- a borrowed state object
+
+Once those sources mix, the short form `depends(return on text)` is no longer enough. The paths tell you, field by field, what is attached to what.
+
 There is also a useful shorthand-plus-override pattern:
 
 ```cyan
@@ -677,6 +793,12 @@ Bundle build([]const char text, []const char special)
 ```
 
 Read that declaration in two passes. First, `depends(return on text)` says every view leaf in the return value comes from `text`. Then `return.pair.right on special` overrides one specific leaf. That is an elegant pattern when most fields come from one source but a few come from somewhere else.
+
+If you have written Rust before, this is roughly the point where a function signature would start accumulating more lifetime relations. Cyan uses explicit dependency paths instead. If you have **not** written Rust before, that is fine too. The simpler reading is enough:
+
+- start with the default source
+- override the exceptional field
+- let the compiler verify the body matches the story
 
 ### Dependency Paths Can Reach Enum Payloads
 
@@ -703,6 +825,8 @@ Selection choose([]Token values, bool want_head)
 
 `return.Head on values` means the `Head` payload, if that variant is chosen, borrows from `values`. `return.Tail on values` says the same for the slice payload of `Tail`. It follows the same core rule: each view leaf gets a provenance path.
 
+This looks advanced, but the principle has not changed. Cyan is still asking the same question: “if this variant is chosen, where did the view inside it come from?”
+
 ### Output Parameters Need Provenance Too
 
 The mutable-output version is just as important in real programs. This pattern is common:
@@ -721,6 +845,58 @@ void fill(&mut Pair out, []const char text, []const char special)
 ```
 
 Here `out` is a struct that gets rewritten in place. Most of its view fields should be treated as derived from `text`, but one specific field, `out.right`, should be treated as derived from `special`. This is the mutable mirror of the return-value override pattern.
+
+There is one nuance worth stating explicitly because it affects how you read later chapters.
+
+Today Cyan is stricter about **aggregate return values** than about every possible mutable-output case. In particular, if you omit the mutable-parameter `depends(...)`, the assignment itself may compile, but the ambiguity has not gone away. It can resurface later when you try to use the rewritten view and the compiler can only say, “I no longer know what storage this points into.”
+
+Why? Because the explicit line becomes essential the moment the function stops being trivial.
+
+### Under The Hood: Forgetting `depends(...)` On A Mutable Output
+
+This function rewrites a `View`, but never states where the new slice in `out.data` came from:
+
+```cyan
+struct View {
+    []const char data;
+};
+
+void choose_tail(&mut View out,
+                 []const char bytes,
+                 []const char fallback,
+                 bool use_fallback) {
+    if (use_fallback) {
+        out.data = fallback;
+        return;
+    }
+    out.data = bytes;
+}
+```
+
+That call may look harmless, especially if you only test it with short literals. But once later code tries to use `out.data`, Cyan can reject the use site with `cannot use a view value whose source is unknown after this call or control-flow path`.
+
+In other words, the omission does not make the provenance problem disappear. It merely postpones where the compiler can point at it.
+
+The fix is to make the relation explicit in the signature so the caller and the compiler both know what was written into `out`.
+
+### Under The Hood: A Parser-Shaped Mutable-Output Mismatch
+
+Here is the next level of bug: the function *does* declare a source, but the body stores a different one.
+
+```cyan
+struct View {
+    []const char data;
+};
+
+void overwrite_wrong(&mut View v, []const char expected, []const char actual)
+    depends(v.data on expected) {
+    v.data = actual;
+}
+```
+
+The compiler reports `mutable parameter borrow or slice does not match its declared depends source`.
+
+This is the same bug that would bite an HTTP parser if it promised “all fields in `out` come from `bytes`” and then quietly stored a slice from some fallback buffer or scratch buffer instead.
 
 ### Under The Hood: Cyan Checks The Body Against The Promise
 
@@ -756,6 +932,17 @@ This variant makes the same point through control-flow merging:
 Even though the final `return x;` looks uniform, the compiler remembers that `x` may hold either source depending on the branch. That is why the error is still correct.
 
 This is the core payoff of `depends(...)`. It gives the compiler enough structure to check zero-copy code that would otherwise rely on comments and luck.
+
+### A Small Checklist Before You Leave This Chapter
+
+When you write a function involving borrows or slices, ask these questions in order:
+
+1. Does this function return a view, or store one into a mutable output object?
+2. If yes, which input already owns the storage behind that view?
+3. If there are several possible sources, have I written the path explicitly?
+4. If I changed the body, does the declared dependency still match what the code actually returns or stores?
+
+If you keep that checklist in your head, the later HTTP parser chapter becomes much less mysterious.
 
 ## 8. Interfaces, Erased Borrows, And Why `println` Works
 
@@ -1104,15 +1291,41 @@ i64 main() {
 
 The compiler reports `could not infer type argument for 'T'`. The fix is to write the type argument explicitly, for example `ptr.null<i64>()` or `ptr.null<void>()`.
 
-## 10. Blocking Parallel Work With `parallel_do`
+## 10. High-Level Concurrency With `parallel_do`
+
+### Why This Chapter Stops At The High Level
+
+The earlier version of this tutorial compressed high-level task execution, thread-boundary markers, raw shared pointers, and atomics into one chapter. That is too steep for most readers, especially if you are coming from Java or Python rather than from Rust or C++ concurrency.
+
+So this chapter does less on purpose.
+
+Read this chapter first if your goal is ordinary application code:
+
+- run a few tasks in parallel
+- wait for them to finish
+- protect shared state with `Mutex<T>`
+- share heap state with `Arc<T>`
+
+Leave `send`, `share`, `local`, `shared T*`, and atomics for the next chapter. Those are the lower-level boundary tools.
 
 ### Why Cyan Starts Here
 
-Cyan's current threading surface centers on one straightforward tool: `parallel_do([]&threaded_runnable tasks);`. It launches a batch of tasks, waits for all of them to finish, and then returns to the caller. That gives you a direct way to express fork-join work while keeping the lifetime of borrowed inputs easy to see in the source.
+Cyan's current threading surface centers on one straightforward tool: `parallel_do([]&threaded_runnable tasks);`. It launches a batch of tasks, waits for all of them to finish, and then returns to the caller.
+
+That “waits for all of them” part matters. `parallel_do(...)` is a fork-join primitive. It is not “fire and forget.” It is not a detached background thread. It is closer to “run these jobs concurrently, then continue when the batch is done.”
 
 ### Mental Model
 
-Think of `parallel_do(...)` as a foreman handing job cards to workers and then waiting at the door until every card comes back. The task values are the cards. Every card must support the `run_task` verb, and it must also satisfy the thread-boundary capability that `/std.thread` calls `threaded_runnable`. Because the call is blocking, a task may still borrow data that lives in the caller. When several workers touch the same state, that shared state needs a synchronization shape such as `Mutex<T>`, `Arc<T>`, or atomics on `shared T*`.
+Think of `parallel_do(...)` as a foreman handing job cards to workers and then standing at the exit until every card comes back stamped complete.
+
+If you prefer a Java/Python analogy:
+
+- `run_task` is close to Java's `Runnable.run()` or a Python object with a `run()`-style method
+- `parallel_do([a, b, c])` is close to “submit these three jobs and immediately join on all of them”
+- `Mutex<T>` is the same old idea: only one worker may mutate the protected data at a time
+- `Arc<T>` is shared ownership of one heap object so several tasks can all hold onto it safely
+
+You do not need to understand raw atomics to use this layer.
 
 ### The Code
 
@@ -1154,7 +1367,70 @@ cyan docs/snippets/threading_parallel_do.cyan -o /tmp/threading_parallel_do.o
 
 ### Walkthrough
 
-`import /std.thread;` gives you `parallel_do(...)`, the `run_task` interface, and the interface aliases that define the thread boundary:
+Start with the task shape:
+
+```cyan
+struct AddTask {
+    &Mutex<i64> total;
+    i64 value;
+};
+```
+
+Each task carries two things:
+
+- a borrow of one shared counter protected by a mutex
+- one increment value that this task should add
+
+This is a common concurrent pattern. Several workers all need to update one shared piece of state, so they all point at the same protected object instead of each owning a private copy.
+
+Now look at the execution entry point:
+
+```cyan
+impl run_task(&AddTask task) {
+    MutexGuard<i64> guard = lock(task.total);
+    *guard.data = *guard.data + task.value;
+}
+```
+
+If you have not seen Cyan interfaces yet, the short reading is simple: this is the code that runs when the task is executed by the thread system.
+
+`lock(task.total)` returns a `MutexGuard<i64>`. While that guard is alive, `guard.data` behaves like a mutable borrow of the protected integer. When the guard goes out of scope, the lock is released.
+
+That is deliberately similar to the corresponding concept in many other languages:
+
+- Java: `synchronized` block or `Lock.lock()` / `unlock()`
+- Python: `with lock:` around shared mutable state
+- C++: `std::lock_guard`
+
+The names differ. The concurrency idea is the same.
+
+Now read `main()`:
+
+```cyan
+Mutex<i64> total = mutex_new(0);
+AddTask left = {&total, 4};
+AddTask middle = {&total, 7};
+AddTask right = {&total, 9};
+
+parallel_do([left, middle, right]);
+```
+
+The important detail is that the tasks borrow `&total`, and that works because `parallel_do(...)` is blocking. The caller does not continue until all tasks are done, so the borrowed `total` is still alive for the whole parallel phase.
+
+This is the first big difference between this chapter and detached-thread APIs in other languages. Detached work often forces you to move or heap-allocate everything up front. `parallel_do(...)` is simpler because the lifetime stays tied to one blocking call.
+
+The final lines:
+
+```cyan
+MutexGuard<i64> guard = lock(&total);
+return *guard.data - 20;
+```
+
+are ordinary sequential code again. The batch has finished. The program locks the result, reads it, and returns.
+
+### What `run_task` And `threaded_runnable` Mean
+
+`import /std.thread;` gives you `parallel_do(...)` plus the small interface vocabulary that describes runnable tasks:
 
 ```cyan
 interface<T> void run_task(&T task);
@@ -1163,19 +1439,14 @@ interface thread_sendable = send - local;
 interface threaded_runnable = run_task + thread_shared;
 ```
 
-`parallel_do(...)` accepts `[]&threaded_runnable`, not bare `[]&run_task`. In plain language, a task must provide the `run_task` operation, must satisfy `share`, and must not satisfy `local`. `import /std.sync;` adds `Mutex`, `MutexGuard`, `Arc`, and the current synchronization helpers.
+For this chapter, you only need one simplified reading:
 
-`thread_sendable` is the matching alias for ownership-moving thread boundaries. The current standard library does not yet expose a general `spawn(...)` API, so `parallel_do(...)` only relies on `threaded_runnable`.
+- `run_task` means “this type knows how to execute itself as a task”
+- `threaded_runnable` means “this type can safely cross the worker boundary used by `parallel_do(...)`”
 
-`struct AddTask { &Mutex<i64> total; i64 value; };` says each task borrows one shared mutex and carries one increment. The important detail is the borrow. `AddTask` points at caller-owned state that must outlive the blocking call to `parallel_do(...)`.
+The low-level marker words inside that definition, especially `share` and `local`, are the subject of the next chapter. For now, treat them as the thread-safety gate behind `parallel_do(...)`.
 
-`impl run_task(&AddTask task)` is the thread entry point for `AddTask`. Cyan expresses that entry point through the ordinary interface mechanism. `lock(task.total)` returns a `MutexGuard<i64>`. While that guard is alive, `guard.data` is a mutable borrow to the protected value. When the guard leaves scope, its `drop` implementation releases the lock.
-
-`parallel_do([left, middle, right]);` builds a slice of tasks and runs them as one blocking batch. The key word is blocking. Control does not move to the next line until all three tasks have finished. The type `AddTask` is accepted because it implements `run_task` and its fields satisfy the `thread_shared` side of the boundary.
-
-The final `lock(&total)` is ordinary code again. The parallel phase is over, so it is safe to read the result and return it.
-
-### Two Other Common Shapes
+### Two Common High-Level Shapes
 
 The mutex example covers one common pattern: several tasks borrowing one shared mutable value from the caller.
 
@@ -1198,9 +1469,227 @@ impl run_task(&ArcTask task) {
 }
 ```
 
-`Arc<T>` gives several tasks shared ownership of one heap object. `arc_get(...)` turns the `Arc` back into a borrow so the task can read fields or lock an embedded mutex.
+`Arc<T>` is the “many tasks may all keep a handle to the same heap object” tool. If you have used Rust before, it is the same broad idea as `Arc`. If you have not, think of it as a reference-counted shared object handle.
 
-Another common pattern is raw shared state plus atomics. When the shared value is a counter, flag, or pointer-sized coordination cell, `shared T*` is the raw building block:
+Why use `Arc<T>` instead of a plain borrow?
+
+- use a plain borrow when the caller obviously owns the shared state and the work is tightly scoped to one blocking `parallel_do(...)`
+- use `Arc<T>` when the shared state itself should live on the heap and be passed around as one reusable object
+
+In day-to-day code, `Mutex<T>` plus `Arc<T>` will cover most of what you need.
+
+### Under The Hood: The Easy Wrong Turn
+
+A beginner mistake is to think, “I already know what a pointer is, so I will just share a raw pointer between tasks.”
+
+This task does exactly that:
+
+```cyan
+import /std.thread;
+
+struct PtrTask {
+    i64* ptr;
+};
+
+impl run_task(&PtrTask task) {}
+```
+
+and `parallel_do([task])` rejects it with `does not satisfy marker 'share'`.
+
+That message is good news. Cyan is refusing to treat an ordinary raw pointer as automatically safe for cross-thread sharing.
+
+The practical rule is:
+
+- for ordinary code, reach for `Mutex<T>` or `Arc<T>` first
+- do not jump to raw pointers just because they look familiar
+- save `shared T*` and atomics for the lower-level chapter
+
+### What To Keep In Your Head
+
+If you only want the 80% everyday subset of Cyan concurrency, keep these rules:
+
+1. `parallel_do(...)` runs a batch and waits for the batch to finish.
+2. `run_task` is the task body.
+3. Shared mutable state usually means `Mutex<T>`.
+4. Shared heap ownership usually means `Arc<T>`.
+5. If the next chapter feels too low-level on first read, skip it and come back later.
+
+## 11. Thread Boundaries, Markers, And Atomics
+
+### Why This Is A Separate Chapter
+
+This is the layer that confused many readers in the old tutorial because it appeared too early and too densely.
+
+You need this chapter when you are doing one of these things:
+
+- wrapping a low-level handle
+- deciding whether a type may cross thread boundaries
+- exposing a concurrency primitive in a library
+- doing lock-free coordination with atomics
+
+If you are only trying to write application code with `parallel_do(...)`, `Mutex<T>`, and `Arc<T>`, you can skim this chapter once and come back later.
+
+### Three Marker Words: `local`, `send`, And `share`
+
+These three words are the thread-boundary vocabulary. If you know Rust, they are closely related to `!Send`, `Send`, and `Sync`. If you do not know Rust, read them in plain English.
+
+`local`
+
+- meaning: this value is tied to one specific thread
+- typical examples: GUI objects, rendering contexts, event loops, objects whose API says “must stay on the creating thread”
+- consequence: Cyan must stop you from handing it to worker threads
+
+`send`
+
+- meaning: ownership may move to another thread
+- picture: mailing one physical book to somebody else; after mailing it, you do not still hold the same book locally
+- consequence: safe for ownership transfer across a thread boundary
+
+`share`
+
+- meaning: several threads may access the same value safely
+- picture: several people editing one shared document, but only because the system has real coordination around the document
+- consequence: safe for shared access across a thread boundary
+
+The most important beginner-level lesson is that these are not decorative labels. They exist to prevent concrete disasters:
+
+- `local` prevents thread-affine resources from being used on the wrong thread
+- `send` prevents ownership-moving APIs from receiving values that cannot survive a thread handoff
+- `share` prevents shared-access APIs from receiving values that would race or break internally
+
+### How `/std.thread` Uses Those Markers
+
+The standard thread interfaces are built out of those markers:
+
+```cyan
+interface<T> void run_task(&T task);
+interface thread_shared = share - local;
+interface thread_sendable = send - local;
+interface threaded_runnable = run_task + thread_shared;
+```
+
+Read them in plain language:
+
+- `thread_shared = share - local` means “shareable across threads, but not thread-bound”
+- `thread_sendable = send - local` means “movable across threads, but not thread-bound”
+- `threaded_runnable = run_task + thread_shared` means “a runnable task whose value may be shared safely across the `parallel_do(...)` boundary”
+
+That is why `parallel_do(...)` rejects certain task types. It is not arbitrary. The task must cross a concurrency boundary, so Cyan checks the markers that describe whether that crossing is valid.
+
+### `local`: Thread-Bound Values
+
+When a type is tied to one thread by meaning rather than by obvious field layout, mark it with `impl local(...)`:
+
+```cyan
+struct GLContext {
+    i64 id;
+};
+
+impl local(GLContext);
+```
+
+The mental model is simple: this value is welded to the thread that owns it.
+
+That is exactly the right rule for objects such as:
+
+- an OpenGL or Vulkan context bound to one thread
+- a GUI widget or window object tied to the UI thread
+- any foreign-library handle whose documentation says “must be used from the creating thread”
+
+### Under The Hood: `local` Blocking A Task
+
+Here is a task that tries to carry a thread-bound graphics context through `parallel_do(...)`:
+
+```cyan
+import /std.sync;
+import /std.thread;
+
+struct GLContext {
+    i64 id;
+};
+
+impl local(GLContext);
+
+struct RenderTask {
+    Arc<GLContext> ctx;
+};
+
+impl run_task(&RenderTask task) {}
+```
+
+The compiler rejects it with `matches excluded marker 'local'`.
+
+That message is the concurrency equivalent of a seat belt locking. `parallel_do(...)` wants a `thread_shared` task. `thread_shared` means `share - local`. The task contains a `local` thing, so it fails the boundary on purpose.
+
+### `send`: Ownership Transfer Across Threads
+
+`send` is about handing ownership from one thread to another.
+
+The easiest picture is still the physical book:
+
+- before transfer, thread A owns the book
+- after transfer, thread B owns the book
+- there is still only one book
+
+Most plain data shapes are naturally sendable. If a type is made of ordinary values whose ownership can move cleanly, there is usually nothing surprising going on.
+
+The hard cases are opaque wrapper types:
+
+```cyan
+struct OpaqueTicket {
+    void* raw;
+};
+```
+
+From the outside, the compiler cannot tell whether `raw` is safe to move to another thread. That is why explicit marker implementations for nominal types use `unchecked`.
+
+```cyan
+unchecked impl send(OpaqueTicket);
+```
+
+This line means, “the library author takes responsibility for the claim that values of this type may be transferred across a thread boundary.”
+
+If you try to write the marker without `unchecked`, Cyan rejects it. The corresponding diagnostics are `impl send(...) must be declared unchecked` and `impl share(...) must be declared unchecked`.
+
+### `share`: Safe Shared Access Across Threads
+
+`share` is the companion concept for shared access.
+
+The simple intuition is:
+
+- if several threads can all see the same value
+- and that is still safe
+- then the type must have the right internal synchronization story
+
+Sometimes that story is structural and obvious:
+
+- a `Mutex<T>` protects mutable access
+- an `Arc<T>` shares ownership of a heap object
+- immutable plain data can often be shared safely
+
+Sometimes the story is hidden inside a nominal wrapper, and only the library author really knows the invariant. That is the other case for `unchecked impl share(...)`.
+
+```cyan
+struct OpaqueHandle {
+    void* raw;
+};
+
+unchecked impl share(OpaqueHandle);
+```
+
+The line is a promise. Use it only when the promise is true.
+
+### `shared T*`: A Raw Pointer Meant For Cross-Thread Coordination
+
+Now to the piece that tends to look cryptic on first exposure.
+
+An ordinary `T*` is just a raw pointer. It says nothing about thread-sharing intent.
+
+A `shared T*` is different. It is a raw pointer explicitly marked as participating in cross-thread coordination.
+
+That distinction is important because raw pointers are where the compiler stops being able to infer much for you. The `shared` qualifier is the extra bit of information that says, “this pointer is part of a concurrency story, not just generic pointer arithmetic.”
+
+Here is the smallest possible example:
 
 ```cyan
 i64 counter = 0;
@@ -1211,38 +1700,51 @@ unchecked {
 atomic_fetch_add(total, 1, atomic_seq_cst());
 ```
 
-The `shared` qualifier is the line that marks a raw pointer as intended for cross-thread access. Atomic operations only accept `shared` pointers.
+Break that into three separate ideas:
 
-### Marking Types For Thread Boundaries
+1. `counter` is still an ordinary integer owner.
+2. `total` is a raw pointer variable that is explicitly marked `shared`.
+3. `atomic_fetch_add(...)` only accepts the `shared` version, because atomic operations are a cross-thread coordination primitive.
 
-Task types are still ordinary Cyan structs and enums. The thread-specific part is the contract at the boundary, and that contract is written in `/std.thread` as interface composition rather than as a compiler-only rule.
+If you are coming from C or C++, the language is forcing you to say out loud what kind of pointer you intend to use at the thread boundary. That extra ceremony is the point.
 
-When a type is tied to one thread by meaning rather than by storage shape, mark it with `impl local(...)`:
+### Under The Hood: Why Bare Raw Pointers Are Rejected
 
-```cyan
-struct GLContext {
-    i64 id;
-};
+Passing a plain raw pointer where a shared pointer is required fails with the direct diagnostic `type mismatch: expected shared i64*, got i64*`.
 
-impl local(GLContext);
-```
+Using a plain raw pointer directly with an atomic operation fails with `atomic operations require a shared pointer operand`.
 
-That tells Cyan to treat the type as thread-affine. The marker composes through larger task shapes, so a task that contains `GLContext` directly or indirectly still carries that thread-affine meaning. Because `/std.thread` defines `thread_shared = share - local`, such a task no longer satisfies the `parallel_do(...)` boundary.
-
-When a nominal type is safe at a thread boundary but its implementation is too opaque for a simple structural rule, mark it explicitly. `share` and `send` both use `unchecked` because they are library-author promises rather than properties the compiler can prove from an opaque field list:
+This small failing program shows the second case:
 
 ```cyan
-struct OpaqueHandle {
-    void* raw;
-};
-
-unchecked impl send(OpaqueHandle);
-unchecked impl share(OpaqueHandle);
+i64 main() {
+    i64 value = 0;
+    i64* ptr = &mut value;
+    atomic_fetch_add(ptr, 1, atomic_seq_cst());
+    return 0;
+}
 ```
 
-This is useful for low-level handles or wrappers whose semantics come from the library author rather than from the field list alone. `send` matters for ownership-moving thread boundaries. `share` matters for shared-access thread boundaries.
+The rule is simple once you stop fighting it:
 
-The raw-pointer side follows the same idea. An ordinary `T*` is just a raw pointer. A `shared T*` is a raw pointer that is meant to participate in cross-thread coordination.
+- ordinary `T*` is just a raw pointer
+- `shared T*` is the raw pointer form reserved for cross-thread coordination
+- atomics only work on the shared form
+
+### When To Actually Use Atomics
+
+Use atomics when the shared state is truly small and low-level:
+
+- counters
+- flags
+- pointer-sized coordination cells
+
+Do not default to atomics just because they sound faster. In application code, `Mutex<T>` is usually easier to reason about and easier to extend when the shared state stops being “just one integer.”
+
+That is why this tutorial separated the topics:
+
+- chapter 10: everyday concurrency
+- chapter 11: boundary markers and low-level coordination
 
 ### The Working Set
 
@@ -1254,17 +1756,24 @@ The pieces that work together today are:
 - atomic operations and memory-order constants
 - `impl local(...)`, `unchecked impl send(...)`, and `unchecked impl share(...)` for nominal thread properties
 
-That is enough to write blocking parallel loops, shared heap state, synchronized updates, and low-level atomic coordination in ordinary Cyan code.
+That is enough to cover both the high-level “run these tasks and wait” style and the lower-level “I am defining a thread boundary in a library” style.
 
-## 11. Practical Walkthrough: A Zero-Copy HTTP Request Parser
+## 12. Practical Walkthrough: A Zero-Copy HTTP Request Parser
 
 ### Why This Example Matters
 
 Toy examples teach surface syntax. Real examples teach the language. The repository's zero-copy HTTP request example reads one request into one buffer, then builds a structured result that points back into that buffer without copying the parsed fields.
 
+This chapter matters because it combines the tutorial's two hardest ideas in a practical way:
+
+- slices are views, not owners
+- `depends(...)` turns those views into a checked contract
+
 ### Mental Model
 
 The stack array is the house. The parsed request object is a bundle of windows cut into that house. The parser never manufactures owned strings for the method, path, headers, or body. It only computes where each piece begins and how long it is.
+
+If you prefer a higher-level analogy, think of one `byte[]` plus several tiny `(start, length)` objects that all point back into it. Cyan keeps that design explicit instead of hiding it behind heap allocation.
 
 This is the concrete request used by the companion C fixture:
 
@@ -1347,6 +1856,12 @@ The struct declarations are intentionally ordinary. Cyan’s trick is not that i
 
 Look at `parse_header_line(...) depends(return on bytes)`. The function receives the whole request slice plus two indices describing one header line. `find_byte_in_range` locates the colon. `subslice(bytes, line_start, colon - line_start)` creates a slice for the header name. The code then skips one optional space and builds another slice for the header value. The final `return {name, value};` returns a struct of views, not copied strings.
 
+Notice how directly this connects back to chapter 7:
+
+- `bytes` is the real source buffer
+- `name` and `value` are two windows into that buffer
+- `depends(return on bytes)` is the signature-level proof that both windows come from there
+
 Now zoom out to `parse_http_request([]const char bytes, &mut HttpRequest out) depends(out on bytes)`. This signature says that the function will rewrite `out` so that its internal slice fields all point into `bytes`. That is the whole parser contract in one line.
 
 The body first resets `out` with `*out = blank_request(bytes);`. This is more important than it looks. Instead of leaving fields uninitialized or using null sentinels, the parser fills the output struct with empty views that are already known to derive from `bytes`. That gives the function a clean, valid starting state.
@@ -1355,9 +1870,66 @@ Next the parser finds the request line boundaries. `find_crlf(bytes, 0)` locates
 
 After that, the parser walks header lines with a `cursor`. Each pass finds the next `\r\n`. If the parser sees an empty line, it has reached the boundary between headers and body. At that point, `[]const char body = subslice(bytes, cursor, len(bytes) - cursor);` creates the body view, the code assembles `HeaderBag`, and `*out = {line, headers, body, content_length_value};` stores the final structured result.
 
-The `main()` function tells the memory story clearly. `char[256] buffer;` owns the bytes. `mock_http_read(&mut buffer[0], len(buffer));` asks foreign code to fill the array. `[]const char bytes = subslice(buffer, 0, byte_count);` turns the valid prefix into a slice view. Then `parse_http_request(bytes, &mut parsed)` builds a network of smaller views that all still point back into `buffer`.
+The `main()` function tells the memory story clearly:
+
+- `char[256] buffer;` owns the bytes
+- `mock_http_read(&mut buffer[0], len(buffer));` asks foreign code to fill the array
+- `[]const char bytes = subslice(buffer, 0, byte_count);` turns the valid prefix into a slice view
+- `parse_http_request(bytes, &mut parsed)` builds a network of smaller views that all still point back into `buffer`
 
 That is zero-copy parsing in one sentence: one owner, many views.
+
+### Why `depends(out on bytes)` Is Still Worth Writing
+
+Even when a mutable-output helper looks simple, omitting the dependency contract does not make the provenance problem disappear. It can simply move the failure later.
+
+If a function writes one of several possible views into `out`, the call itself may type-check, but later code that tries to use the rewritten field can hit the diagnostic `cannot use a view value whose source is unknown after this call or control-flow path`.
+
+That is why `depends(out on bytes)` is worth writing even before the compiler absolutely forces you to. It buys you three things:
+
+1. the signature states the parser's memory contract in one line
+2. future readers do not have to reverse-engineer where all of `out`'s slice fields came from
+3. the compiler has a precise story to check when the parser evolves and starts handling more than one possible source
+
+### Under The Hood: Two Parser-Shaped Dependency Mistakes
+
+The first mistake is omission. Here the function stores either `bytes` or `fallback` into `out.body`, but the signature says nothing:
+
+```cyan
+struct BodyOnly {
+    []const char body;
+};
+
+void choose_body(&mut BodyOnly out,
+                 []const char bytes,
+                 []const char fallback,
+                 bool use_fallback) {
+    if (use_fallback) {
+        out.body = fallback;
+        return;
+    }
+    out.body = bytes;
+}
+```
+
+A later use of `out.body` can fail with `cannot use a view value whose source is unknown after this call or control-flow path`.
+
+The second mistake is a wrong promise. Here the function explicitly says `out` depends on `bytes`, but the body stores `fallback`:
+
+```cyan
+struct BodyOnly {
+    []const char body;
+};
+
+void set_body(&mut BodyOnly out, []const char bytes, []const char fallback)
+    depends(out on bytes) {
+    out.body = fallback;
+}
+```
+
+That fails with `mutable parameter borrow or slice does not match its declared depends source`.
+
+Together, these two failures explain why `depends(...)` matters in parser code. One prevents provenance from going unknown. The other prevents a wrong provenance story from silently becoming part of your API contract.
 
 ### Where To Study The Full Breakdown
 
@@ -1365,7 +1937,7 @@ The companion document [Zero-Copy HTTP Walkthrough](http-zero-copy-walkthrough.m
 
 The repository also contains `examples/http_parse/main.cyan`, which runs the same basic design against a real loopback socket and prints the parsed fields with `/std.println`.
 
-## 12. Reading Cyan’s Error Messages
+## 13. Reading Cyan’s Error Messages
 
 The fastest way to get productive in Cyan is to learn how the compiler is thinking. The failing cases are good at exposing that thinking because each one is small and deliberate.
 
@@ -1373,18 +1945,26 @@ When Cyan says `view-returning functions with multiple borrow or slice parameter
 
 When Cyan says `view-returning function must depend on a borrow or slice parameter`, it is warning that you are trying to return a view into storage with no safe incoming owner to attach it to.
 
-When Cyan says `borrow source does not live long enough`, it is following block structure and noticing that you are trying to keep a reference to a value that is about to disappear.
+When Cyan says `functions returning aggregates with borrow or slice fields require an explicit depends clause`, it is telling you that a struct or enum full of views cannot leave the function without a provenance contract.
+
+When Cyan says `returned borrow does not match depends(return on x)`, it is pointing at a mismatch between the promise in the signature and the values actually returned in the body.
+
+When Cyan says `mutable parameter borrow or slice does not match its declared depends source`, it is pointing at the mutable-output version of the same problem.
+
+When Cyan says `cannot use a view value whose source is unknown after this call or control-flow path`, it is telling you that a function or branch produced a view whose provenance was never pinned down tightly enough for later use.
+
+When Cyan says `matches excluded marker 'local'`, it is usually because a thread-bound value tried to cross a thread boundary that explicitly excludes `local`.
+
+When Cyan says `does not satisfy marker 'share'`, it is usually because some value, often a raw pointer or wrapper type, is being passed into a shared-thread boundary without proving it is safe for shared access.
+
+When Cyan says `atomic operations require a shared pointer operand`, it is telling you that atomics only work on `shared T*`, not ordinary raw pointers.
+
+When Cyan says `borrow source is not live`, `cannot assign through shared borrow`, or `cannot borrow ... as mutable more than once`, it is describing an aliasing or lifetime conflict. Read those messages literally before you assume there is a deeper trick.
 
 When Cyan says `pointer indexing is only allowed in unchecked blocks` or `const cast is only allowed in unchecked blocks`, it is enforcing the airlock boundary between ordinary Cyan and raw memory operations.
 
-When Cyan says `default case is unreachable`, it is treating exhaustive pattern matches as a real guarantee.
-
 When Cyan says `could not infer type argument for 'T'`, it usually means exactly what it says: the call site did not provide enough evidence. The fix is often to bind a value to a typed local or to spell the type argument explicitly.
 
-## 13. Where To Go Next
+## 14. Where To Go Next
 
 If you want one file that touches many language features in a compact space, read `examples/all_features.cyan`. It shows slices, `depends(...)`, interfaces, `switch`, `unchecked`, and `/std.println` in one program.
-
-If you want the most Cyan-like example in the repository, read the zero-copy HTTP request example and then the companion HTTP walkthrough.
-
-If you want to understand the boundaries of the language, keep reading the failing tests. Cyan’s design is unusually visible there. The error cases are not second-class documentation. They are often the clearest description of what the compiler is protecting you from.
