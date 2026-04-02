@@ -399,7 +399,8 @@ auto SemanticAnalyzer::resolveType(ast::TypeSyntax& type)
         }
         if (type.is_mut && type.element_type != nullptr &&
             type.element_type->kind == ast::TypeSyntax::Kind::Named &&
-            findVisibleInterface(type.element_type->name) != nullptr) {
+            (findVisibleInterface(type.element_type->name) != nullptr ||
+             findVisibleInterfaceAlias(type.element_type->name) != nullptr)) {
             return unexpected_result<const Type*>(
                 "interface borrows use the interface's declared receiver "
                 "mutability; write '&fmt' instead of '&mut fmt'",
@@ -417,6 +418,18 @@ auto SemanticAnalyzer::resolveType(ast::TypeSyntax& type)
                     findVisibleInterface(type.element_type->name);
                 interface_decl != nullptr) {
                 type.resolved_type = types.getInterface(interface_decl);
+                return type.resolved_type;
+            }
+            if (const auto* interface_alias_decl =
+                    findVisibleInterfaceAlias(type.element_type->name);
+                interface_alias_decl != nullptr) {
+                if (interface_alias_decl->resolved_type == nullptr) {
+                    return unexpected_result<const Type*>(
+                        "unknown interface alias '" + type.element_type->name +
+                            "'",
+                        type.range);
+                }
+                type.resolved_type = interface_alias_decl->resolved_type;
                 return type.resolved_type;
             }
         }
@@ -608,8 +621,9 @@ auto SemanticAnalyzer::interfaceReceiverType(const Type* argument_type) const
     return concrete_type;
 }
 
-auto SemanticAnalyzer::typeHasThreadProperty(
-    const Type* type, ast::ThreadPropertyKind kind) const -> bool {
+auto SemanticAnalyzer::typeHasThreadProperty(const Type* type,
+                                             ast::ThreadPropertyKind kind) const
+    -> bool {
     if (type == nullptr) {
         return false;
     }
@@ -632,9 +646,9 @@ auto SemanticAnalyzer::typeHasThreadProperty(
     std::vector<const Type*> actual_type_arguments;
     if (nominal_type->kind == TypeKind::Struct) {
         const auto* actual_decl = nominal_type->struct_decl;
-        const auto* canonical_decl =
-            actual_decl->template_decl != nullptr ? actual_decl->template_decl
-                                                  : actual_decl;
+        const auto* canonical_decl = actual_decl->template_decl != nullptr
+                                         ? actual_decl->template_decl
+                                         : actual_decl;
         actual_owner_module = canonical_decl->owner_module;
         actual_base_name = canonical_decl->name;
         if (actual_decl->template_decl != nullptr) {
@@ -642,9 +656,9 @@ auto SemanticAnalyzer::typeHasThreadProperty(
         }
     } else {
         const auto* actual_decl = nominal_type->enum_decl;
-        const auto* canonical_decl =
-            actual_decl->template_decl != nullptr ? actual_decl->template_decl
-                                                  : actual_decl;
+        const auto* canonical_decl = actual_decl->template_decl != nullptr
+                                         ? actual_decl->template_decl
+                                         : actual_decl;
         actual_owner_module = canonical_decl->owner_module;
         actual_base_name = canonical_decl->name;
         if (actual_decl->template_decl != nullptr) {
@@ -708,8 +722,7 @@ auto SemanticAnalyzer::typeContainsLocalProperty(const Type* type) const
     std::unordered_map<const Type*, bool> memo;
     std::unordered_set<const Type*> active;
 
-    const auto recurse = [&](const Type* current,
-                             const auto& self) -> bool {
+    const auto recurse = [&](const Type* current, const auto& self) -> bool {
         if (current == nullptr) {
             return false;
         }
@@ -739,13 +752,11 @@ auto SemanticAnalyzer::typeContainsLocalProperty(const Type* type) const
         case TypeKind::Borrow:
         case TypeKind::Slice:
         case TypeKind::Array:
-            contains_local =
-                self(current->element_type, self);
+            contains_local = self(current->element_type, self);
             break;
         case TypeKind::Pointer:
             contains_local =
-                current->is_shared &&
-                self(current->element_type, self);
+                current->is_shared && self(current->element_type, self);
             break;
         case TypeKind::Struct:
             contains_local = std::ranges::any_of(
@@ -770,13 +781,11 @@ auto SemanticAnalyzer::typeContainsLocalProperty(const Type* type) const
     return recurse(type, recurse);
 }
 
-auto SemanticAnalyzer::typeIsThreadShareSafe(const Type* type) const
-    -> bool {
+auto SemanticAnalyzer::typeIsThreadShareSafe(const Type* type) const -> bool {
     std::unordered_map<const Type*, bool> memo;
     std::unordered_set<const Type*> active;
 
-    const auto recurse = [&](const Type* current,
-                             const auto& self) -> bool {
+    const auto recurse = [&](const Type* current, const auto& self) -> bool {
         if (current == nullptr) {
             return false;
         }
@@ -784,10 +793,6 @@ auto SemanticAnalyzer::typeIsThreadShareSafe(const Type* type) const
         current = types.unqualify(current);
         if (const auto memo_it = memo.find(current); memo_it != memo.end()) {
             return memo_it->second;
-        }
-        if (typeHasThreadProperty(current, ast::ThreadPropertyKind::Local)) {
-            memo.emplace(current, false);
-            return false;
         }
         if (typeHasThreadProperty(current, ast::ThreadPropertyKind::Share)) {
             memo.emplace(current, true);
@@ -815,8 +820,8 @@ auto SemanticAnalyzer::typeIsThreadShareSafe(const Type* type) const
             share_safe = self(current->element_type, self);
             break;
         case TypeKind::Pointer:
-            share_safe = current->is_shared &&
-                         self(current->element_type, self);
+            share_safe =
+                current->is_shared && self(current->element_type, self);
             break;
         case TypeKind::Struct:
             share_safe = std::ranges::all_of(
@@ -852,9 +857,9 @@ auto SemanticAnalyzer::findImplForType(const ast::InterfaceDecl& interface_decl,
             interface_decl.range);
     }
 
-    const auto impl_it = package_impls.find(make_impl_key(
-        interface_decl.name, interface_decl.owner_module,
-        impl_target_group_key(types, concrete_type)));
+    const auto impl_it = package_impls.find(
+        make_impl_key(interface_decl.name, interface_decl.owner_module,
+                      impl_target_group_key(types, concrete_type)));
     const auto concrete_name = types.describe(concrete_type);
     if (impl_it == package_impls.end()) {
         return unexpected_result<ast::FunctionDecl*>(
@@ -900,6 +905,114 @@ auto SemanticAnalyzer::findImplForType(const ast::InterfaceDecl& interface_decl,
     return matched_impl;
 }
 
+auto SemanticAnalyzer::typeImplementsInterface(
+    const ast::InterfaceDecl& interface_decl, const Type* receiver_type)
+    -> bool {
+    const auto* concrete_type = interfaceReceiverType(receiver_type);
+    if (concrete_type == nullptr || concrete_type->kind == TypeKind::Borrow ||
+        concrete_type->kind == TypeKind::Interface) {
+        return false;
+    }
+
+    const auto impl_it = package_impls.find(
+        make_impl_key(interface_decl.name, interface_decl.owner_module,
+                      impl_target_group_key(types, concrete_type)));
+    if (impl_it == package_impls.end()) {
+        return false;
+    }
+
+    bool matched = false;
+    for (auto* candidate : impl_it->second) {
+        TypeBindings bindings;
+        auto candidate_match = matchTypePattern(
+            *implReceiverPattern(*candidate), *candidate->owner_module,
+            candidate->type_parameters, concrete_type, bindings);
+        if (!candidate_match) {
+            continue;
+        }
+        if (matched) {
+            return false;
+        }
+        matched = true;
+    }
+    return matched;
+}
+
+auto SemanticAnalyzer::typeSatisfiesInterfaceMarker(
+    const Type* type, std::string_view marker) const -> bool {
+    if (marker == "local") {
+        return typeContainsLocalProperty(type);
+    }
+    if (marker == "share") {
+        return typeIsThreadShareSafe(type);
+    }
+    if (marker == "send") {
+        std::unordered_map<const Type*, bool> memo;
+        std::unordered_set<const Type*> active;
+        const auto recurse = [&](const Type* current,
+                                 const auto& self) -> bool {
+            if (current == nullptr) {
+                return false;
+            }
+
+            current = types.unqualify(current);
+            if (const auto memo_it = memo.find(current);
+                memo_it != memo.end()) {
+                return memo_it->second;
+            }
+            if (typeHasThreadProperty(current, ast::ThreadPropertyKind::Send)) {
+                memo.emplace(current, true);
+                return true;
+            }
+            if (!active.insert(current).second) {
+                return true;
+            }
+
+            bool send_safe = false;
+            switch (current->kind) {
+            case TypeKind::Void:
+            case TypeKind::Integer:
+            case TypeKind::Float:
+            case TypeKind::Char:
+            case TypeKind::Bool:
+                send_safe = true;
+                break;
+            case TypeKind::Interface:
+            case TypeKind::Borrow:
+            case TypeKind::Slice:
+                send_safe = false;
+                break;
+            case TypeKind::Array:
+                send_safe = self(current->element_type, self);
+                break;
+            case TypeKind::Pointer:
+                send_safe = current->is_shared &&
+                            typeIsThreadShareSafe(current->element_type);
+                break;
+            case TypeKind::Struct:
+                send_safe = std::ranges::all_of(
+                    current->struct_decl->fields, [&](const auto& field) {
+                        return self(field.resolved_type, self);
+                    });
+                break;
+            case TypeKind::Enum:
+                send_safe = std::ranges::all_of(
+                    current->enum_decl->variants, [&](const auto& variant) {
+                        return variant.resolved_type == nullptr ||
+                               self(variant.resolved_type, self);
+                    });
+                break;
+            }
+
+            active.erase(current);
+            memo.emplace(current, send_safe);
+            return send_safe;
+        };
+        return recurse(type, recurse);
+    }
+    return false;
+}
+
 auto SemanticAnalyzer::coerceExprToInterface(FunctionState& state,
                                              ast::Expr& expr,
                                              const Type* interface_type)
@@ -909,7 +1022,7 @@ auto SemanticAnalyzer::coerceExprToInterface(FunctionState& state,
         return make_error("invalid interface coercion target", expr.range);
     }
 
-    expr.interface_impl = nullptr;
+    expr.interface_impls.clear();
     expr.interface_source_type = nullptr;
 
     auto source_type = analyzeExpr(state, expr, nullptr);
@@ -921,9 +1034,81 @@ auto SemanticAnalyzer::coerceExprToInterface(FunctionState& state,
         return {};
     }
     if ((*source_type)->kind == TypeKind::Interface) {
-        return unexpected_result<void>(
-            "interface value does not match expected interface type",
-            expr.range);
+        const auto* source_interface_type = types.unqualify(*source_type);
+        if (interface_type->is_mut && !source_interface_type->is_mut) {
+            return unexpected_result<void>(
+                "interface requires a mutable receiver borrow", expr.range);
+        }
+
+        const auto find_member_slot = [&](const ast::InterfaceDecl* member)
+            -> std::optional<std::size_t> {
+            for (std::size_t index = 0;
+                 index < source_interface_type->interface_members.size();
+                 ++index) {
+                if (source_interface_type->interface_members[index] == member) {
+                    return index;
+                }
+            }
+            return std::nullopt;
+        };
+
+        std::optional<std::size_t> previous_slot;
+        for (const auto* member : interface_type->interface_members) {
+            if (member == nullptr) {
+                continue;
+            }
+            const auto slot = find_member_slot(member);
+            if (!slot.has_value()) {
+                return unexpected_result<void>(
+                    "interface value does not match expected interface type",
+                    expr.range);
+            }
+            if (previous_slot.has_value() && *slot != *previous_slot + 1) {
+                return unexpected_result<void>(
+                    "interface value does not match expected interface type",
+                    expr.range);
+            }
+            previous_slot = *slot;
+        }
+
+        for (const auto* excluded : interface_type->interface_exclusions) {
+            if (excluded == nullptr) {
+                continue;
+            }
+            if (std::ranges::find(source_interface_type->interface_exclusions,
+                                  excluded) ==
+                source_interface_type->interface_exclusions.end()) {
+                return unexpected_result<void>(
+                    "interface value does not guarantee excluded interface '" +
+                        excluded->name + "'",
+                    expr.range);
+            }
+        }
+        for (const auto& marker : interface_type->interface_markers) {
+            if (std::ranges::find(source_interface_type->interface_markers,
+                                  marker) ==
+                source_interface_type->interface_markers.end()) {
+                return unexpected_result<void>(
+                    "interface value does not guarantee marker '" + marker +
+                        "'",
+                    expr.range);
+            }
+        }
+        for (const auto& marker : interface_type->interface_marker_exclusions) {
+            if (std::ranges::find(
+                    source_interface_type->interface_marker_exclusions,
+                    marker) ==
+                source_interface_type->interface_marker_exclusions.end()) {
+                return unexpected_result<void>(
+                    "interface value does not guarantee excluded marker '" +
+                        marker + "'",
+                    expr.range);
+            }
+        }
+
+        expr.interface_source_type = *source_type;
+        expr.resolved_type = interface_type;
+        return {};
     }
     const auto* concrete_source_type = interfaceReceiverType(*source_type);
     if (concrete_source_type == nullptr) {
@@ -948,23 +1133,42 @@ auto SemanticAnalyzer::coerceExprToInterface(FunctionState& state,
         }
     }
 
-    auto impl = findImplForType(*interface_type->interface_decl, *source_type);
-    if (!impl) {
-        return std::unexpected(impl.error());
+    std::vector<const ast::FunctionDecl*> interface_impls;
+    interface_impls.reserve(interface_type->interface_members.size());
+    for (const auto* member : interface_type->interface_members) {
+        if (member == nullptr) {
+            continue;
+        }
+        auto impl = findImplForType(*member, *source_type);
+        if (!impl) {
+            return std::unexpected(impl.error());
+        }
+        interface_impls.push_back(*impl);
     }
-    if (interface_type->interface_decl != nullptr &&
-        interface_type->interface_decl->owner_module != nullptr &&
-        interface_type->interface_decl->owner_module->module_name ==
-            "std.thread" &&
-        interface_type->interface_decl->name == "run_task") {
-        if (typeContainsLocalProperty(concrete_source_type)) {
+    for (const auto* excluded : interface_type->interface_exclusions) {
+        if (excluded == nullptr) {
+            continue;
+        }
+        if (typeImplementsInterface(*excluded, concrete_source_type)) {
             return unexpected_result<void>(
-                "thread task type contains a local thread-affine value",
+                "type '" + types.describe(concrete_source_type) +
+                    "' matches excluded interface '" + excluded->name + "'",
                 expr.range);
         }
-        if (!typeIsThreadShareSafe(concrete_source_type)) {
+    }
+    for (const auto& marker : interface_type->interface_markers) {
+        if (!typeSatisfiesInterfaceMarker(concrete_source_type, marker)) {
             return unexpected_result<void>(
-                "thread task type is not safe to share across threads",
+                "type '" + types.describe(concrete_source_type) +
+                    "' does not satisfy marker '" + marker + "'",
+                expr.range);
+        }
+    }
+    for (const auto& marker : interface_type->interface_marker_exclusions) {
+        if (typeSatisfiesInterfaceMarker(concrete_source_type, marker)) {
+            return unexpected_result<void>(
+                "type '" + types.describe(concrete_source_type) +
+                    "' matches excluded marker '" + marker + "'",
                 expr.range);
         }
     }
@@ -972,7 +1176,7 @@ auto SemanticAnalyzer::coerceExprToInterface(FunctionState& state,
     expr.interface_source_type = (*source_type)->kind == TypeKind::Borrow
                                      ? *source_type
                                      : concrete_source_type;
-    expr.interface_impl = *impl;
+    expr.interface_impls = std::move(interface_impls);
     expr.resolved_type = interface_type;
     return {};
 }

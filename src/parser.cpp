@@ -151,9 +151,9 @@ auto Parser::parseDecls(bool is_export)
             decls.emplace_back(std::move(*decl));
             return decls;
         }
-        return std::unexpected(Diagnostic(
-            "expected 'impl' or 'interface' after 'unchecked'",
-            previous().range));
+        return std::unexpected(
+            Diagnostic("expected 'impl' or 'interface' after 'unchecked'",
+                       previous().range));
     }
     if (check(TokenKind::KwImpl)) {
         auto decl = parseImplDecl(is_export);
@@ -198,8 +198,58 @@ auto Parser::parseDecls(bool is_export)
 }
 
 auto Parser::parseInterfaceDecl(bool is_export, bool is_unchecked)
-    -> std::expected<ast::InterfaceDecl, Diagnostic> {
+    -> std::expected<ast::Decl, Diagnostic> {
     const auto begin = advance().range.begin;
+    if (!check(TokenKind::Less)) {
+        if (is_unchecked) {
+            return std::unexpected(
+                Diagnostic("interface aliases do not support 'unchecked'",
+                           source_file.range(begin, previous().range.end)));
+        }
+
+        auto name = parseInterfaceName();
+        if (!name) {
+            return std::unexpected(name.error());
+        }
+        auto equal =
+            expect(TokenKind::Equal, "expected '=' after interface alias name");
+        if (!equal) {
+            return std::unexpected(equal.error());
+        }
+
+        ast::InterfaceAliasDecl decl;
+        decl.range = source_file.range(begin, begin);
+        decl.name = name->text;
+        decl.name_range = name->range;
+        decl.is_export = is_export;
+
+        while (true) {
+            ast::InterfaceExprTerm term;
+            term.is_negative = match(TokenKind::Minus);
+            if (!term.is_negative) {
+                static_cast<void>(match(TokenKind::Plus));
+            }
+            auto term_name = parseInterfaceName();
+            if (!term_name) {
+                return std::unexpected(term_name.error());
+            }
+            term.name = term_name->text;
+            term.name_range = term_name->range;
+            decl.terms.push_back(std::move(term));
+            if (!check(TokenKind::Plus) && !check(TokenKind::Minus)) {
+                break;
+            }
+        }
+
+        auto semicolon =
+            expect(TokenKind::Semicolon, "expected ';' after interface alias");
+        if (!semicolon) {
+            return std::unexpected(semicolon.error());
+        }
+        decl.range = source_file.range(begin, semicolon->range.end);
+        return ast::Decl(std::move(decl));
+    }
+
     auto type_parameters = parseTypeParameters();
     if (!type_parameters) {
         return std::unexpected(type_parameters.error());
@@ -252,7 +302,7 @@ auto Parser::parseInterfaceDecl(bool is_export, bool is_unchecked)
         return std::unexpected(semicolon.error());
     }
     decl.range.end = semicolon->range.end;
-    return decl;
+    return ast::Decl(std::move(decl));
 }
 
 auto Parser::parseImportDecl(bool is_export)
@@ -661,8 +711,8 @@ auto Parser::parseParameterList(std::vector<ast::Parameter>& parameters)
 auto Parser::parseImplDecl(bool is_export, bool is_unchecked)
     -> std::expected<ast::Decl, Diagnostic> {
     const auto impl_token = advance();
-    const auto parse_impl_name =
-        [&]() -> std::expected<std::pair<std::string, SourceRange>, Diagnostic> {
+    const auto parse_impl_name = [&]()
+        -> std::expected<std::pair<std::string, SourceRange>, Diagnostic> {
         if (check(TokenKind::KwDrop)) {
             const auto token = advance();
             return std::pair<std::string, SourceRange>{token.text, token.range};
@@ -704,9 +754,9 @@ auto Parser::parseImplDecl(bool is_export, bool is_unchecked)
         }
     }
 
-    const auto is_property_name =
-        interface_name->first == "local" || interface_name->first == "send" ||
-        interface_name->first == "share";
+    const auto is_property_name = interface_name->first == "local" ||
+                                  interface_name->first == "send" ||
+                                  interface_name->first == "share";
     if (is_property_name) {
         const auto fallback_index = index;
         const auto property_lparen =
@@ -720,9 +770,8 @@ auto Parser::parseImplDecl(bool is_export, bool is_unchecked)
             auto property_rparen = advance();
             if (match(TokenKind::Semicolon)) {
                 ast::PropertyImplDecl decl;
-                decl.range =
-                    source_file.range(impl_token.range.begin,
-                                      previous().range.end);
+                decl.range = source_file.range(impl_token.range.begin,
+                                               previous().range.end);
                 decl.property_name_range = interface_name->second;
                 decl.type_parameters = std::move(type_parameters);
                 decl.type_parameter_ranges = std::move(type_parameter_ranges);
@@ -2016,10 +2065,26 @@ auto Parser::parseIdentifier() -> std::expected<Token, Diagnostic> {
 }
 
 auto Parser::parseInterfaceName() -> std::expected<Token, Diagnostic> {
-    if (check(TokenKind::KwDrop)) {
-        return advance();
+    if (!(check(TokenKind::KwDrop) || check(TokenKind::Identifier))) {
+        return std::unexpected(
+            Diagnostic("expected interface name", current().range));
     }
-    return parseIdentifier();
+    Token name = advance();
+    if (name.kind != TokenKind::KwDrop) {
+        name.kind = TokenKind::Identifier;
+    }
+    while (check(TokenKind::Dot) && index + 1 < tokens.size() &&
+           tokens[index + 1].kind == TokenKind::Identifier) {
+        advance();
+        auto part = parseIdentifier();
+        if (!part) {
+            return std::unexpected(part.error());
+        }
+        name.text += '.';
+        name.text += part->text;
+        name.range.end = part->range.end;
+    }
+    return name;
 }
 
 auto Parser::parseTypeArguments()

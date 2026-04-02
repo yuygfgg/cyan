@@ -100,6 +100,12 @@ struct TypeSyntax {
     const Type* resolved_type = nullptr;
 };
 
+struct InterfaceExprTerm {
+    std::string name;
+    SourceRange name_range;
+    bool is_negative = false;
+};
+
 struct DependencyPathSegment {
     std::string name;
     SourceRange range;
@@ -208,6 +214,7 @@ struct CallExpr {
     const FunctionDecl* function = nullptr;
     const EnumDecl* enum_decl = nullptr;
     const InterfaceDecl* dispatched_interface = nullptr;
+    std::uint32_t dispatched_interface_slot = 0;
     std::uint32_t variant_index = 0;
 };
 
@@ -255,7 +262,7 @@ struct Expr {
     const Type* resolved_type = nullptr;
     std::optional<ResolvedPlace> resolved_place;
     const Type* interface_source_type = nullptr;
-    const FunctionDecl* interface_impl = nullptr;
+    std::vector<const FunctionDecl*> interface_impls;
     const Type* slice_source_type = nullptr;
     std::optional<ResolvedPlace> slice_source_place;
     std::size_t slice_storage_local_id = 0;
@@ -437,6 +444,16 @@ struct InterfaceDecl {
     const Module* owner_module = nullptr;
 };
 
+struct InterfaceAliasDecl {
+    SourceRange range;
+    std::string name;
+    SourceRange name_range;
+    std::vector<InterfaceExprTerm> terms;
+    const Type* resolved_type = nullptr;
+    bool is_export = false;
+    const Module* owner_module = nullptr;
+};
+
 struct IntrinsicLoweringArgument {
     std::size_t index = 0;
     std::string value_spec;
@@ -509,8 +526,8 @@ struct ImportDecl {
     Module* imported_module = nullptr;
 };
 
-using Decl = std::variant<StructDecl, EnumDecl, InterfaceDecl, FunctionDecl,
-                          PropertyImplDecl>;
+using Decl = std::variant<StructDecl, EnumDecl, InterfaceDecl,
+                          InterfaceAliasDecl, FunctionDecl, PropertyImplDecl>;
 
 struct Module {
     const SourceFile* source = nullptr;

@@ -1,0 +1,33 @@
+interface<T> i64 read(&T value);
+interface<T> i64 seek(&T value);
+interface streaming = read - seek;
+
+struct Stream {
+    i64 value;
+};
+
+struct File {
+    i64 value;
+};
+
+impl read(&Stream value) {
+    return value.value;
+}
+
+impl read(&File value) {
+    return value.value;
+}
+
+impl seek(&File value) {
+    return value.value;
+}
+
+i64 consume(&streaming value) {
+    return read(value);
+}
+
+i64 main() {
+    File file = {7};
+    consume(file);
+    return 0;
+}

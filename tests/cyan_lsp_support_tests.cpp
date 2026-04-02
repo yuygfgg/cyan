@@ -177,6 +177,40 @@ i64 main() {
 }
 )";
 
+constexpr std::string_view INTERFACE_ALIAS_FIXTURE_SOURCE =
+    R"(interface<T> i64 left(&T value);
+interface<T> i64 right(&T value);
+interface both = left + right;
+interface first = left;
+interface second = left;
+
+struct Pair {
+    i64 lhs;
+    i64 rhs;
+};
+
+impl left(&Pair value) {
+    return value.lhs;
+}
+
+impl right(&Pair value) {
+    return value.rhs;
+}
+
+i64 use_both(&both value) {
+    return left(value) + right(value);
+}
+
+i64 use_second(&second value) {
+    return left(value);
+}
+
+i64 main() {
+    Pair pair = {1, 2};
+    return use_both(pair) + use_second(pair) - 4;
+}
+)";
+
 struct FixtureContext {
     cyan::ast::Package package;
     cyan::TypeContext types;
@@ -220,7 +254,8 @@ auto load_fixture_from_source(std::string_view filename,
     cyan::Lexer lexer(*context.source);
     auto tokens = lexer.lexAll();
     if (!tokens) {
-        std::cerr << diagnostics_to_string(cyan::DiagnosticList{tokens.error()});
+        std::cerr << diagnostics_to_string(
+            cyan::DiagnosticList{tokens.error()});
         return std::nullopt;
     }
 
@@ -489,7 +524,8 @@ auto test_query(const cyan::LSPSupport& lsp, const cyan::SourceFile& source,
     expect(payload_result->symbol.has_value(),
            "payload query should resolve a symbol occurrence", failures);
     if (payload_result->symbol.has_value()) {
-        expect(payload_result->symbol->kind == cyan::LSPSymbolKind::SwitchBinding,
+        expect(payload_result->symbol->kind ==
+                   cyan::LSPSymbolKind::SwitchBinding,
                "payload query should resolve switch binding symbol", failures);
         expect(payload_result->symbol->role == cyan::LSPSymbolRole::Reference,
                "payload query should resolve reference role", failures);
@@ -528,7 +564,8 @@ auto test_query(const cyan::LSPSupport& lsp, const cyan::SourceFile& source,
             expect(some_result->symbol.has_value(),
                    "Some query should resolve a symbol occurrence", failures);
             if (some_result->symbol.has_value()) {
-                expect(some_result->symbol->kind == cyan::LSPSymbolKind::Variant,
+                expect(some_result->symbol->kind ==
+                           cyan::LSPSymbolKind::Variant,
                        "Some query should resolve variant symbol", failures);
             }
         }
@@ -601,6 +638,114 @@ auto test_depends_shorthand_document_symbols(std::vector<std::string>& failures)
                "depends source reference should resolve to parameter "
                "declaration",
                failures);
+    }
+}
+
+auto test_interface_alias_document_symbols(std::vector<std::string>& failures)
+    -> void {
+    auto context = load_fixture_from_source(
+        "cyan_lsp_interface_alias_fixture.cyan", "lsp_interface_alias_fixture",
+        INTERFACE_ALIAS_FIXTURE_SOURCE);
+    expect(context.has_value(),
+           "failed to load interface alias fixture for lsp test", failures);
+    if (!context.has_value()) {
+        return;
+    }
+
+    cyan::LSPSupport lsp(context->package, context->analysis);
+    const auto occurrences = lsp.documentSymbols(*context->source);
+
+    const auto* left_decl =
+        find_occurrence(occurrences, cyan::LSPSymbolKind::Interface,
+                        cyan::LSPSymbolRole::Declaration, "left");
+    const auto* right_decl =
+        find_occurrence(occurrences, cyan::LSPSymbolKind::Interface,
+                        cyan::LSPSymbolRole::Declaration, "right");
+    const auto* second_decl =
+        find_occurrence(occurrences, cyan::LSPSymbolKind::Interface,
+                        cyan::LSPSymbolRole::Declaration, "second");
+    expect(left_decl != nullptr, "missing left interface declaration symbol",
+           failures);
+    expect(right_decl != nullptr, "missing right interface declaration symbol",
+           failures);
+    expect(second_decl != nullptr, "missing second alias declaration symbol",
+           failures);
+    if (left_decl == nullptr || right_decl == nullptr ||
+        second_decl == nullptr) {
+        return;
+    }
+
+    const auto alias_terms_offset =
+        INTERFACE_ALIAS_FIXTURE_SOURCE.find("left + right");
+    expect(alias_terms_offset != std::string_view::npos,
+           "failed to find alias term source range", failures);
+    if (alias_terms_offset == std::string_view::npos) {
+        return;
+    }
+
+    const auto left_term_range = context->source->range(
+        alias_terms_offset,
+        alias_terms_offset + std::string_view("left").size());
+    const auto right_term_begin =
+        alias_terms_offset + std::string_view("left + ").size();
+    const auto right_term_range = context->source->range(
+        right_term_begin, right_term_begin + std::string_view("right").size());
+
+    const auto find_reference_at_range =
+        [&](std::string_view name,
+            cyan::SourceRange range) -> const cyan::LSPSymbolOccurrence* {
+        const auto it = std::ranges::find_if(
+            occurrences, [&](const cyan::LSPSymbolOccurrence& occ) {
+                return occ.kind == cyan::LSPSymbolKind::Interface &&
+                       occ.role == cyan::LSPSymbolRole::Reference &&
+                       occ.name == name && same_range(occ.range, range);
+            });
+        return it == occurrences.end() ? nullptr : &*it;
+    };
+
+    const auto* left_term_ref =
+        find_reference_at_range("left", left_term_range);
+    const auto* right_term_ref =
+        find_reference_at_range("right", right_term_range);
+    expect(left_term_ref != nullptr,
+           "interface alias term should emit left reference occurrence",
+           failures);
+    expect(right_term_ref != nullptr,
+           "interface alias term should emit right reference occurrence",
+           failures);
+    if (left_term_ref != nullptr) {
+        expect(same_optional_range(left_term_ref->declaration_range,
+                                   left_decl->range),
+               "left alias term should resolve to left interface declaration",
+               failures);
+    }
+    if (right_term_ref != nullptr) {
+        expect(same_optional_range(right_term_ref->declaration_range,
+                                   right_decl->range),
+               "right alias term should resolve to right interface declaration",
+               failures);
+    }
+
+    const auto second_type_offset =
+        INTERFACE_ALIAS_FIXTURE_SOURCE.find("&second value");
+    expect(second_type_offset != std::string_view::npos,
+           "failed to find second alias type usage", failures);
+    if (second_type_offset != std::string_view::npos) {
+        const auto second_type_range = context->source->range(
+            second_type_offset + 1,
+            second_type_offset + 1 + std::string_view("second").size());
+        const auto* second_type_ref =
+            find_reference_at_range("second", second_type_range);
+        expect(second_type_ref != nullptr,
+               "alias type usage should emit second reference occurrence",
+               failures);
+        if (second_type_ref != nullptr) {
+            expect(same_optional_range(second_type_ref->declaration_range,
+                                       second_decl->range),
+                   "second alias type usage should resolve to second alias "
+                   "declaration",
+                   failures);
+        }
     }
 }
 
@@ -988,11 +1133,10 @@ auto test_language_server_impl_definition_and_rename(
     std::filesystem::remove(path);
 }
 
-auto test_language_server_builtin_definition(
-    std::vector<std::string>& failures) -> void {
-    const auto path =
-        write_fixture_file("cyan_lsp_builtin_fixture.cyan",
-                           BUILTIN_IMPORT_FIXTURE_SOURCE);
+auto test_language_server_builtin_definition(std::vector<std::string>& failures)
+    -> void {
+    const auto path = write_fixture_file("cyan_lsp_builtin_fixture.cyan",
+                                         BUILTIN_IMPORT_FIXTURE_SOURCE);
     const auto uri = "file://" + path.generic_string();
 
     const auto call_offset =
@@ -1006,11 +1150,11 @@ auto test_language_server_builtin_definition(
     const auto call_position =
         offset_to_lsp_position(BUILTIN_IMPORT_FIXTURE_SOURCE, *call_offset);
 
-    const auto builtin_path = std::filesystem::absolute(
-        std::filesystem::path(__FILE__))
-                                  .parent_path()
-                                  .parent_path() /
-                              "stdlib" / "std" / "mem.cyan";
+    const auto builtin_path =
+        std::filesystem::absolute(std::filesystem::path(__FILE__))
+            .parent_path()
+            .parent_path() /
+        "stdlib" / "std" / "mem.cyan";
     std::ifstream builtin_stream(builtin_path, std::ios::binary);
     std::ostringstream builtin_buffer;
     builtin_buffer << builtin_stream.rdbuf();
@@ -1034,9 +1178,8 @@ auto test_language_server_builtin_definition(
         to_json(std::string(BUILTIN_IMPORT_FIXTURE_SOURCE)) + "}}}";
     const std::string definition_request =
         R"({"jsonrpc":"2.0","id":22,"method":"textDocument/definition","params":{"textDocument":{"uri":")" +
-        uri + R"("},"position":{"line":)" +
-        std::to_string(call_position.line) + R"(,"character":)" +
-        std::to_string(call_position.character) + "}}}";
+        uri + R"("},"position":{"line":)" + std::to_string(call_position.line) +
+        R"(,"character":)" + std::to_string(call_position.character) + "}}}";
     const std::string builtin_source_request =
         R"({"jsonrpc":"2.0","id":24,"method":"cyan/builtinSource","params":{"uri":")" +
         builtin_uri + R"("}})";
@@ -1083,7 +1226,8 @@ auto test_language_server_builtin_definition(
                "failed to parse builtin source response", failures);
         if (builtin_result.has_value()) {
             expect(builtin_result->text == builtin_source,
-                   "builtin source response should return the embedded stdlib text",
+                   "builtin source response should return the embedded stdlib "
+                   "text",
                    failures);
         }
     }
@@ -1101,9 +1245,10 @@ auto test_language_server_builtin_definition(
             expect(definition->uri == builtin_uri,
                    "builtin definition should jump into stdlib source",
                    failures);
-            expect(definition->range.start.line == builtin_decl_position.line,
-                   "builtin definition should land on the memcpy declaration line",
-                   failures);
+            expect(
+                definition->range.start.line == builtin_decl_position.line,
+                "builtin definition should land on the memcpy declaration line",
+                failures);
         }
     }
 
@@ -1124,6 +1269,7 @@ auto main() -> int {
     test_document_symbols(lsp, *context->source, failures);
     test_query(lsp, *context->source, failures);
     test_depends_shorthand_document_symbols(failures);
+    test_interface_alias_document_symbols(failures);
     test_language_server(failures);
     test_language_server_impl_definition_and_rename(failures);
     test_language_server_builtin_definition(failures);

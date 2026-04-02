@@ -3,8 +3,11 @@ extern {
 }
 
 export interface<T> void run_task(&T task);
+export interface thread_shared = share - local;
+export interface thread_sendable = send - local;
+export interface threaded_runnable = run_task + thread_shared;
 
-export void parallel_do([]&run_task tasks) {
+export void parallel_do([]&threaded_runnable tasks) {
     i64 count = len(tasks);
     if (count <= 0) {
         return;

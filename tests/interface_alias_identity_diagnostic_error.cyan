@@ -1,0 +1,24 @@
+interface<T> i64 read(&T value);
+interface first = read;
+interface second = read;
+
+struct Box {
+    i64 value;
+};
+
+impl read(&Box value) {
+    return value.value;
+}
+
+i64 take_i64(i64 value) {
+    return value;
+}
+
+i64 use_alias(&second value) {
+    return take_i64(value);
+}
+
+i64 main() {
+    Box box = {1};
+    return use_alias(box);
+}

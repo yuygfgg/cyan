@@ -765,7 +765,7 @@ Sooner or later, you want one operation to work across unrelated types. In C, th
 
 ### Mental Model
 
-Think of a Cyan interface as a **verb**. `measure` names an operation that some receiver types support. An interface value such as `&measure` is an erased borrow to “something that can be measured.” A slice such as `[]&measure` is a tray full of values that all support the same verb, even if their concrete types differ.
+Think of a Cyan interface as a **verb** or a **capability**. `measure` names one operation that some receiver types support. An interface alias such as `measure + fmt` names a bundle of capabilities. An interface value such as `&measure` is an erased borrow to “something that can be measured.” A slice such as `[]&measure` is a tray full of values that all support the same verb, even if their concrete types differ.
 
 ### The Code
 
@@ -827,6 +827,47 @@ Inside `call_dyn`, the line `return measure(value);` looks almost too simple. Th
 `i64 sum([]&measure values)` raises the abstraction one step. The parameter is a slice of erased interface borrows. The loop body does not care whether element `0` and element `1` came from the same concrete type. It only cares that `measure(values[i])` is valid for each one.
 
 `main()` then exercises all three styles: a direct call on a concrete value, a dynamic call through `&measure`, and a loop over `[]&measure`.
+
+### Composing Interfaces With `+` And `-`
+
+Single verbs stay useful, but many APIs need more than one capability at once. Cyan handles that by letting you name interface expressions:
+
+```cyan
+interface<T> i64 left(&T value);
+interface<T> i64 right(&T value);
+interface both = left + right;
+
+struct Pair {
+    i64 lhs;
+    i64 rhs;
+};
+
+impl left(&Pair value) {
+    return value.lhs;
+}
+
+impl right(&Pair value) {
+    return value.rhs;
+}
+
+i64 sum_pair(&both value) {
+    return left(value) + right(value);
+}
+```
+
+`interface both = left + right;` says that `both` is not a new verb. It is a name for “anything that supports `left` and `right`.” That is why `sum_pair(&both value)` can call `left(value)` and `right(value)` separately. The composed interface exposes the positive callable members it names.
+
+Subtraction is the other half:
+
+```cyan
+interface<T> i64 read(&T value);
+interface<T> i64 seek(&T value);
+interface streaming = read - seek;
+```
+
+Read `streaming` as “readable, but not seekable.” A type that implements both `read` and `seek` does not satisfy `streaming`. Inside a function that takes `&streaming`, you can call `read(value)`. You cannot call `seek(value)` through that interface, because `seek` is an exclusion rule, not a provided capability.
+
+This turns out to be especially useful at library boundaries. `/std.thread` uses the same mechanism to say that a task must implement `run_task`, must be shareable, and must not be marked `local`.
 
 ### The Same Mechanism Powers `/std.println`
 
@@ -1067,11 +1108,11 @@ The compiler reports `could not infer type argument for 'T'`. The fix is to writ
 
 ### Why Cyan Starts Here
 
-Cyan's current threading surface centers on one straightforward tool: `parallel_do([]&run_task tasks);`. It launches a batch of tasks, waits for all of them to finish, and then returns to the caller. That gives you a direct way to express fork-join work while keeping the lifetime of borrowed inputs easy to see in the source.
+Cyan's current threading surface centers on one straightforward tool: `parallel_do([]&threaded_runnable tasks);`. It launches a batch of tasks, waits for all of them to finish, and then returns to the caller. That gives you a direct way to express fork-join work while keeping the lifetime of borrowed inputs easy to see in the source.
 
 ### Mental Model
 
-Think of `parallel_do(...)` as a foreman handing job cards to workers and then waiting at the door until every card comes back. The task values are the cards. The `run_task` interface is the one operation every card must support. Because the call is blocking, a task may still borrow data that lives in the caller. When several workers touch the same state, that shared state needs a synchronization shape such as `Mutex<T>`, `Arc<T>`, or atomics on `shared T*`.
+Think of `parallel_do(...)` as a foreman handing job cards to workers and then waiting at the door until every card comes back. The task values are the cards. Every card must support the `run_task` verb, and it must also satisfy the thread-boundary capability that `/std.thread` calls `threaded_runnable`. Because the call is blocking, a task may still borrow data that lives in the caller. When several workers touch the same state, that shared state needs a synchronization shape such as `Mutex<T>`, `Arc<T>`, or atomics on `shared T*`.
 
 ### The Code
 
@@ -1113,13 +1154,24 @@ cyan docs/snippets/threading_parallel_do.cyan -o /tmp/threading_parallel_do.o
 
 ### Walkthrough
 
-`import /std.thread;` gives you `parallel_do(...)` and the `run_task` interface. `import /std.sync;` adds `Mutex`, `MutexGuard`, `Arc`, and the current synchronization helpers.
+`import /std.thread;` gives you `parallel_do(...)`, the `run_task` interface, and the interface aliases that define the thread boundary:
+
+```cyan
+interface<T> void run_task(&T task);
+interface thread_shared = share - local;
+interface thread_sendable = send - local;
+interface threaded_runnable = run_task + thread_shared;
+```
+
+`parallel_do(...)` accepts `[]&threaded_runnable`, not bare `[]&run_task`. In plain language, a task must provide the `run_task` operation, must satisfy `share`, and must not satisfy `local`. `import /std.sync;` adds `Mutex`, `MutexGuard`, `Arc`, and the current synchronization helpers.
+
+`thread_sendable` is the matching alias for ownership-moving thread boundaries. The current standard library does not yet expose a general `spawn(...)` API, so `parallel_do(...)` only relies on `threaded_runnable`.
 
 `struct AddTask { &Mutex<i64> total; i64 value; };` says each task borrows one shared mutex and carries one increment. The important detail is the borrow. `AddTask` points at caller-owned state that must outlive the blocking call to `parallel_do(...)`.
 
 `impl run_task(&AddTask task)` is the thread entry point for `AddTask`. Cyan expresses that entry point through the ordinary interface mechanism. `lock(task.total)` returns a `MutexGuard<i64>`. While that guard is alive, `guard.data` is a mutable borrow to the protected value. When the guard leaves scope, its `drop` implementation releases the lock.
 
-`parallel_do([left, middle, right]);` builds a slice of tasks and runs them as one blocking batch. The key word is blocking. Control does not move to the next line until all three tasks have finished.
+`parallel_do([left, middle, right]);` builds a slice of tasks and runs them as one blocking batch. The key word is blocking. Control does not move to the next line until all three tasks have finished. The type `AddTask` is accepted because it implements `run_task` and its fields satisfy the `thread_shared` side of the boundary.
 
 The final `lock(&total)` is ordinary code again. The parallel phase is over, so it is safe to read the result and return it.
 
@@ -1163,7 +1215,7 @@ The `shared` qualifier is the line that marks a raw pointer as intended for cros
 
 ### Marking Types For Thread Boundaries
 
-Task types are still ordinary Cyan structs and enums. The thread-specific part is the contract at the boundary.
+Task types are still ordinary Cyan structs and enums. The thread-specific part is the contract at the boundary, and that contract is written in `/std.thread` as interface composition rather than as a compiler-only rule.
 
 When a type is tied to one thread by meaning rather than by storage shape, mark it with `impl local(...)`:
 
@@ -1175,19 +1227,20 @@ struct GLContext {
 impl local(GLContext);
 ```
 
-That tells Cyan to treat the type as thread-affine. The marker composes through larger task shapes, so a task that contains `GLContext` directly or indirectly still carries that thread-affine meaning.
+That tells Cyan to treat the type as thread-affine. The marker composes through larger task shapes, so a task that contains `GLContext` directly or indirectly still carries that thread-affine meaning. Because `/std.thread` defines `thread_shared = share - local`, such a task no longer satisfies the `parallel_do(...)` boundary.
 
-When a nominal type is safe to share but its implementation is too opaque for a simple structural rule, mark it explicitly with `unchecked impl share(...)`:
+When a nominal type is safe at a thread boundary but its implementation is too opaque for a simple structural rule, mark it explicitly. `share` and `send` both use `unchecked` because they are library-author promises rather than properties the compiler can prove from an opaque field list:
 
 ```cyan
 struct OpaqueHandle {
     void* raw;
 };
 
+unchecked impl send(OpaqueHandle);
 unchecked impl share(OpaqueHandle);
 ```
 
-This is useful for low-level handles or wrappers whose semantics come from the library author rather than from the field list alone.
+This is useful for low-level handles or wrappers whose semantics come from the library author rather than from the field list alone. `send` matters for ownership-moving thread boundaries. `share` matters for shared-access thread boundaries.
 
 The raw-pointer side follows the same idea. An ordinary `T*` is just a raw pointer. A `shared T*` is a raw pointer that is meant to participate in cross-thread coordination.
 
@@ -1195,11 +1248,11 @@ The raw-pointer side follows the same idea. An ordinary `T*` is just a raw point
 
 The pieces that work together today are:
 
-- `/std.thread` with `run_task` and `parallel_do(...)`
+- `/std.thread` with `run_task`, `thread_shared`, `thread_sendable`, `threaded_runnable`, and `parallel_do(...)`
 - `/std.sync` with `Mutex<T>`, `MutexGuard<T>`, `Arc<T>`, `arc_get(...)`, and `lock(...)`
 - `shared T*` for raw cross-thread state
 - atomic operations and memory-order constants
-- `impl local(...)` and `unchecked impl share(...)` for nominal thread properties
+- `impl local(...)`, `unchecked impl send(...)`, and `unchecked impl share(...)` for nominal thread properties
 
 That is enough to write blocking parallel loops, shared heap state, synchronized updates, and low-level atomic coordination in ordinary Cyan code.
 

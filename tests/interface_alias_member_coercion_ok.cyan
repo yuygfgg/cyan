@@ -1,0 +1,33 @@
+interface<T> i64 left(&T value);
+interface<T> i64 right(&T value);
+interface both = left + right;
+
+struct Pair {
+    i64 lhs;
+    i64 rhs;
+};
+
+impl left(&Pair value) {
+    return value.lhs;
+}
+
+impl right(&Pair value) {
+    return value.rhs;
+}
+
+i64 read_left(&left value) {
+    return left(value);
+}
+
+i64 read_right(&right value) {
+    return right(value);
+}
+
+i64 sum_members(&both value) {
+    return read_left(value) + read_right(value);
+}
+
+i64 main() {
+    Pair pair = {4, 7};
+    return sum_members(pair) - 11;
+}

@@ -1,5 +1,7 @@
 #include "sema_detail.hpp"
 
+#include <unordered_set>
+
 namespace cyan {
 
 using namespace detail;
@@ -123,6 +125,9 @@ auto SemanticAnalyzer::exportScope(const ModuleScope& scope) const
     }
     for (const auto& [name, decl] : scope.interfaces) {
         exported.interfaces.emplace(name, decl);
+    }
+    for (const auto& [name, decl] : scope.interface_aliases) {
+        exported.interface_aliases.emplace(name, decl);
     }
     for (const auto& [name, decl] : scope.functions) {
         exported.functions.emplace(name, decl);
@@ -330,6 +335,13 @@ auto SemanticAnalyzer::analyze(ast::Package& package) -> SemanticAnalysis {
                 interface_decl != nullptr) {
                 auto analyzed = analyzeInterface(*interface_decl);
                 static_cast<void>(analyzed);
+                continue;
+            }
+            if (auto* interface_alias_decl =
+                    std::get_if<ast::InterfaceAliasDecl>(&decl);
+                interface_alias_decl != nullptr) {
+                auto analyzed = analyzeInterfaceAlias(*interface_alias_decl);
+                static_cast<void>(analyzed);
             }
         }
     }
@@ -504,6 +516,18 @@ auto SemanticAnalyzer::collectDeclarations(ast::Package& package)
                 continue;
             }
 
+            if (auto* interface_alias_decl =
+                    std::get_if<ast::InterfaceAliasDecl>(&decl);
+                interface_alias_decl != nullptr) {
+                interface_alias_decl->owner_module = module.get();
+                auto registered = registerVisibleDecl(
+                    scope, decl, interface_alias_decl->range);
+                if (!registered) {
+                    report(registered.error());
+                }
+                continue;
+            }
+
             if (auto* property_decl = std::get_if<ast::PropertyImplDecl>(&decl);
                 property_decl != nullptr) {
                 property_decl->owner_module = module.get();
@@ -590,24 +614,26 @@ auto SemanticAnalyzer::buildExportScope(const ast::Module& module)
 
     for (auto& decl : module.declarations) {
         bool is_exported = false;
-        std::visit(Overloaded{
-                       [&](const ast::StructDecl& struct_decl) {
-                           is_exported = struct_decl.is_export;
-                       },
-                       [&](const ast::EnumDecl& enum_decl) {
-                           is_exported = enum_decl.is_export;
-                       },
-                       [&](const ast::InterfaceDecl& interface_decl) {
-                           is_exported = interface_decl.is_export;
-                       },
-                       [&](const ast::FunctionDecl& function_decl) {
-                           is_exported = function_decl.is_export;
-                       },
-                       [&](const ast::PropertyImplDecl&) {
-                           is_exported = false;
-                       },
-                   },
-                   decl);
+        std::visit(
+            Overloaded{
+                [&](const ast::StructDecl& struct_decl) {
+                    is_exported = struct_decl.is_export;
+                },
+                [&](const ast::EnumDecl& enum_decl) {
+                    is_exported = enum_decl.is_export;
+                },
+                [&](const ast::InterfaceDecl& interface_decl) {
+                    is_exported = interface_decl.is_export;
+                },
+                [&](const ast::InterfaceAliasDecl& interface_alias_decl) {
+                    is_exported = interface_alias_decl.is_export;
+                },
+                [&](const ast::FunctionDecl& function_decl) {
+                    is_exported = function_decl.is_export;
+                },
+                [&](const ast::PropertyImplDecl&) { is_exported = false; },
+            },
+            decl);
         if (!is_exported) {
             continue;
         }
@@ -1068,9 +1094,9 @@ auto SemanticAnalyzer::registerImplDeclarations(ast::Package& package)
                 return std::unexpected(receiver_term.error());
             }
 
-            const auto key = make_impl_key(
-                interface_key_name, interface_key_module,
-                impl_target_group_key(*receiver_pattern));
+            const auto key =
+                make_impl_key(interface_key_name, interface_key_module,
+                              impl_target_group_key(*receiver_pattern));
             auto& impls = package_impls[key];
             for (auto* existing_impl : impls) {
                 auto existing_pattern =
@@ -1107,12 +1133,13 @@ auto SemanticAnalyzer::registerPropertyImplDeclarations(ast::Package& package)
             parameter_indices.emplace(decl.type_parameters[index], index);
         }
         std::string pattern = decl.impl_target_name;
-        if (decl.target_type == nullptr || decl.target_type->type_arguments.empty()) {
+        if (decl.target_type == nullptr ||
+            decl.target_type->type_arguments.empty()) {
             return pattern;
         }
         pattern.push_back('<');
-        for (std::size_t index = 0; index < decl.target_type->type_arguments.size();
-             ++index) {
+        for (std::size_t index = 0;
+             index < decl.target_type->type_arguments.size(); ++index) {
             if (index != 0) {
                 pattern.push_back(',');
             }
@@ -1136,10 +1163,12 @@ auto SemanticAnalyzer::registerPropertyImplDeclarations(ast::Package& package)
             if (property_decl == nullptr) {
                 continue;
             }
-            ScopedModule scoped_module(active_module, property_decl->owner_module);
+            ScopedModule scoped_module(active_module,
+                                       property_decl->owner_module);
 
             if (property_decl->target_type == nullptr ||
-                property_decl->target_type->kind != ast::TypeSyntax::Kind::Named) {
+                property_decl->target_type->kind !=
+                    ast::TypeSyntax::Kind::Named) {
                 return std::unexpected(Diagnostic(
                     "thread property impl target must be a nominal type",
                     property_decl->range));
@@ -1185,8 +1214,7 @@ auto SemanticAnalyzer::registerPropertyImplDeclarations(ast::Package& package)
                 canonical_target_module = struct_template->owner_module;
                 canonical_target_name = struct_template->name;
             } else if (auto* enum_template = findEnumTemplateInModule(
-                           *property_decl->owner_module,
-                           target_name);
+                           *property_decl->owner_module, target_name);
                        enum_template != nullptr) {
                 has_nominal_target_type = true;
                 expected_type_argument_count =
@@ -1194,7 +1222,8 @@ auto SemanticAnalyzer::registerPropertyImplDeclarations(ast::Package& package)
                 canonical_target_module = enum_template->owner_module;
                 canonical_target_name = enum_template->name;
             }
-            if (!has_nominal_target_type || canonical_target_module == nullptr ||
+            if (!has_nominal_target_type ||
+                canonical_target_module == nullptr ||
                 canonical_target_name.empty()) {
                 return std::unexpected(Diagnostic(
                     "unknown thread property target type '" + target_name + "'",
@@ -1202,25 +1231,36 @@ auto SemanticAnalyzer::registerPropertyImplDeclarations(ast::Package& package)
             }
             property_decl->impl_target_module = canonical_target_module;
             property_decl->impl_target_name = canonical_target_name;
-            if (property_decl->property_kind == ast::ThreadPropertyKind::Share &&
+            if ((property_decl->property_kind ==
+                     ast::ThreadPropertyKind::Share ||
+                 property_decl->property_kind ==
+                     ast::ThreadPropertyKind::Send) &&
                 !property_decl->is_unchecked) {
-                return std::unexpected(Diagnostic(
-                    "impl share(...) must be declared unchecked",
-                    property_decl->property_name_range));
+                const auto property_name =
+                    property_decl->property_kind ==
+                            ast::ThreadPropertyKind::Share
+                        ? "share"
+                        : "send";
+                return std::unexpected(
+                    Diagnostic("impl " + std::string(property_name) +
+                                   "(...) must be declared unchecked",
+                               property_decl->property_name_range));
             }
-            if (property_decl->property_kind != ast::ThreadPropertyKind::Share &&
+            if (property_decl->property_kind ==
+                    ast::ThreadPropertyKind::Local &&
                 property_decl->is_unchecked) {
                 return std::unexpected(Diagnostic(
-                    "only impl share(...) may be declared unchecked",
+                    "only impl send(...) and impl share(...) may be declared "
+                    "unchecked",
                     property_decl->property_name_range));
             }
             if (expected_type_argument_count.has_value() &&
                 *expected_type_argument_count == 0 &&
                 !property_decl->target_type->type_arguments.empty()) {
-                return std::unexpected(Diagnostic(
-                    "type '" + property_decl->impl_target_name +
-                        "' is not generic",
-                    property_decl->target_type->range));
+                return std::unexpected(
+                    Diagnostic("type '" + property_decl->impl_target_name +
+                                   "' is not generic",
+                               property_decl->target_type->range));
             }
             if (expected_type_argument_count.has_value() &&
                 *expected_type_argument_count != 0 &&
@@ -1233,10 +1273,10 @@ auto SemanticAnalyzer::registerPropertyImplDeclarations(ast::Package& package)
             if (expected_type_argument_count.has_value() &&
                 property_decl->target_type->type_arguments.size() !=
                     *expected_type_argument_count) {
-                return std::unexpected(Diagnostic(
-                    "wrong number of type arguments for '" +
-                        property_decl->impl_target_name + "'",
-                    property_decl->target_type->range));
+                return std::unexpected(
+                    Diagnostic("wrong number of type arguments for '" +
+                                   property_decl->impl_target_name + "'",
+                               property_decl->target_type->range));
             }
 
             for (const auto& type_argument :
@@ -1264,14 +1304,15 @@ auto SemanticAnalyzer::registerPropertyImplDeclarations(ast::Package& package)
                 if (existing->owner_module != property_decl->owner_module ||
                     existing->impl_target_module !=
                         property_decl->impl_target_module ||
-                    existing->impl_target_name != property_decl->impl_target_name) {
+                    existing->impl_target_name !=
+                        property_decl->impl_target_name) {
                     continue;
                 }
                 if (canonical_property_pattern(*existing) == pattern) {
-                    return std::unexpected(Diagnostic(
-                        "duplicate thread property impl for '" +
-                            property_decl->impl_target_name + "'",
-                        property_decl->range));
+                    return std::unexpected(
+                        Diagnostic("duplicate thread property impl for '" +
+                                       property_decl->impl_target_name + "'",
+                                   property_decl->range));
                 }
             }
             decls.push_back(property_decl);
@@ -1291,6 +1332,7 @@ auto SemanticAnalyzer::registerVisibleDecl(ModuleScope& scope, ast::Decl& decl,
                scope.enums.contains(std::string(name)) ||
                scope.enum_templates.contains(std::string(name)) ||
                scope.interfaces.contains(std::string(name)) ||
+               scope.interface_aliases.contains(std::string(name)) ||
                scope.functions.contains(std::string(name)) ||
                scope.function_templates.contains(std::string(name));
     };
@@ -1366,6 +1408,19 @@ auto SemanticAnalyzer::registerVisibleDecl(ModuleScope& scope, ast::Decl& decl,
         return {};
     }
 
+    if (auto* interface_alias_decl =
+            std::get_if<ast::InterfaceAliasDecl>(&decl);
+        interface_alias_decl != nullptr) {
+        if (has_type_conflict(interface_alias_decl->name)) {
+            return make_error("duplicate declaration for '" +
+                                  interface_alias_decl->name + "'",
+                              conflict_range);
+        }
+        scope.interface_aliases[interface_alias_decl->name] =
+            interface_alias_decl;
+        return {};
+    }
+
     auto* function_decl = std::get_if<ast::FunctionDecl>(&decl);
     if (function_decl == nullptr) {
         if (std::get_if<ast::PropertyImplDecl>(&decl) != nullptr) {
@@ -1397,7 +1452,9 @@ auto SemanticAnalyzer::registerImportNamespace(ModuleScope& scope,
     if (scope.import_namespaces.contains(name) ||
         scope.structs.contains(name) || scope.struct_templates.contains(name) ||
         scope.enums.contains(name) || scope.enum_templates.contains(name) ||
-        scope.interfaces.contains(name) || scope.functions.contains(name) ||
+        scope.interfaces.contains(name) ||
+        scope.interface_aliases.contains(name) ||
+        scope.functions.contains(name) ||
         scope.function_templates.contains(name)) {
         return make_error("duplicate declaration for '" + name + "'",
                           conflict_range);
@@ -1425,6 +1482,7 @@ auto SemanticAnalyzer::mergeImportedScope(ModuleScope& target,
                target.enums.contains(std::string(name)) ||
                target.enum_templates.contains(std::string(name)) ||
                target.interfaces.contains(std::string(name)) ||
+               target.interface_aliases.contains(std::string(name)) ||
                target.functions.contains(std::string(name)) ||
                target.function_templates.contains(std::string(name));
     };
@@ -1463,6 +1521,13 @@ auto SemanticAnalyzer::mergeImportedScope(ModuleScope& target,
                               conflict_range);
         }
         target.interfaces.emplace(name, decl);
+    }
+    for (const auto& [name, decl] : source.interface_aliases) {
+        if (has_type_conflict(name)) {
+            return make_error("duplicate declaration for '" + name + "'",
+                              conflict_range);
+        }
+        target.interface_aliases.emplace(name, decl);
     }
     for (const auto& [name, decl] : source.functions) {
         if (has_type_conflict(name)) {
@@ -1638,6 +1703,36 @@ auto SemanticAnalyzer::findInterfaceInModule(const ast::Module& module,
     return resolve(visibleScopeFor(module), 0);
 }
 
+auto SemanticAnalyzer::findInterfaceAliasInModule(const ast::Module& module,
+                                                  std::string_view name) const
+    -> const ast::InterfaceAliasDecl* {
+    const auto parts = split_qualified_name(name);
+    if (parts.empty()) {
+        return nullptr;
+    }
+
+    std::function<const ast::InterfaceAliasDecl*(const ModuleScope&,
+                                                 std::size_t)>
+        resolve = [&](const ModuleScope& scope,
+                      std::size_t index) -> const ast::InterfaceAliasDecl* {
+        if (index + 1 == parts.size()) {
+            if (const auto it = scope.interface_aliases.find(parts[index]);
+                it != scope.interface_aliases.end()) {
+                return it->second;
+            }
+            return nullptr;
+        }
+
+        const auto namespace_it = scope.import_namespaces.find(parts[index]);
+        if (namespace_it == scope.import_namespaces.end()) {
+            return nullptr;
+        }
+        return resolve(exportScopeFor(*namespace_it->second), index + 1);
+    };
+
+    return resolve(visibleScopeFor(module), 0);
+}
+
 auto SemanticAnalyzer::findFunctionInModule(const ast::Module& module,
                                             std::string_view name) const
     -> ast::FunctionDecl* {
@@ -1784,6 +1879,14 @@ auto SemanticAnalyzer::findVisibleInterface(std::string_view name) const
         return nullptr;
     }
     return findInterfaceInModule(*active_module, name);
+}
+
+auto SemanticAnalyzer::findVisibleInterfaceAlias(std::string_view name) const
+    -> const ast::InterfaceAliasDecl* {
+    if (active_module == nullptr) {
+        return nullptr;
+    }
+    return findInterfaceAliasInModule(*active_module, name);
 }
 
 auto SemanticAnalyzer::findVisibleFunction(std::string_view name) const
@@ -2074,6 +2177,110 @@ auto SemanticAnalyzer::analyzeInterface(ast::InterfaceDecl& decl)
     if (had_error) {
         return make_error("interface analysis failed", decl.range);
     }
+    return {};
+}
+
+auto SemanticAnalyzer::analyzeInterfaceAlias(ast::InterfaceAliasDecl& decl)
+    -> std::expected<void, Diagnostic> {
+    ScopedModule scoped_module(active_module, decl.owner_module);
+
+    std::vector<const ast::InterfaceDecl*> interface_members;
+    std::vector<const ast::InterfaceDecl*> interface_exclusions;
+    std::vector<std::string> interface_markers;
+    std::vector<std::string> interface_marker_exclusions;
+    std::unordered_set<const ast::InterfaceAliasDecl*> active_aliases{&decl};
+    bool receiver_is_mut = false;
+
+    const auto is_marker_name = [](std::string_view name) {
+        return name == "local" || name == "send" || name == "share";
+    };
+
+    const auto expand_terms =
+        [&](const ast::InterfaceAliasDecl& alias, bool invert,
+            const auto& self) -> std::expected<void, Diagnostic> {
+        for (const auto& term : alias.terms) {
+            const auto is_negative = invert != term.is_negative;
+            if (const auto* nested_alias = findVisibleInterfaceAlias(term.name);
+                nested_alias != nullptr) {
+                if (!active_aliases.insert(nested_alias).second) {
+                    return make_error("cyclic interface alias involving '" +
+                                          nested_alias->name + "'",
+                                      term.name_range);
+                }
+                auto expanded = self(*nested_alias, is_negative, self);
+                active_aliases.erase(nested_alias);
+                if (!expanded) {
+                    return std::unexpected(expanded.error());
+                }
+                continue;
+            }
+
+            if (const auto* interface_decl = findVisibleInterface(term.name);
+                interface_decl != nullptr) {
+                if (is_negative) {
+                    interface_exclusions.push_back(interface_decl);
+                } else {
+                    interface_members.push_back(interface_decl);
+                    receiver_is_mut =
+                        receiver_is_mut || interface_decl->receiver_is_mut;
+                }
+                continue;
+            }
+
+            if (is_marker_name(term.name)) {
+                if (is_negative) {
+                    interface_marker_exclusions.push_back(term.name);
+                } else {
+                    interface_markers.push_back(term.name);
+                }
+                continue;
+            }
+
+            return make_error("unknown interface capability '" + term.name +
+                                  "'",
+                              term.name_range);
+        }
+        return {};
+    };
+
+    auto expanded = expand_terms(decl, false, expand_terms);
+    if (!expanded) {
+        return std::unexpected(expanded.error());
+    }
+
+    const auto has_interface_conflict =
+        [&](const ast::InterfaceDecl* needle) -> bool {
+        return std::ranges::find(interface_exclusions, needle) !=
+               interface_exclusions.end();
+    };
+    for (const auto* interface_decl : interface_members) {
+        if (has_interface_conflict(interface_decl)) {
+            return make_error("interface alias '" + decl.name +
+                                  "' both requires and excludes interface '" +
+                                  interface_decl->name + "'",
+                              decl.range);
+        }
+    }
+    for (const auto& marker : interface_markers) {
+        if (std::ranges::find(interface_marker_exclusions, marker) !=
+            interface_marker_exclusions.end()) {
+            return make_error("interface alias '" + decl.name +
+                                  "' both requires and excludes marker '" +
+                                  marker + "'",
+                              decl.range);
+        }
+    }
+
+    const auto linkage_name =
+        "iface$" +
+        (decl.owner_module != nullptr
+             ? detail::mangle_module_name(decl.owner_module->module_name) + "$"
+             : std::string()) +
+        decl.name;
+    decl.resolved_type = types.getInterfaceAlias(
+        decl.name, linkage_name, &decl, std::move(interface_members),
+        std::move(interface_exclusions), std::move(interface_markers),
+        std::move(interface_marker_exclusions), receiver_is_mut);
     return {};
 }
 

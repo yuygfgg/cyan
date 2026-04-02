@@ -16,24 +16,24 @@
 #define CYAN_HAVE_C11_THREADS 1
 #endif
 
-typedef void (*cyan_run_task_fn)(void*);
+typedef void (*cyan_run_task_fn)(void *);
 
 typedef struct {
-    void* data;
-    void* fn;
+    void *data;
+    const void *vtable;
 } cyan_iface_value;
 
 typedef struct {
-    const cyan_iface_value* task;
+    const cyan_iface_value *task;
 } cyan_thread_job;
 
-static int cyan_thread_entry(void* arg);
+static int cyan_thread_entry(void *arg);
 
 #if defined(CYAN_HAVE_C11_THREADS)
 typedef thrd_t cyan_thread_handle;
 
-static int cyan_thread_create(cyan_thread_handle* thread,
-                              cyan_thread_job* job) {
+static int cyan_thread_create(cyan_thread_handle *thread,
+                              cyan_thread_job *job) {
     return thrd_create(thread, cyan_thread_entry, job) == thrd_success;
 }
 
@@ -44,13 +44,13 @@ static void cyan_thread_join(cyan_thread_handle thread) {
 #elif defined(CYAN_HAVE_PTHREADS)
 typedef pthread_t cyan_thread_handle;
 
-static void* cyan_pthread_entry(void* arg) {
+static void *cyan_pthread_entry(void *arg) {
     cyan_thread_entry(arg);
     return NULL;
 }
 
-static int cyan_thread_create(cyan_thread_handle* thread,
-                              cyan_thread_job* job) {
+static int cyan_thread_create(cyan_thread_handle *thread,
+                              cyan_thread_job *job) {
     return pthread_create(thread, NULL, cyan_pthread_entry, job) == 0;
 }
 
@@ -59,37 +59,40 @@ static void cyan_thread_join(cyan_thread_handle thread) {
 }
 #endif
 
-static void cyan_run_one(const cyan_iface_value* task) {
-    if (task == NULL || task->fn == NULL) {
+static void cyan_run_one(const cyan_iface_value *task) {
+    if (task == NULL || task->vtable == NULL) {
         return;
     }
-    ((cyan_run_task_fn)task->fn)(task->data);
+    const void *const *vtable = (const void *const *)task->vtable;
+    if (vtable[0] == NULL) {
+        return;
+    }
+    ((cyan_run_task_fn)vtable[0])(task->data);
 }
 
-static int cyan_thread_entry(void* arg) {
-    const cyan_thread_job* job = (const cyan_thread_job*)arg;
+static int cyan_thread_entry(void *arg) {
+    const cyan_thread_job *job = (const cyan_thread_job *)arg;
     if (job != NULL) {
         cyan_run_one(job->task);
     }
     return 0;
 }
 
-int cyan_runtime_parallel_do(const void* tasks_raw, int64_t count) {
+int cyan_runtime_parallel_do(const void *tasks_raw, int64_t count) {
     if (count <= 0 || tasks_raw == NULL) {
         return 0;
     }
 
-    const cyan_iface_value* tasks = (const cyan_iface_value*)tasks_raw;
+    const cyan_iface_value *tasks = (const cyan_iface_value *)tasks_raw;
     if (count == 1) {
         cyan_run_one(&tasks[0]);
         return 0;
     }
 
-    cyan_thread_handle* threads =
-        (cyan_thread_handle*)malloc((size_t)(count - 1) *
-                                    sizeof(cyan_thread_handle));
-    cyan_thread_job* jobs =
-        (cyan_thread_job*)malloc((size_t)(count - 1) * sizeof(cyan_thread_job));
+    cyan_thread_handle *threads = (cyan_thread_handle *)malloc(
+        (size_t)(count - 1) * sizeof(cyan_thread_handle));
+    cyan_thread_job *jobs = (cyan_thread_job *)malloc((size_t)(count - 1) *
+                                                      sizeof(cyan_thread_job));
     if (threads == NULL || jobs == NULL) {
         free(jobs);
         free(threads);

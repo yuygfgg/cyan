@@ -308,6 +308,17 @@ class ModuleTraversal {
                     .declaration_range = interface_it->second->name_range,
                 };
             }
+            if (const auto alias_it = scope->interface_aliases.find(type.name);
+                alias_it != scope->interface_aliases.end()) {
+                return LSPSymbolOccurrence{
+                    .kind = LSPSymbolKind::Interface,
+                    .role = LSPSymbolRole::Reference,
+                    .name = type.name,
+                    .range = type.name_range,
+                    .declaration_range = alias_it->second->name_range,
+                    .type = alias_it->second->resolved_type,
+                };
+            }
             return std::nullopt;
         }
 
@@ -351,16 +362,19 @@ class ModuleTraversal {
             };
         }
         case TypeKind::Interface:
-            if (type.resolved_type->interface_decl == nullptr) {
-                return std::nullopt;
-            }
             return LSPSymbolOccurrence{
                 .kind = LSPSymbolKind::Interface,
                 .role = LSPSymbolRole::Reference,
                 .name = type.name,
                 .range = type.name_range,
                 .declaration_range =
-                    type.resolved_type->interface_decl->name_range,
+                    type.resolved_type->interface_decl != nullptr
+                        ? std::optional(
+                              type.resolved_type->interface_decl->name_range)
+                    : type.resolved_type->interface_alias_decl != nullptr
+                        ? std::optional(type.resolved_type->interface_alias_decl
+                                            ->name_range)
+                        : std::nullopt,
                 .type = type.resolved_type,
             };
         case TypeKind::Borrow:
@@ -574,6 +588,52 @@ class ModuleTraversal {
         };
     }
 
+    [[nodiscard]] auto
+    interfaceAliasTermOccurrence(const ast::InterfaceExprTerm& term) const
+        -> std::optional<LSPSymbolOccurrence> {
+        if (term.name_range.source == nullptr) {
+            return std::nullopt;
+        }
+
+        const auto* scope = analysis.visibleScopeFor(module);
+        if (scope == nullptr) {
+            return std::nullopt;
+        }
+
+        if (const auto interface_it = scope->interfaces.find(term.name);
+            interface_it != scope->interfaces.end()) {
+            return LSPSymbolOccurrence{
+                .kind = LSPSymbolKind::Interface,
+                .role = LSPSymbolRole::Reference,
+                .name = term.name,
+                .range = term.name_range,
+                .declaration_range = interface_it->second->name_range,
+            };
+        }
+        if (const auto alias_it = scope->interface_aliases.find(term.name);
+            alias_it != scope->interface_aliases.end()) {
+            return LSPSymbolOccurrence{
+                .kind = LSPSymbolKind::Interface,
+                .role = LSPSymbolRole::Reference,
+                .name = term.name,
+                .range = term.name_range,
+                .declaration_range = alias_it->second->name_range,
+                .type = alias_it->second->resolved_type,
+            };
+        }
+        if (term.name == "local" || term.name == "send" ||
+            term.name == "share") {
+            return std::nullopt;
+        }
+        return LSPSymbolOccurrence{
+            .kind = LSPSymbolKind::Interface,
+            .role = LSPSymbolRole::Reference,
+            .name = term.name,
+            .range = term.name_range,
+            .declaration_range = std::nullopt,
+        };
+    }
+
     auto visitImport(const ast::ImportDecl& import_decl) -> void {
         for (const auto& part_range : import_decl.module_name_part_ranges) {
             emit(LSPSymbolOccurrence{
@@ -730,6 +790,23 @@ class ModuleTraversal {
                             .declaration_range = parameter.name_range,
                             .type = parameter.resolved_type,
                         });
+                    }
+                },
+                [&](const ast::InterfaceAliasDecl& interface_alias_decl) {
+                    emit(LSPSymbolOccurrence{
+                        .kind = LSPSymbolKind::Interface,
+                        .role = LSPSymbolRole::Declaration,
+                        .name = interface_alias_decl.name,
+                        .range = interface_alias_decl.name_range,
+                        .declaration_range = interface_alias_decl.name_range,
+                        .type = interface_alias_decl.resolved_type,
+                    });
+                    for (const auto& term : interface_alias_decl.terms) {
+                        if (const auto occurrence =
+                                interfaceAliasTermOccurrence(term);
+                            occurrence.has_value()) {
+                            emit(*occurrence);
+                        }
                     }
                 },
                 [&](const ast::FunctionDecl& function_decl) {

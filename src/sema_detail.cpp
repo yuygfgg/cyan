@@ -137,7 +137,11 @@ auto same_concrete_base_type(const TypeContext& types, const Type* lhs,
     case TypeKind::Enum:
         return lhs->enum_decl == rhs->enum_decl;
     case TypeKind::Interface:
-        return lhs->interface_decl == rhs->interface_decl;
+        return lhs->interface_members == rhs->interface_members &&
+               lhs->interface_exclusions == rhs->interface_exclusions &&
+               lhs->interface_markers == rhs->interface_markers &&
+               lhs->interface_marker_exclusions ==
+                   rhs->interface_marker_exclusions;
     case TypeKind::Borrow:
     case TypeKind::Pointer:
     case TypeKind::Slice:

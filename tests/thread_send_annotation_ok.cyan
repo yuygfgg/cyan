@@ -1,0 +1,9 @@
+struct OpaqueTicket {
+    void* raw;
+};
+
+unchecked impl send(OpaqueTicket);
+
+i64 main() {
+    return 0;
+}

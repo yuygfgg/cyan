@@ -34,7 +34,7 @@ class Parser {
     auto parseExternDecls()
         -> std::expected<std::vector<ast::Decl>, Diagnostic>;
     auto parseInterfaceDecl(bool is_export, bool is_unchecked = false)
-        -> std::expected<ast::InterfaceDecl, Diagnostic>;
+        -> std::expected<ast::Decl, Diagnostic>;
     auto parseStructDecls(bool is_export)
         -> std::expected<std::vector<ast::Decl>, Diagnostic>;
     auto parseEnumDecls(bool is_export)
@@ -64,8 +64,8 @@ class Parser {
     [[nodiscard]] auto looksLikeVarDecl() -> bool;
     [[nodiscard]] auto looksLikeExplicitCallTypeArguments() -> bool;
     [[nodiscard]] auto looksLikeSharedTypeQualifier() -> bool;
-    [[nodiscard]] auto typeSyntaxContainsPointer(const ast::TypeSyntax& type)
-        const -> bool;
+    [[nodiscard]] auto
+    typeSyntaxContainsPointer(const ast::TypeSyntax& type) const -> bool;
     auto parseType() -> std::expected<ast::TypeSyntaxPtr, Diagnostic>;
     auto parseTypeArguments()
         -> std::expected<std::vector<ast::TypeSyntaxPtr>, Diagnostic>;

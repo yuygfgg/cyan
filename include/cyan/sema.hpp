@@ -21,6 +21,8 @@ struct SemanticScope {
     std::unordered_map<std::string, const ast::EnumDecl*> enums;
     std::unordered_map<std::string, const ast::EnumDecl*> enum_templates;
     std::unordered_map<std::string, const ast::InterfaceDecl*> interfaces;
+    std::unordered_map<std::string, const ast::InterfaceAliasDecl*>
+        interface_aliases;
     std::unordered_map<std::string, const ast::FunctionDecl*> functions;
     std::unordered_map<std::string, const ast::FunctionDecl*>
         function_templates;
@@ -101,6 +103,8 @@ class SemanticAnalyzer {
         std::unordered_map<std::string, ast::EnumDecl*> enums;
         std::unordered_map<std::string, ast::EnumDecl*> enum_templates;
         std::unordered_map<std::string, ast::InterfaceDecl*> interfaces;
+        std::unordered_map<std::string, ast::InterfaceAliasDecl*>
+            interface_aliases;
         std::unordered_map<std::string, ast::FunctionDecl*> functions;
         std::unordered_map<std::string, ast::FunctionDecl*> function_templates;
         std::unordered_map<std::string, ast::FunctionDecl*> interface_impls;
@@ -238,6 +242,8 @@ class SemanticAnalyzer {
     auto analyzeStruct(ast::StructDecl& decl)
         -> std::expected<void, Diagnostic>;
     auto analyzeInterface(ast::InterfaceDecl& decl)
+        -> std::expected<void, Diagnostic>;
+    auto analyzeInterfaceAlias(ast::InterfaceAliasDecl& decl)
         -> std::expected<void, Diagnostic>;
     auto analyzeFunction(ast::FunctionDecl& decl)
         -> std::expected<void, Diagnostic>;
@@ -404,6 +410,9 @@ class SemanticAnalyzer {
     [[nodiscard]] auto findInterfaceInModule(const ast::Module& module,
                                              std::string_view name) const
         -> const ast::InterfaceDecl*;
+    [[nodiscard]] auto findInterfaceAliasInModule(const ast::Module& module,
+                                                  std::string_view name) const
+        -> const ast::InterfaceAliasDecl*;
     [[nodiscard]] auto findFunctionInModule(const ast::Module& module,
                                             std::string_view name) const
         -> ast::FunctionDecl*;
@@ -436,6 +445,8 @@ class SemanticAnalyzer {
         -> std::expected<void, Diagnostic>;
     [[nodiscard]] auto findVisibleInterface(std::string_view name) const
         -> const ast::InterfaceDecl*;
+    [[nodiscard]] auto findVisibleInterfaceAlias(std::string_view name) const
+        -> const ast::InterfaceAliasDecl*;
     [[nodiscard]] auto findVisibleFunction(std::string_view name) const
         -> ast::FunctionDecl*;
     [[nodiscard]] auto findVisibleFunctionTemplate(std::string_view name) const
@@ -452,12 +463,18 @@ class SemanticAnalyzer {
     auto findImplForType(const ast::InterfaceDecl& interface_decl,
                          const Type* receiver_type)
         -> std::expected<ast::FunctionDecl*, Diagnostic>;
-    [[nodiscard]] auto typeHasThreadProperty(
-        const Type* type, ast::ThreadPropertyKind kind) const -> bool;
+    [[nodiscard]] auto
+    typeImplementsInterface(const ast::InterfaceDecl& interface_decl,
+                            const Type* receiver_type) -> bool;
+    [[nodiscard]] auto
+    typeSatisfiesInterfaceMarker(const Type* type,
+                                 std::string_view marker) const -> bool;
+    [[nodiscard]] auto typeHasThreadProperty(const Type* type,
+                                             ast::ThreadPropertyKind kind) const
+        -> bool;
     [[nodiscard]] auto typeContainsLocalProperty(const Type* type) const
         -> bool;
-    [[nodiscard]] auto typeIsThreadShareSafe(const Type* type) const
-        -> bool;
+    [[nodiscard]] auto typeIsThreadShareSafe(const Type* type) const -> bool;
     auto ensureDropImplForType(const Type* type)
         -> std::expected<void, Diagnostic>;
     [[nodiscard]] auto implReceiverPattern(const ast::FunctionDecl& decl) const

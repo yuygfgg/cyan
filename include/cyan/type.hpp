@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -14,6 +15,7 @@ struct StructDecl;
 struct FunctionDecl;
 struct EnumDecl;
 struct InterfaceDecl;
+struct InterfaceAliasDecl;
 } // namespace ast
 
 enum class TypeKind : std::uint8_t {
@@ -37,6 +39,11 @@ struct Type {
     const ast::StructDecl* struct_decl = nullptr;
     const ast::EnumDecl* enum_decl = nullptr;
     const ast::InterfaceDecl* interface_decl = nullptr;
+    const ast::InterfaceAliasDecl* interface_alias_decl = nullptr;
+    std::vector<const ast::InterfaceDecl*> interface_members;
+    std::vector<const ast::InterfaceDecl*> interface_exclusions;
+    std::vector<std::string> interface_markers;
+    std::vector<std::string> interface_marker_exclusions;
     std::uint16_t bit_width = 0;
     bool is_signed = false;
     bool is_mut = false;
@@ -82,7 +89,19 @@ class TypeContext {
     auto registerEnum(std::string name, std::string linkage_name,
                       const ast::EnumDecl* decl) -> const Type*;
     auto getInterface(const ast::InterfaceDecl* decl) -> const Type*;
+    auto getInterfaceAlias(
+        std::string name, std::string linkage_name,
+        const ast::InterfaceAliasDecl* decl,
+        std::vector<const ast::InterfaceDecl*> interface_members,
+        std::vector<const ast::InterfaceDecl*> interface_exclusions,
+        std::vector<std::string> interface_markers,
+        std::vector<std::string> interface_marker_exclusions,
+        bool receiver_is_mut) -> const Type*;
     [[nodiscard]] auto findNamed(std::string_view name) const -> const Type*;
+    [[nodiscard]] auto
+    interfaceCallableSlot(const Type* interface_type,
+                          const ast::InterfaceDecl* decl) const
+        -> std::optional<std::size_t>;
     auto getConst(const Type* type) -> const Type*;
     auto getBorrow(const Type* pointee, bool is_mut) -> const Type*;
     auto getPointer(const Type* pointee, bool is_shared = false) -> const Type*;
@@ -109,6 +128,12 @@ class TypeContext {
     auto pointerKey(const Type* pointee, bool is_shared) const -> std::string;
     auto arrayKey(const Type* element, std::uint64_t size) const -> std::string;
     auto sliceKey(const Type* element) const -> std::string;
+    auto interfaceKey(
+        const std::vector<const ast::InterfaceDecl*>& interface_members,
+        const std::vector<const ast::InterfaceDecl*>& interface_exclusions,
+        const std::vector<std::string>& interface_markers,
+        const std::vector<std::string>& interface_marker_exclusions,
+        bool receiver_is_mut) const -> std::string;
 
     std::vector<std::unique_ptr<Type>> owned_types;
     std::unordered_map<std::string, const Type*> named_types;
@@ -119,6 +144,9 @@ class TypeContext {
     std::unordered_map<const Type*, const Type*> const_types;
     std::unordered_map<const Type*, const Type*> unqualified_types;
     std::unordered_map<const ast::InterfaceDecl*, const Type*> interface_types;
+    std::unordered_map<const ast::InterfaceAliasDecl*, const Type*>
+        interface_alias_types;
+    std::unordered_map<std::string, const Type*> interface_types_by_key;
     std::unordered_map<const Type*, const ast::FunctionDecl*> drop_functions;
     const Type* void_builtin_type = nullptr;
     const Type* default_integer_builtin_type = nullptr;

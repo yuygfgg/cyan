@@ -3,6 +3,7 @@
 #include "cyan/ast.hpp"
 
 #include <algorithm>
+#include <ranges>
 #include <sstream>
 
 namespace cyan {
@@ -17,6 +18,11 @@ TypeContext::TypeContext() {
                                          .struct_decl = nullptr,
                                          .enum_decl = nullptr,
                                          .interface_decl = nullptr,
+                                         .interface_alias_decl = nullptr,
+                                         .interface_members = {},
+                                         .interface_exclusions = {},
+                                         .interface_markers = {},
+                                         .interface_marker_exclusions = {},
                                          .bit_width = bit_width,
                                          .is_signed = is_signed,
                                          .is_mut = false,
@@ -155,6 +161,11 @@ auto TypeContext::registerStruct(std::string name, std::string linkage_name,
                       .struct_decl = decl,
                       .enum_decl = nullptr,
                       .interface_decl = nullptr,
+                      .interface_alias_decl = nullptr,
+                      .interface_members = {},
+                      .interface_exclusions = {},
+                      .interface_markers = {},
+                      .interface_marker_exclusions = {},
                       .bit_width = 0,
                       .is_signed = false,
                       .is_mut = false,
@@ -174,6 +185,11 @@ auto TypeContext::registerEnum(std::string name, std::string linkage_name,
                       .struct_decl = nullptr,
                       .enum_decl = decl,
                       .interface_decl = nullptr,
+                      .interface_alias_decl = nullptr,
+                      .interface_members = {},
+                      .interface_exclusions = {},
+                      .interface_markers = {},
+                      .interface_marker_exclusions = {},
                       .bit_width = 0,
                       .is_signed = false,
                       .is_mut = false,
@@ -191,27 +207,166 @@ auto TypeContext::getInterface(const ast::InterfaceDecl* decl) -> const Type* {
         return it->second;
     }
 
-    const auto linkage_name = "iface$" + decl->name;
-    const auto* const type = makeType(Type{.kind = TypeKind::Interface,
-                                           .element_type = nullptr,
-                                           .struct_decl = nullptr,
-                                           .enum_decl = nullptr,
-                                           .interface_decl = decl,
-                                           .bit_width = 0,
-                                           .is_signed = false,
-                                           .is_mut = decl->receiver_is_mut,
-                                           .is_shared = false,
-                                           .is_const = false,
-                                           .array_size = 0,
-                                           .name = decl->name,
-                                           .linkage_name = linkage_name});
+    const auto linkage_name =
+        "iface$" +
+        (decl->owner_module != nullptr ? decl->owner_module->module_name + "$"
+                                       : std::string()) +
+        decl->name;
+    std::vector<const ast::InterfaceDecl*> interface_members{decl};
+    const auto key =
+        interfaceKey(interface_members, {}, {}, {}, decl->receiver_is_mut);
+    const auto interface_it = interface_types_by_key.find(key);
+    if (interface_it != interface_types_by_key.end()) {
+        interface_types.emplace(decl, interface_it->second);
+        return interface_it->second;
+    }
+
+    const auto* const type = makeType(Type{
+        .kind = TypeKind::Interface,
+        .element_type = nullptr,
+        .struct_decl = nullptr,
+        .enum_decl = nullptr,
+        .interface_decl = decl,
+        .interface_alias_decl = nullptr,
+        .interface_members = std::move(interface_members),
+        .interface_exclusions = {},
+        .interface_markers = {},
+        .interface_marker_exclusions = {},
+        .bit_width = 0,
+        .is_signed = false,
+        .is_mut = decl->receiver_is_mut,
+        .is_shared = false,
+        .is_const = false,
+        .array_size = 0,
+        .name = decl->name,
+        .linkage_name = linkage_name,
+    });
     interface_types.emplace(decl, type);
+    interface_types_by_key.emplace(key, type);
+    return type;
+}
+
+auto TypeContext::getInterfaceAlias(
+    std::string name, std::string linkage_name,
+    const ast::InterfaceAliasDecl* decl,
+    std::vector<const ast::InterfaceDecl*> interface_members,
+    std::vector<const ast::InterfaceDecl*> interface_exclusions,
+    std::vector<std::string> interface_markers,
+    std::vector<std::string> interface_marker_exclusions, bool receiver_is_mut)
+    -> const Type* {
+    if (decl != nullptr) {
+        if (const auto it = interface_alias_types.find(decl);
+            it != interface_alias_types.end()) {
+            return it->second;
+        }
+    }
+
+    const auto interface_less = [](const ast::InterfaceDecl* lhs,
+                                   const ast::InterfaceDecl* rhs) {
+        const auto lhs_name =
+            (lhs != nullptr && lhs->owner_module != nullptr
+                 ? lhs->owner_module->module_name + "." + lhs->name
+             : lhs != nullptr ? lhs->name
+                              : std::string());
+        const auto rhs_name =
+            (rhs != nullptr && rhs->owner_module != nullptr
+                 ? rhs->owner_module->module_name + "." + rhs->name
+             : rhs != nullptr ? rhs->name
+                              : std::string());
+        return lhs_name < rhs_name;
+    };
+
+    std::ranges::sort(interface_members, interface_less);
+    interface_members.erase(
+        std::unique(interface_members.begin(), interface_members.end()),
+        interface_members.end());
+    std::ranges::sort(interface_exclusions, interface_less);
+    interface_exclusions.erase(
+        std::unique(interface_exclusions.begin(), interface_exclusions.end()),
+        interface_exclusions.end());
+    std::ranges::sort(interface_markers);
+    interface_markers.erase(
+        std::unique(interface_markers.begin(), interface_markers.end()),
+        interface_markers.end());
+    std::ranges::sort(interface_marker_exclusions);
+    interface_marker_exclusions.erase(
+        std::unique(interface_marker_exclusions.begin(),
+                    interface_marker_exclusions.end()),
+        interface_marker_exclusions.end());
+
+    const auto key =
+        interfaceKey(interface_members, interface_exclusions, interface_markers,
+                     interface_marker_exclusions, receiver_is_mut);
+    const auto has_plain_interface_shape =
+        interface_members.size() == 1 && interface_exclusions.empty() &&
+        interface_markers.empty() && interface_marker_exclusions.empty();
+
+    const Type* canonical_type = nullptr;
+    if (const auto it = interface_types_by_key.find(key);
+        it != interface_types_by_key.end()) {
+        canonical_type = it->second;
+    } else {
+        canonical_type = makeType(Type{
+            .kind = TypeKind::Interface,
+            .element_type = nullptr,
+            .struct_decl = nullptr,
+            .enum_decl = nullptr,
+            .interface_decl = decl == nullptr && has_plain_interface_shape
+                                  ? interface_members.front()
+                                  : nullptr,
+            .interface_alias_decl = nullptr,
+            .interface_members = interface_members,
+            .interface_exclusions = interface_exclusions,
+            .interface_markers = interface_markers,
+            .interface_marker_exclusions = interface_marker_exclusions,
+            .bit_width = 0,
+            .is_signed = false,
+            .is_mut = receiver_is_mut,
+            .is_shared = false,
+            .is_const = false,
+            .array_size = 0,
+            .name = key,
+            .linkage_name = key,
+        });
+        interface_types_by_key.emplace(key, canonical_type);
+    }
+
+    if (decl == nullptr) {
+        return canonical_type;
+    }
+
+    auto alias_type = *canonical_type;
+    alias_type.interface_decl = nullptr;
+    alias_type.interface_alias_decl = decl;
+    alias_type.name = std::move(name);
+    alias_type.linkage_name = std::move(linkage_name);
+    const auto* const type = makeType(std::move(alias_type));
+    interface_alias_types.emplace(decl, type);
     return type;
 }
 
 auto TypeContext::findNamed(std::string_view name) const -> const Type* {
     const auto it = named_types.find(std::string(name));
     return it == named_types.end() ? nullptr : it->second;
+}
+
+auto TypeContext::interfaceCallableSlot(const Type* interface_type,
+                                        const ast::InterfaceDecl* decl) const
+    -> std::optional<std::size_t> {
+    if (interface_type == nullptr) {
+        return std::nullopt;
+    }
+    interface_type = unqualify(interface_type);
+    if (interface_type->kind != TypeKind::Interface || decl == nullptr) {
+        return std::nullopt;
+    }
+    for (std::size_t index = 0;
+         index < interface_type->interface_members.size(); ++index) {
+        if (interface_type->interface_members[index] == decl) {
+            return index;
+        }
+    }
+    return std::nullopt;
 }
 
 auto TypeContext::getConst(const Type* type) -> const Type* {
@@ -249,6 +404,41 @@ auto TypeContext::sliceKey(const Type* element) const -> std::string {
     return "slice:" + describe(element);
 }
 
+auto TypeContext::interfaceKey(
+    const std::vector<const ast::InterfaceDecl*>& interface_members,
+    const std::vector<const ast::InterfaceDecl*>& interface_exclusions,
+    const std::vector<std::string>& interface_markers,
+    const std::vector<std::string>& interface_marker_exclusions,
+    bool receiver_is_mut) const -> std::string {
+    const auto append_interface_name = [](std::ostringstream& stream,
+                                          const ast::InterfaceDecl* decl) {
+        if (decl != nullptr && decl->owner_module != nullptr) {
+            stream << decl->owner_module->module_name << '.';
+        }
+        if (decl != nullptr) {
+            stream << decl->name;
+        }
+    };
+
+    std::ostringstream stream;
+    stream << "ifaceexpr:" << (receiver_is_mut ? "mut" : "shr");
+    for (const auto* decl : interface_members) {
+        stream << ":+";
+        append_interface_name(stream, decl);
+    }
+    for (const auto* decl : interface_exclusions) {
+        stream << ":-";
+        append_interface_name(stream, decl);
+    }
+    for (const auto& marker : interface_markers) {
+        stream << ":+@" << marker;
+    }
+    for (const auto& marker : interface_marker_exclusions) {
+        stream << ":-@" << marker;
+    }
+    return stream.str();
+}
+
 auto TypeContext::getBorrow(const Type* pointee, bool is_mut) -> const Type* {
     const auto key = borrowKey(pointee, is_mut);
     if (const auto it = borrow_types.find(key); it != borrow_types.end()) {
@@ -260,6 +450,11 @@ auto TypeContext::getBorrow(const Type* pointee, bool is_mut) -> const Type* {
                                            .struct_decl = nullptr,
                                            .enum_decl = nullptr,
                                            .interface_decl = nullptr,
+                                           .interface_alias_decl = nullptr,
+                                           .interface_members = {},
+                                           .interface_exclusions = {},
+                                           .interface_markers = {},
+                                           .interface_marker_exclusions = {},
                                            .bit_width = 0,
                                            .is_signed = false,
                                            .is_mut = is_mut,
@@ -284,6 +479,11 @@ auto TypeContext::getPointer(const Type* pointee, bool is_shared)
                                            .struct_decl = nullptr,
                                            .enum_decl = nullptr,
                                            .interface_decl = nullptr,
+                                           .interface_alias_decl = nullptr,
+                                           .interface_members = {},
+                                           .interface_exclusions = {},
+                                           .interface_markers = {},
+                                           .interface_marker_exclusions = {},
                                            .bit_width = 0,
                                            .is_signed = false,
                                            .is_mut = false,
@@ -310,6 +510,11 @@ auto TypeContext::getArray(const Type* element, std::uint64_t size)
                                            .struct_decl = nullptr,
                                            .enum_decl = nullptr,
                                            .interface_decl = nullptr,
+                                           .interface_alias_decl = nullptr,
+                                           .interface_members = {},
+                                           .interface_exclusions = {},
+                                           .interface_markers = {},
+                                           .interface_marker_exclusions = {},
                                            .bit_width = 0,
                                            .is_signed = false,
                                            .is_mut = false,
@@ -333,6 +538,11 @@ auto TypeContext::getSlice(const Type* element) -> const Type* {
                                            .struct_decl = nullptr,
                                            .enum_decl = nullptr,
                                            .interface_decl = nullptr,
+                                           .interface_alias_decl = nullptr,
+                                           .interface_members = {},
+                                           .interface_exclusions = {},
+                                           .interface_markers = {},
+                                           .interface_marker_exclusions = {},
                                            .bit_width = 0,
                                            .is_signed = false,
                                            .is_mut = false,
@@ -406,7 +616,11 @@ auto TypeContext::sameIgnoringConst(const Type* lhs, const Type* rhs) const
     case TypeKind::Enum:
         return lhs->enum_decl == rhs->enum_decl;
     case TypeKind::Interface:
-        return lhs->interface_decl == rhs->interface_decl;
+        return lhs->interface_members == rhs->interface_members &&
+               lhs->interface_exclusions == rhs->interface_exclusions &&
+               lhs->interface_markers == rhs->interface_markers &&
+               lhs->interface_marker_exclusions ==
+                   rhs->interface_marker_exclusions;
     case TypeKind::Borrow:
     case TypeKind::Pointer:
     case TypeKind::Slice:

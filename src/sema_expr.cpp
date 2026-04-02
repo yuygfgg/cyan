@@ -11,7 +11,7 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                                    const Type* expected_type)
     -> std::expected<const Type*, Diagnostic> {
     expr.interface_source_type = nullptr;
-    expr.interface_impl = nullptr;
+    expr.interface_impls.clear();
     expr.slice_source_type = nullptr;
     expr.slice_source_place.reset();
     if (expected_type != nullptr &&
@@ -2266,8 +2266,35 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         }
 
         const auto* interface_type = types.getInterface(interface_decl);
+        if ((*receiver_type)->kind == TypeKind::Interface) {
+            auto slot =
+                types.interfaceCallableSlot(*receiver_type, interface_decl);
+            if (slot.has_value()) {
+                call.dispatched_interface = interface_decl;
+                call.dispatched_interface_slot =
+                    static_cast<std::uint32_t>(*slot);
+                auto analyzed_receiver =
+                    analyze_argument(receiver_argument, *receiver_type);
+                if (!analyzed_receiver) {
+                    return std::unexpected(analyzed_receiver.error());
+                }
+                for (std::size_t index = 1; index < call.arguments.size();
+                     ++index) {
+                    auto analyzed_argument = analyze_argument(
+                        *call.arguments[index],
+                        interface_decl->parameters[index].resolved_type);
+                    if (!analyzed_argument) {
+                        return std::unexpected(analyzed_argument.error());
+                    }
+                }
+                expr.resolved_type = interface_decl->resolved_return_type;
+                expr.resolved_place.reset();
+                return expr.resolved_type;
+            }
+        }
         if (types.sameIgnoringTopLevelConst(*receiver_type, interface_type)) {
             call.dispatched_interface = interface_decl;
+            call.dispatched_interface_slot = 0;
             auto analyzed_receiver =
                 analyze_argument(receiver_argument, interface_type);
             if (!analyzed_receiver) {

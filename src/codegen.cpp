@@ -32,6 +32,7 @@
 #include <cstdlib>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -503,7 +504,7 @@ class LLVMCodegen {
                     struct_layout->getElementOffsetInBits(0),
                     llvm::DINode::FlagZero, opaque_pointer),
                 di_builder->createMemberType(
-                    composite, "fn", file, 0,
+                    composite, "vtable", file, 0,
                     data_layout.getTypeAllocSizeInBits(
                         layout->getElementType(1)),
                     static_cast<std::uint32_t>(
@@ -1127,9 +1128,9 @@ class LLVMCodegen {
                 [&](ast::DropStmt& drop_stmt)
                     -> std::expected<void, Diagnostic> {
                     const Type* drop_type = drop_stmt.value->resolved_type;
-                    const auto* drop_base =
-                        drop_type == nullptr ? nullptr
-                                             : types.unqualify(drop_type);
+                    const auto* drop_base = drop_type == nullptr
+                                                ? nullptr
+                                                : types.unqualify(drop_type);
                     const auto is_whole_local_drop =
                         drop_stmt.value->resolved_place.has_value() &&
                         !drop_stmt.value->resolved_place->is_external &&
@@ -1519,22 +1520,133 @@ class LLVMCodegen {
             context, {pointer_type, lowerType(types.i64Type())});
     }
 
-    auto emitInterfaceCoercion(ast::Expr& expr) -> llvm::Value* {
-        if (expr.interface_source_type == nullptr ||
-            expr.interface_impl == nullptr) {
+    auto emitInterfaceVTable(ast::Expr& expr) -> llvm::Constant* {
+        if (expr.resolved_type == nullptr ||
+            expr.resolved_type->kind != TypeKind::Interface) {
             return nullptr;
         }
 
+        std::ostringstream key;
+        key << expr.resolved_type->linkage_name;
+        for (const auto* impl : expr.interface_impls) {
+            key << '|';
+            key << (impl != nullptr ? impl->linkage_name
+                                    : std::string("<null>"));
+        }
+
+        if (const auto it = interface_vtables.find(key.str());
+            it != interface_vtables.end()) {
+            return llvm::ConstantExpr::getBitCast(
+                it->second, llvm::PointerType::get(context, 0));
+        }
+
+        auto* pointer_type = llvm::PointerType::get(context, 0);
+        auto* vtable_type =
+            llvm::ArrayType::get(pointer_type, expr.interface_impls.size());
+        std::vector<llvm::Constant*> entries;
+        entries.reserve(expr.interface_impls.size());
+        for (const auto* impl : expr.interface_impls) {
+            entries.push_back(
+                impl != nullptr ? llvm::ConstantExpr::getBitCast(
+                                      function_map.at(impl), pointer_type)
+                                : llvm::ConstantPointerNull::get(pointer_type));
+        }
+
+        auto* global = new llvm::GlobalVariable(
+            module, vtable_type, true, llvm::GlobalValue::PrivateLinkage,
+            llvm::ConstantArray::get(vtable_type, entries),
+            "__cyan_iface_vtable");
+        global->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+        interface_vtables.emplace(key.str(), global);
+        return llvm::ConstantExpr::getBitCast(
+            global, llvm::PointerType::get(context, 0));
+    }
+
+    auto emitInterfaceCoercion(ast::Expr& expr) -> llvm::Value* {
+        if (expr.interface_source_type == nullptr) {
+            return nullptr;
+        }
+
+        const auto* source_type = types.unqualify(expr.interface_source_type);
         llvm::Value* data_pointer = nullptr;
-        if (expr.interface_source_type->kind == TypeKind::Borrow) {
+        llvm::Value* vtable_pointer = nullptr;
+        if (source_type->kind == TypeKind::Interface) {
+            const auto* target_type = expr.resolved_type == nullptr
+                                          ? nullptr
+                                          : types.unqualify(expr.resolved_type);
+            if (target_type == nullptr ||
+                target_type->kind != TypeKind::Interface) {
+                return nullptr;
+            }
+
+            const auto interface_vtable_slice_start =
+                [](const Type* source_interface,
+                   const Type* target_interface) -> std::optional<std::size_t> {
+                if (source_interface == nullptr ||
+                    target_interface == nullptr ||
+                    source_interface->kind != TypeKind::Interface ||
+                    target_interface->kind != TypeKind::Interface) {
+                    return std::nullopt;
+                }
+
+                std::optional<std::size_t> start_slot;
+                std::optional<std::size_t> previous_slot;
+                for (const auto* member : target_interface->interface_members) {
+                    if (member == nullptr) {
+                        continue;
+                    }
+                    const auto source_it = std::ranges::find(
+                        source_interface->interface_members, member);
+                    if (source_it ==
+                        source_interface->interface_members.end()) {
+                        return std::nullopt;
+                    }
+                    const auto slot = static_cast<std::size_t>(
+                        source_it -
+                        source_interface->interface_members.begin());
+                    if (!start_slot.has_value()) {
+                        start_slot = slot;
+                    }
+                    if (previous_slot.has_value() &&
+                        slot != *previous_slot + 1) {
+                        return std::nullopt;
+                    }
+                    previous_slot = slot;
+                }
+                return start_slot.value_or(0);
+            };
+
+            const auto source_expr_type = expr.interface_source_type;
+            expr.interface_source_type = nullptr;
+            auto* source_value = emitExpr(expr);
+            expr.interface_source_type = source_expr_type;
+            if (source_value == nullptr) {
+                return nullptr;
+            }
+
+            data_pointer =
+                builder.CreateExtractValue(source_value, {0}, "iface.data");
+            auto* source_vtable_pointer =
+                builder.CreateExtractValue(source_value, {1}, "iface.vtable");
+            const auto slice_start =
+                interface_vtable_slice_start(source_type, target_type);
+            if (!slice_start.has_value()) {
+                return nullptr;
+            }
+            vtable_pointer = builder.CreateGEP(
+                llvm::PointerType::get(context, 0), source_vtable_pointer,
+                llvm::ConstantInt::get(llvm::Type::getInt64Ty(context),
+                                       *slice_start),
+                "iface.vtable.slice");
+        } else if (source_type->kind == TypeKind::Borrow) {
             if (const auto* name = std::get_if<ast::NameExpr>(&expr.node);
                 name != nullptr) {
                 auto local_id = name->local_id;
                 if (const auto it = frame.locals.find(local_id);
                     it != frame.locals.end()) {
                     data_pointer = builder.CreateLoad(
-                        lowerType(expr.interface_source_type),
-                        it->second.address, name->name + ".iface.data");
+                        lowerType(source_type), it->second.address,
+                        name->name + ".iface.data");
                 } else if (expr.resolved_place.has_value() &&
                            !expr.resolved_place->is_external &&
                            expr.resolved_place->fields.empty()) {
@@ -1542,8 +1654,7 @@ class LLVMCodegen {
                     if (const auto root_it = frame.locals.find(local_id);
                         root_it != frame.locals.end()) {
                         data_pointer = builder.CreateLoad(
-                            lowerType(expr.interface_source_type),
-                            root_it->second.address,
+                            lowerType(source_type), root_it->second.address,
                             name->name + ".iface.data");
                     }
                 }
@@ -1561,14 +1672,17 @@ class LLVMCodegen {
         if (data_pointer == nullptr) {
             return nullptr;
         }
+        if (vtable_pointer == nullptr) {
+            vtable_pointer = emitInterfaceVTable(expr);
+        }
+        if (vtable_pointer == nullptr) {
+            return nullptr;
+        }
 
         llvm::Value* fat_value = llvm::UndefValue::get(interfaceStorageType());
         fat_value = builder.CreateInsertValue(fat_value, data_pointer, {0},
                                               "iface.data");
-        auto* function_pointer = builder.CreateBitCast(
-            function_map.at(expr.interface_impl),
-            llvm::PointerType::get(context, 0), "iface.fn");
-        fat_value = builder.CreateInsertValue(fat_value, function_pointer, {1},
+        fat_value = builder.CreateInsertValue(fat_value, vtable_pointer, {1},
                                               "iface.vtable");
         return fat_value;
     }
@@ -2496,8 +2610,17 @@ class LLVMCodegen {
 
                         auto* data_pointer = builder.CreateExtractValue(
                             receiver, {0}, "iface.call.data");
-                        auto* function_pointer = builder.CreateExtractValue(
-                            receiver, {1}, "iface.call.fn");
+                        auto* vtable_pointer = builder.CreateExtractValue(
+                            receiver, {1}, "iface.call.vtable");
+                        auto* slot_pointer = builder.CreateGEP(
+                            llvm::PointerType::get(context, 0), vtable_pointer,
+                            llvm::ConstantInt::get(
+                                llvm::Type::getInt64Ty(context),
+                                call.dispatched_interface_slot),
+                            "iface.call.slot.ptr");
+                        auto* function_pointer = builder.CreateLoad(
+                            llvm::PointerType::get(context, 0), slot_pointer,
+                            "iface.call.fn");
                         std::vector<llvm::Type*> parameter_types;
                         parameter_types.push_back(
                             llvm::PointerType::get(context, 0));
@@ -3242,6 +3365,7 @@ class LLVMCodegen {
     std::unordered_map<const Type*, llvm::StructType*> struct_types;
     std::unordered_map<const Type*, EnumLayout> enum_layouts;
     std::unordered_map<const ast::FunctionDecl*, llvm::Function*> function_map;
+    std::unordered_map<std::string, llvm::GlobalVariable*> interface_vtables;
     std::unordered_map<const SourceFile*, llvm::DIFile*> debug_files;
     std::unordered_map<const Type*, llvm::DIType*> debug_types;
     std::unordered_map<std::size_t, llvm::DILocalVariable*> debug_locals;
