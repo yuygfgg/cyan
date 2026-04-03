@@ -1,0 +1,34 @@
+import /std.math as math;
+
+f32 use_sin(f32 x) {
+    return math.sin(x);
+}
+
+f64 use_pow(f64 x) {
+    return math.pow(x, 2.0);
+}
+
+f64 use_roundeven(f64 x) {
+    return math.roundeven(x);
+}
+
+f32 use_frexp(f32 x) {
+    i32 exp = 0;
+    return math.frexp(x, &mut exp);
+}
+
+f64 use_modf(f64 x) {
+    f64 int_part = 0.0;
+    return math.modf(x, &mut int_part);
+}
+
+i64 main() {
+    if (use_sin(0.5 as f32) > (0.0 as f32) &&
+        use_pow(3.0) > 8.0 &&
+        use_roundeven(2.5) == 2.0 &&
+        use_frexp(8.0 as f32) > (0.0 as f32) &&
+        use_modf(3.5) > 0.0) {
+        return 0;
+    }
+    return 1;
+}

@@ -159,6 +159,7 @@ auto SemanticAnalyzer::instantiateFunctionTemplate(
     instantiated_decl.interface_decl = decl.interface_decl;
     instantiated_decl.intrinsic_lowering = decl.intrinsic_lowering;
     instantiated_decl.builtin_lowering = decl.builtin_lowering;
+    instantiated_decl.extern_symbol_cases = decl.extern_symbol_cases;
     instantiated_decl.is_unchecked = decl.is_unchecked;
     instantiated_decl.is_export = decl.is_export;
     instantiated_decl.is_extern = decl.is_extern;
@@ -221,6 +222,14 @@ auto SemanticAnalyzer::instantiateFunctionTemplate(
         stored_decl->signature_status =
             ast::FunctionDecl::SignatureStatus::Invalid;
         return std::unexpected(validated_dependency.error());
+    }
+    if (stored_decl->is_extern) {
+        auto validated_extern = validateExternSignature(*stored_decl);
+        if (!validated_extern) {
+            stored_decl->signature_status =
+                ast::FunctionDecl::SignatureStatus::Invalid;
+            return std::unexpected(validated_extern.error());
+        }
     }
 
     if (stored_decl->impl_target_kind != ast::ImplTargetKind::None) {

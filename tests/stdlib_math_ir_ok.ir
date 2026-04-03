@@ -1,0 +1,5 @@
+@llvm.sin.f32
+@llvm.pow.f64
+@llvm.roundeven.f64
+@frexpf
+@modf

@@ -1,0 +1,2 @@
+@llvm.sin.f32
+@llvm.sin.f64

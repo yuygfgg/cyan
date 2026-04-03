@@ -1,0 +1,202 @@
+import /std.math.intrin as intrin;
+
+export T fma<T>(T x, T y, T z) {
+    return intrin.fma(x, y, z);
+}
+
+export T sqrt<T>(T x) {
+    return intrin.sqrt(x);
+}
+
+export T powi<T>(T x, i32 exp) {
+    return intrin.powi(x, exp);
+}
+
+export T sin<T>(T x) {
+    return intrin.sin(x);
+}
+
+export T cos<T>(T x) {
+    return intrin.cos(x);
+}
+
+export T pow<T>(T x, T y) {
+    return intrin.pow(x, y);
+}
+
+export T log<T>(T x) {
+    return intrin.log(x);
+}
+
+export T log10<T>(T x) {
+    return intrin.log10(x);
+}
+
+export T log2<T>(T x) {
+    return intrin.log2(x);
+}
+
+export T exp<T>(T x) {
+    return intrin.exp(x);
+}
+
+export T exp2<T>(T x) {
+    return intrin.exp2(x);
+}
+
+export T exp10<T>(T x) {
+    return intrin.exp10(x);
+}
+
+export T fabs<T>(T x) {
+    return intrin.fabs(x);
+}
+
+export T copysign<T>(T x, T y) {
+    return intrin.copysign(x, y);
+}
+
+export T floor<T>(T x) {
+    return intrin.floor(x);
+}
+
+export T ceil<T>(T x) {
+    return intrin.ceil(x);
+}
+
+export T trunc<T>(T x) {
+    return intrin.trunc(x);
+}
+
+export T rint<T>(T x) {
+    return intrin.rint(x);
+}
+
+export T nearbyint<T>(T x) {
+    return intrin.nearbyint(x);
+}
+
+export T round<T>(T x) {
+    return intrin.round(x);
+}
+
+export T roundeven<T>(T x) {
+    return intrin.roundeven(x);
+}
+
+export T ldexp<T>(T x, i32 exp) {
+    return intrin.ldexp(x, exp);
+}
+
+export T asin<T>(T x) {
+    return intrin.asin(x);
+}
+
+export T acos<T>(T x) {
+    return intrin.acos(x);
+}
+
+export T atan<T>(T x) {
+    return intrin.atan(x);
+}
+
+export T atan2<T>(T y, T x) {
+    return intrin.atan2(y, x);
+}
+
+export T tan<T>(T x) {
+    return intrin.tan(x);
+}
+
+export T sinh<T>(T x) {
+    return intrin.sinh(x);
+}
+
+export T cosh<T>(T x) {
+    return intrin.cosh(x);
+}
+
+export T tanh<T>(T x) {
+    return intrin.tanh(x);
+}
+
+export i64 lround<T>(T x) {
+    return intrin.lround_i64(x);
+}
+
+export i64 llround<T>(T x) {
+    return intrin.llround_i64(x);
+}
+
+export i64 lrint<T>(T x) {
+    return intrin.lrint_i64(x);
+}
+
+export i64 llrint<T>(T x) {
+    return intrin.llrint_i64(x);
+}
+
+export extern {
+    //@lower link_case=ret:f32,arg0:f32:expm1f link_case=ret:f64,arg0:f64:expm1
+    T expm1<T>(T x);
+
+    //@lower link_case=ret:f32,arg0:f32:log1pf link_case=ret:f64,arg0:f64:log1p
+    T log1p<T>(T x);
+
+    //@lower link_case=ret:f32,arg0:f32:cbrtf link_case=ret:f64,arg0:f64:cbrt
+    T cbrt<T>(T x);
+
+    //@lower link_case=ret:f32,arg0:f32:erff link_case=ret:f64,arg0:f64:erf
+    T erf<T>(T x);
+
+    //@lower link_case=ret:f32,arg0:f32:erfcf link_case=ret:f64,arg0:f64:erfc
+    T erfc<T>(T x);
+
+    //@lower link_case=ret:f32,arg0:f32:tgammaf link_case=ret:f64,arg0:f64:tgamma
+    T tgamma<T>(T x);
+
+    //@lower link_case=ret:f32,arg0:f32:lgammaf link_case=ret:f64,arg0:f64:lgamma
+    T lgamma<T>(T x);
+
+    //@lower link_case=ret:f32,arg0:f32:logbf link_case=ret:f64,arg0:f64:logb
+    T logb<T>(T x);
+
+    //@lower link_case=ret:i32,arg0:f32:ilogbf link_case=ret:i32,arg0:f64:ilogb
+    i32 ilogb<T>(T x);
+
+    //@lower link_case=ret:f32,arg0:f32,arg1:f32:hypotf link_case=ret:f64,arg0:f64,arg1:f64:hypot
+    T hypot<T>(T x, T y);
+
+    //@lower link_case=ret:f32,arg0:f32,arg1:f32:fdimf link_case=ret:f64,arg0:f64,arg1:f64:fdim
+    T fdim<T>(T x, T y);
+
+    //@lower link_case=ret:f32,arg0:f32,arg1:f32:fminf link_case=ret:f64,arg0:f64,arg1:f64:fmin
+    T fmin<T>(T x, T y);
+
+    //@lower link_case=ret:f32,arg0:f32,arg1:f32:fmaxf link_case=ret:f64,arg0:f64,arg1:f64:fmax
+    T fmax<T>(T x, T y);
+
+    //@lower link_case=ret:f32,arg0:f32,arg1:f32:fmodf link_case=ret:f64,arg0:f64,arg1:f64:fmod
+    T fmod<T>(T x, T y);
+
+    //@lower link_case=ret:f32,arg0:f32,arg1:f32:remainderf link_case=ret:f64,arg0:f64,arg1:f64:remainder
+    T remainder<T>(T x, T y);
+
+    //@lower link_case=ret:f32,arg0:f32,arg1:f32:nextafterf link_case=ret:f64,arg0:f64,arg1:f64:nextafter
+    T nextafter<T>(T x, T y);
+
+    //@lower link_case=ret:f32,arg0:f32,arg1:i32:scalbnf link_case=ret:f64,arg0:f64,arg1:i32:scalbn
+    T scalbn<T>(T x, i32 exp);
+
+    //@lower link_case=ret:f32,arg0:f32,arg1:i64:scalblnf link_case=ret:f64,arg0:f64,arg1:i64:scalbln
+    T scalbln<T>(T x, i64 exp);
+
+    //@lower link_case=ret:f32,arg0:f32,arg1:ptr:frexpf link_case=ret:f64,arg0:f64,arg1:ptr:frexp
+    T frexp<T>(T x, i32* exp);
+
+    //@lower link_case=ret:f32,arg0:f32,arg1:ptr:modff link_case=ret:f64,arg0:f64,arg1:ptr:modf
+    T modf<T>(T x, T* int_part);
+
+    //@lower link_case=ret:f32,arg0:f32,arg1:f32,arg2:ptr:remquof link_case=ret:f64,arg0:f64,arg1:f64,arg2:ptr:remquo
+    T remquo<T>(T x, T y, i32* quo);
+}

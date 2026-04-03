@@ -408,7 +408,7 @@ auto SemanticAnalyzer::analyze(ast::Package& package) -> SemanticAnalysis {
     }
 
     for (const auto& module : package.modules) {
-        for (const auto& decl : module->declarations) {
+        for (auto& decl : module->declarations) {
             auto* function = std::get_if<ast::FunctionDecl>(&decl);
             if (function == nullptr || !function->is_extern) {
                 continue;
@@ -1925,13 +1925,15 @@ auto SemanticAnalyzer::findVisibleTemplateEnumVariants(std::string_view name)
     return findTemplateEnumVariantsInModule(*active_module, name);
 }
 
-auto SemanticAnalyzer::validateExternSignature(const ast::FunctionDecl& decl)
+auto SemanticAnalyzer::validateExternSignature(ast::FunctionDecl& decl)
     -> std::expected<void, Diagnostic> {
     const auto lowering_range =
         decl.builtin_lowering.has_value()
             ? std::optional<SourceRange>(decl.builtin_lowering->range)
         : decl.intrinsic_lowering.has_value()
             ? std::optional<SourceRange>(decl.intrinsic_lowering->range)
+        : !decl.extern_symbol_cases.empty()
+            ? std::optional<SourceRange>(decl.extern_symbol_cases.front().range)
             : std::nullopt;
     if (lowering_range.has_value() && !decl.is_extern) {
         return std::unexpected(Diagnostic(
@@ -1941,16 +1943,34 @@ auto SemanticAnalyzer::validateExternSignature(const ast::FunctionDecl& decl)
     if (!decl.is_extern) {
         return {};
     }
-    if (decl.builtin_lowering.has_value()) {
-        return {};
-    }
-    if (!decl.type_parameters.empty()) {
-        return std::unexpected(Diagnostic(
-            "extern functions do not support type parameters", decl.range));
-    }
     if (!decl.declared_return_dependencies.empty()) {
         return std::unexpected(Diagnostic(
             "extern functions do not support depends clauses", decl.range));
+    }
+
+    const auto supports_generic_extern = decl.builtin_lowering.has_value() ||
+                                         decl.intrinsic_lowering.has_value() ||
+                                         !decl.extern_symbol_cases.empty();
+    if (!decl.type_parameters.empty() && !supports_generic_extern) {
+        return std::unexpected(Diagnostic(
+            "extern functions do not support type parameters", decl.range));
+    }
+    if (!decl.type_parameters.empty()) {
+        if (decl.intrinsic_lowering.has_value() &&
+            decl.intrinsic_lowering->constant_kind ==
+                ast::LoweringConstantKind::None &&
+            decl.intrinsic_lowering->intrinsic_cases.empty()) {
+            return std::unexpected(Diagnostic(
+                "generic intrinsic lowerings must specify typed intrinsic "
+                "selectors",
+                decl.intrinsic_lowering->range));
+        }
+        return {};
+    }
+
+    decl.resolved_extern_symbol.clear();
+    if (decl.builtin_lowering.has_value()) {
+        return {};
     }
     if (decl.resolved_return_type == nullptr ||
         std::ranges::any_of(decl.parameters, [](const auto& parameter) {
@@ -1967,6 +1987,20 @@ auto SemanticAnalyzer::validateExternSignature(const ast::FunctionDecl& decl)
         type = types.unqualify(type);
         return type == types.voidType() || is_ffi_scalar(type) ||
                type->kind == TypeKind::Pointer;
+    };
+    const auto ffi_type_spec =
+        [&](const Type* type) -> std::optional<std::string> {
+        type = types.unqualify(type);
+        if (type == types.voidType()) {
+            return std::string("void");
+        }
+        if (type->kind == TypeKind::Pointer) {
+            return std::string("ptr");
+        }
+        if (type->kind == TypeKind::Integer || type->kind == TypeKind::Float) {
+            return type->name;
+        }
+        return std::nullopt;
     };
 
     if (!is_ffi_type(decl.resolved_return_type)) {
@@ -1993,6 +2027,114 @@ auto SemanticAnalyzer::validateExternSignature(const ast::FunctionDecl& decl)
                 "raw pointers",
                 parameter.range));
         }
+    }
+
+    const auto match_symbol_cases =
+        [&](const std::vector<ast::ExternSymbolCase>& symbol_cases,
+            std::string_view case_name, std::string_view missing_ret_message,
+            std::string_view no_match_prefix,
+            std::string_view multiple_match_prefix)
+        -> std::expected<std::string, Diagnostic> {
+        const auto actual_return_spec =
+            ffi_type_spec(decl.resolved_return_type);
+        if (!actual_return_spec.has_value()) {
+            return std::unexpected(Diagnostic(
+                std::string(case_name) +
+                    " matching requires an FFI-compatible return type",
+                lowering_range.value_or(decl.range)));
+        }
+
+        std::optional<std::string> matched_symbol;
+        for (const auto& symbol_case : symbol_cases) {
+            if (!symbol_case.return_type_spec.has_value()) {
+                return std::unexpected(Diagnostic(
+                    std::string(missing_ret_message), symbol_case.range));
+            }
+
+            std::vector<std::optional<std::string_view>> argument_specs(
+                decl.parameters.size());
+            for (const auto& [index, spec] : symbol_case.argument_type_specs) {
+                if (index >= decl.parameters.size()) {
+                    return std::unexpected(Diagnostic(
+                        std::string(case_name) +
+                            " selector references an out-of-range argument "
+                            "index",
+                        symbol_case.range));
+                }
+                if (argument_specs[index].has_value()) {
+                    return std::unexpected(
+                        Diagnostic(std::string(case_name) +
+                                       " contains duplicate argument selectors",
+                                   symbol_case.range));
+                }
+                argument_specs[index] = spec;
+            }
+            if (std::ranges::any_of(argument_specs, [](const auto& spec) {
+                    return !spec.has_value();
+                })) {
+                return std::unexpected(Diagnostic(
+                    std::string(case_name) +
+                        " must specify every argument with argN:TYPE",
+                    symbol_case.range));
+            }
+
+            bool matches = *symbol_case.return_type_spec == *actual_return_spec;
+            for (std::size_t index = 0;
+                 matches && index < decl.parameters.size(); ++index) {
+                const auto actual_argument_spec =
+                    ffi_type_spec(decl.parameters[index].resolved_type);
+                if (!actual_argument_spec.has_value()) {
+                    return std::unexpected(Diagnostic(
+                        std::string(case_name) +
+                            " matching requires FFI-compatible argument types",
+                        symbol_case.range));
+                }
+                matches = *argument_specs[index] == *actual_argument_spec;
+            }
+
+            if (!matches) {
+                continue;
+            }
+            if (matched_symbol.has_value()) {
+                return std::unexpected(Diagnostic(
+                    std::string(multiple_match_prefix) + decl.name + "'",
+                    symbol_case.range));
+            }
+            matched_symbol = symbol_case.symbol_name;
+        }
+
+        if (!matched_symbol.has_value()) {
+            return std::unexpected(
+                Diagnostic(std::string(no_match_prefix) + decl.name + "'",
+                           lowering_range.value_or(decl.range)));
+        }
+        return *matched_symbol;
+    };
+
+    if (decl.intrinsic_lowering.has_value() &&
+        !decl.intrinsic_lowering->intrinsic_cases.empty()) {
+        decl.intrinsic_lowering->intrinsic_name.clear();
+        auto matched_intrinsic = match_symbol_cases(
+            decl.intrinsic_lowering->intrinsic_cases, "intrinsic",
+            "intrinsic selector must specify ret:TYPE",
+            "no intrinsic selector matches extern signature for '",
+            "multiple intrinsic selectors match extern signature for '");
+        if (!matched_intrinsic) {
+            return std::unexpected(matched_intrinsic.error());
+        }
+        decl.intrinsic_lowering->intrinsic_name = *matched_intrinsic;
+    }
+
+    if (!decl.extern_symbol_cases.empty()) {
+        auto matched_symbol = match_symbol_cases(
+            decl.extern_symbol_cases, "link_case",
+            "link_case must specify ret:TYPE",
+            "no link_case matches extern signature for '",
+            "multiple link_case selectors match extern signature for '");
+        if (!matched_symbol) {
+            return std::unexpected(matched_symbol.error());
+        }
+        decl.resolved_extern_symbol = *matched_symbol;
     }
     return {};
 }

@@ -1,0 +1,142 @@
+export extern {
+    //@lower intrinsic=ret:f32,arg0:f32,arg1:f32,arg2:f32:llvm.fma intrinsic=ret:f64,arg0:f64,arg1:f64,arg2:f64:llvm.fma
+    T fma<T>(T x, T y, T z);
+
+    //@lower intrinsic=ret:f32,arg0:f32,arg1:f32,arg2:f32:llvm.fmuladd intrinsic=ret:f64,arg0:f64,arg1:f64,arg2:f64:llvm.fmuladd
+    T fmuladd<T>(T x, T y, T z);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.sqrt intrinsic=ret:f64,arg0:f64:llvm.sqrt
+    T sqrt<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32,arg1:i32:llvm.powi intrinsic=ret:f64,arg0:f64,arg1:i32:llvm.powi
+    T powi<T>(T x, i32 exp);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.sin intrinsic=ret:f64,arg0:f64:llvm.sin
+    T sin<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.cos intrinsic=ret:f64,arg0:f64:llvm.cos
+    T cos<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32,arg1:f32:llvm.pow intrinsic=ret:f64,arg0:f64,arg1:f64:llvm.pow
+    T pow<T>(T x, T y);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.log intrinsic=ret:f64,arg0:f64:llvm.log
+    T log<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.log10 intrinsic=ret:f64,arg0:f64:llvm.log10
+    T log10<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.log2 intrinsic=ret:f64,arg0:f64:llvm.log2
+    T log2<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.exp intrinsic=ret:f64,arg0:f64:llvm.exp
+    T exp<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.exp2 intrinsic=ret:f64,arg0:f64:llvm.exp2
+    T exp2<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.exp10 intrinsic=ret:f64,arg0:f64:llvm.exp10
+    T exp10<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.fabs intrinsic=ret:f64,arg0:f64:llvm.fabs
+    T fabs<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32,arg1:f32:llvm.copysign intrinsic=ret:f64,arg0:f64,arg1:f64:llvm.copysign
+    T copysign<T>(T x, T y);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.floor intrinsic=ret:f64,arg0:f64:llvm.floor
+    T floor<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.ceil intrinsic=ret:f64,arg0:f64:llvm.ceil
+    T ceil<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.trunc intrinsic=ret:f64,arg0:f64:llvm.trunc
+    T trunc<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.rint intrinsic=ret:f64,arg0:f64:llvm.rint
+    T rint<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.nearbyint intrinsic=ret:f64,arg0:f64:llvm.nearbyint
+    T nearbyint<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.round intrinsic=ret:f64,arg0:f64:llvm.round
+    T round<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.roundeven intrinsic=ret:f64,arg0:f64:llvm.roundeven
+    T roundeven<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.canonicalize intrinsic=ret:f64,arg0:f64:llvm.canonicalize
+    T canonicalize<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.arithmetic.fence intrinsic=ret:f64,arg0:f64:llvm.arithmetic.fence
+    T arithmetic_fence<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32,arg1:i32:llvm.ldexp intrinsic=ret:f64,arg0:f64,arg1:i32:llvm.ldexp
+    T ldexp<T>(T x, i32 exp);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.asin intrinsic=ret:f64,arg0:f64:llvm.asin
+    T asin<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.acos intrinsic=ret:f64,arg0:f64:llvm.acos
+    T acos<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.atan intrinsic=ret:f64,arg0:f64:llvm.atan
+    T atan<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32,arg1:f32:llvm.atan2 intrinsic=ret:f64,arg0:f64,arg1:f64:llvm.atan2
+    T atan2<T>(T y, T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.tan intrinsic=ret:f64,arg0:f64:llvm.tan
+    T tan<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.sinh intrinsic=ret:f64,arg0:f64:llvm.sinh
+    T sinh<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.cosh intrinsic=ret:f64,arg0:f64:llvm.cosh
+    T cosh<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.tanh intrinsic=ret:f64,arg0:f64:llvm.tanh
+    T tanh<T>(T x);
+
+    //@lower intrinsic=ret:f32,arg0:f32,arg1:f32:llvm.minnum intrinsic=ret:f64,arg0:f64,arg1:f64:llvm.minnum
+    T minnum<T>(T x, T y);
+
+    //@lower intrinsic=ret:f32,arg0:f32,arg1:f32:llvm.maxnum intrinsic=ret:f64,arg0:f64,arg1:f64:llvm.maxnum
+    T maxnum<T>(T x, T y);
+
+    //@lower intrinsic=ret:f32,arg0:f32,arg1:f32:llvm.minimum intrinsic=ret:f64,arg0:f64,arg1:f64:llvm.minimum
+    T minimum<T>(T x, T y);
+
+    //@lower intrinsic=ret:f32,arg0:f32,arg1:f32:llvm.maximum intrinsic=ret:f64,arg0:f64,arg1:f64:llvm.maximum
+    T maximum<T>(T x, T y);
+
+    //@lower intrinsic=ret:f32,arg0:f32,arg1:f32:llvm.minimumnum intrinsic=ret:f64,arg0:f64,arg1:f64:llvm.minimumnum
+    T minimumnum<T>(T x, T y);
+
+    //@lower intrinsic=ret:f32,arg0:f32,arg1:f32:llvm.maximumnum intrinsic=ret:f64,arg0:f64,arg1:f64:llvm.maximumnum
+    T maximumnum<T>(T x, T y);
+
+    //@lower intrinsic=ret:i32,arg0:f32:llvm.lround intrinsic=ret:i32,arg0:f64:llvm.lround
+    i32 lround_i32<T>(T x);
+
+    //@lower intrinsic=ret:i64,arg0:f32:llvm.lround intrinsic=ret:i64,arg0:f64:llvm.lround
+    i64 lround_i64<T>(T x);
+
+    //@lower intrinsic=ret:i32,arg0:f32:llvm.llround intrinsic=ret:i32,arg0:f64:llvm.llround
+    i32 llround_i32<T>(T x);
+
+    //@lower intrinsic=ret:i64,arg0:f32:llvm.llround intrinsic=ret:i64,arg0:f64:llvm.llround
+    i64 llround_i64<T>(T x);
+
+    //@lower intrinsic=ret:i32,arg0:f32:llvm.lrint intrinsic=ret:i32,arg0:f64:llvm.lrint
+    i32 lrint_i32<T>(T x);
+
+    //@lower intrinsic=ret:i64,arg0:f32:llvm.lrint intrinsic=ret:i64,arg0:f64:llvm.lrint
+    i64 lrint_i64<T>(T x);
+
+    //@lower intrinsic=ret:i32,arg0:f32:llvm.llrint intrinsic=ret:i32,arg0:f64:llvm.llrint
+    i32 llrint_i32<T>(T x);
+
+    //@lower intrinsic=ret:i64,arg0:f32:llvm.llrint intrinsic=ret:i64,arg0:f64:llvm.llrint
+    i64 llrint_i64<T>(T x);
+}

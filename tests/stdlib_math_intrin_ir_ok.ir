@@ -1,0 +1,3 @@
+@llvm.arithmetic.fence.f64
+@llvm.minimum.f32
+@llvm.canonicalize.f64

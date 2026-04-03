@@ -848,6 +848,13 @@ class LLVMCodegen {
 
     auto declareFunctions(ast::Package& package)
         -> std::expected<void, Diagnostic> {
+        const auto external_symbol_name =
+            [](const ast::FunctionDecl& decl) -> std::string_view {
+            if (!decl.resolved_extern_symbol.empty()) {
+                return decl.resolved_extern_symbol;
+            }
+            return decl.linkage_name;
+        };
         auto declare_decl =
             [&](ast::Decl& decl) -> std::expected<void, Diagnostic> {
             if (auto* function_decl = std::get_if<ast::FunctionDecl>(&decl);
@@ -864,8 +871,8 @@ class LLVMCodegen {
                 auto* function_type = llvm::FunctionType::get(
                     lowerType(function_decl->resolved_return_type),
                     parameter_types, false);
-                if (auto* existing =
-                        module.getFunction(function_decl->linkage_name);
+                const auto symbol_name = external_symbol_name(*function_decl);
+                if (auto* existing = module.getFunction(symbol_name);
                     existing != nullptr) {
                     if (existing->getFunctionType() != function_type) {
                         return std::unexpected(Diagnostic(
@@ -877,8 +884,8 @@ class LLVMCodegen {
                     return {};
                 }
                 function_map[function_decl] = llvm::Function::Create(
-                    function_type, llvm::Function::ExternalLinkage,
-                    function_decl->linkage_name, module);
+                    function_type, llvm::Function::ExternalLinkage, symbol_name,
+                    module);
             }
             return {};
         };
@@ -2369,7 +2376,8 @@ class LLVMCodegen {
         if (call.builtin_target_function == nullptr) {
             return nullptr;
         }
-        const auto function_it = function_map.find(call.builtin_target_function);
+        const auto function_it =
+            function_map.find(call.builtin_target_function);
         if (function_it == function_map.end()) {
             return nullptr;
         }

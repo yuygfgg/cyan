@@ -1,0 +1,19 @@
+extern {
+    //@lower intrinsic=ret:f32,arg0:f32:llvm.sin intrinsic=ret:f64,arg0:f64:llvm.sin
+    T lower_sin<T>(T x);
+}
+
+f32 use_f32(f32 x) {
+    return lower_sin(x);
+}
+
+f64 use_f64(f64 x) {
+    return lower_sin(x);
+}
+
+i64 main() {
+    if (use_f32(0.5 as f32) > (0.0 as f32) && use_f64(0.5) > 0.0) {
+        return 0;
+    }
+    return 1;
+}

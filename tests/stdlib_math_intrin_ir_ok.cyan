@@ -1,0 +1,22 @@
+import /std.math.intrin as intrin;
+
+f64 use_fence(f64 x) {
+    return intrin.arithmetic_fence(x);
+}
+
+f32 use_minimum(f32 x, f32 y) {
+    return intrin.minimum(x, y);
+}
+
+f64 use_canonicalize(f64 x) {
+    return intrin.canonicalize(x);
+}
+
+i64 main() {
+    if (use_fence(1.5) > 1.0 &&
+        use_minimum(1.0 as f32, 2.0 as f32) == (1.0 as f32) &&
+        use_canonicalize(2.5) == 2.5) {
+        return 0;
+    }
+    return 1;
+}

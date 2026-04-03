@@ -461,6 +461,13 @@ struct IntrinsicLoweringArgument {
     std::string value_spec;
 };
 
+struct ExternSymbolCase {
+    SourceRange range;
+    std::optional<std::string> return_type_spec;
+    std::vector<std::pair<std::size_t, std::string>> argument_type_specs;
+    std::string symbol_name;
+};
+
 enum class LoweringConstantKind : std::uint8_t {
     None,
     NullValue,
@@ -473,6 +480,7 @@ struct IntrinsicLowering {
     std::optional<std::string> intrinsic_return_spec;
     std::optional<std::size_t> return_argument_index;
     std::vector<IntrinsicLoweringArgument> argument_overrides;
+    std::vector<ExternSymbolCase> intrinsic_cases;
 };
 
 struct BuiltinLowering {
@@ -508,6 +516,8 @@ struct FunctionDecl {
     const InterfaceDecl* interface_decl = nullptr;
     std::optional<IntrinsicLowering> intrinsic_lowering;
     std::optional<BuiltinLowering> builtin_lowering;
+    std::vector<ExternSymbolCase> extern_symbol_cases;
+    std::string resolved_extern_symbol;
     SignatureStatus signature_status = SignatureStatus::Unchecked;
     bool analysis_failed = false;
     bool is_unchecked = false;

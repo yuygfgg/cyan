@@ -1,0 +1,13 @@
+extern {
+    //@lower link_case=ret:f32,arg0:f32:test_pickf link_case=ret:f64,arg0:f64:test_pick
+    T pick<T>(T x);
+}
+
+i64 main() {
+    f32 a = pick(1.5 as f32);
+    f64 b = pick(2.5);
+    if (a == (2.5 as f32) && b == 4.5) {
+        return 0;
+    }
+    return 1;
+}

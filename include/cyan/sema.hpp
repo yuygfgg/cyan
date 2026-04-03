@@ -314,7 +314,7 @@ class SemanticAnalyzer {
         FunctionState& state, std::vector<ViewLeafBinding>& bindings,
         const Type* parameter_type, bool clear_mut_source_locals,
         SourceRange range) -> std::expected<void, Diagnostic>;
-    auto buildLeafDependencyBinding(
+    [[nodiscard]] auto buildLeafDependencyBinding(
         const ast::ReturnDependency& dependency,
         const std::vector<ViewLeafBinding>& source_bindings,
         bool include_target_prefix, SourceRange range) const
@@ -460,7 +460,7 @@ class SemanticAnalyzer {
     [[nodiscard]] auto
     findVisibleTemplateEnumVariants(std::string_view name) const
         -> std::vector<std::pair<ast::EnumDecl*, std::size_t>>;
-    auto validateExternSignature(const ast::FunctionDecl& decl)
+    auto validateExternSignature(ast::FunctionDecl& decl)
         -> std::expected<void, Diagnostic>;
     auto ensureFunctionSignature(ast::FunctionDecl& decl)
         -> std::expected<void, Diagnostic>;

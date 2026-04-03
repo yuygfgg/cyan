@@ -1,0 +1,8 @@
+extern {
+    //@lower link_case=ret:f32,arg0:f32:test_pickf link_case=ret:f64,arg0:f64:test_pick
+    T pick<T>(T x);
+}
+
+i64 main() {
+    return pick(1);
+}

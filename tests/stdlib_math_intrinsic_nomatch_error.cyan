@@ -1,0 +1,5 @@
+import /std.math as math;
+
+i64 main() {
+    return math.sin(1);
+}

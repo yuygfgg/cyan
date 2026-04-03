@@ -62,6 +62,12 @@ static constexpr char k_std_sync_source[] = {
 static constexpr char k_std_thread_source[] = {
 #embed "../stdlib/std/thread.cyan"
     , 0};
+static constexpr char k_std_math_source[] = {
+#embed "../stdlib/std/math.cyan"
+    , 0};
+static constexpr char k_std_math_intrin_source[] = {
+#embed "../stdlib/std/math/intrin.cyan"
+    , 0};
 
 struct PendingLowering {
     SourceRange range;
@@ -72,6 +78,8 @@ struct PendingLowering {
     std::optional<std::string> intrinsic_return_spec;
     std::optional<std::size_t> return_argument_index;
     std::vector<ast::IntrinsicLoweringArgument> argument_overrides;
+    std::vector<ast::ExternSymbolCase> intrinsic_cases;
+    std::vector<ast::ExternSymbolCase> extern_symbol_cases;
 };
 
 auto builtin_root_path() -> const std::filesystem::path& {
@@ -107,10 +115,15 @@ auto builtin_module_sources()
              std::string_view(k_std_rc_source, sizeof(k_std_rc_source) - 1)},
             {"std.view", std::string_view(k_std_view_source,
                                           sizeof(k_std_view_source) - 1)},
-            {"std.sync",
-             std::string_view(k_std_sync_source, sizeof(k_std_sync_source) - 1)},
+            {"std.sync", std::string_view(k_std_sync_source,
+                                          sizeof(k_std_sync_source) - 1)},
             {"std.thread", std::string_view(k_std_thread_source,
                                             sizeof(k_std_thread_source) - 1)},
+            {"std.math", std::string_view(k_std_math_source,
+                                          sizeof(k_std_math_source) - 1)},
+            {"std.math.intrin",
+             std::string_view(k_std_math_intrin_source,
+                              sizeof(k_std_math_intrin_source) - 1)},
         };
     return modules;
 }
@@ -241,6 +254,95 @@ auto parse_builtin_lowering_kind(std::string_view text)
     return std::nullopt;
 }
 
+auto parse_symbol_case(std::string_view value, SourceRange range,
+                       std::string_view key, std::string_view target_name)
+    -> std::expected<ast::ExternSymbolCase, Diagnostic> {
+    ast::ExternSymbolCase symbol_case;
+    symbol_case.range = range;
+
+    const auto symbol_separator = value.rfind(':');
+    if (symbol_separator == std::string_view::npos || symbol_separator == 0 ||
+        symbol_separator + 1 >= value.size()) {
+        return std::unexpected(Diagnostic(
+            "invalid " + std::string(key) +
+                ": expected ret:TYPE,argN:TYPE:" + std::string(target_name),
+            range));
+    }
+
+    const auto selectors = trim_ascii(value.substr(0, symbol_separator));
+    const auto symbol_name =
+        trim_ascii(value.substr(symbol_separator + std::size_t{1}));
+    if (selectors.empty() || symbol_name.empty()) {
+        return std::unexpected(Diagnostic(
+            "invalid " + std::string(key) +
+                ": expected ret:TYPE,argN:TYPE:" + std::string(target_name),
+            range));
+    }
+    symbol_case.symbol_name = std::string(symbol_name);
+
+    std::size_t clause_begin = 0;
+    while (clause_begin < selectors.size()) {
+        auto clause_end = selectors.find(',', clause_begin);
+        if (clause_end == std::string_view::npos) {
+            clause_end = selectors.size();
+        }
+        auto clause = trim_ascii(
+            selectors.substr(clause_begin, clause_end - clause_begin));
+        clause_begin = clause_end < selectors.size()
+                           ? clause_end + std::size_t{1}
+                           : selectors.size();
+        if (clause.empty()) {
+            continue;
+        }
+
+        const auto separator = clause.find(':');
+        if (separator == std::string_view::npos || separator == 0 ||
+            separator + 1 >= clause.size()) {
+            return std::unexpected(
+                Diagnostic("invalid " + std::string(key) +
+                               " selector: expected ret:TYPE or argN:TYPE",
+                           range));
+        }
+
+        const auto selector = trim_ascii(clause.substr(0, separator));
+        const auto type_spec =
+            trim_ascii(clause.substr(separator + std::size_t{1}));
+        if (type_spec.empty()) {
+            return std::unexpected(
+                Diagnostic("invalid " + std::string(key) +
+                               " selector: expected ret:TYPE or argN:TYPE",
+                           range));
+        }
+
+        if (selector == "ret") {
+            if (symbol_case.return_type_spec.has_value()) {
+                return std::unexpected(Diagnostic(
+                    "duplicate ret selector in " + std::string(key), range));
+            }
+            symbol_case.return_type_spec = std::string(type_spec);
+            continue;
+        }
+
+        auto argument_index = parse_argument_index(selector);
+        if (!argument_index) {
+            return std::unexpected(
+                Diagnostic("invalid " + std::string(key) +
+                               " selector: expected ret:TYPE or argN:TYPE",
+                           range));
+        }
+        symbol_case.argument_type_specs.emplace_back(*argument_index,
+                                                     std::string(type_spec));
+    }
+
+    if (!symbol_case.return_type_spec.has_value() &&
+        symbol_case.argument_type_specs.empty()) {
+        return std::unexpected(Diagnostic(
+            std::string(key) + " must specify at least one signature slot",
+            range));
+    }
+    return symbol_case;
+}
+
 auto parse_lowering(const SourceFile& source, SourceRange range,
                     std::string_view body)
     -> std::expected<PendingLowering, Diagnostic> {
@@ -276,6 +378,33 @@ auto parse_lowering(const SourceFile& source, SourceRange range,
         const auto key = token.substr(0, equals);
         const auto value = token.substr(equals + 1);
         if (key == "intrinsic") {
+            const auto is_typed_case =
+                value.starts_with("ret:") || value.starts_with("arg");
+            if (is_typed_case) {
+                if (!lowering.intrinsic_name.empty()) {
+                    return std::unexpected(Diagnostic(
+                        "intrinsic lowering cannot mix bare intrinsic names "
+                        "with typed intrinsic selectors",
+                        range));
+                }
+                auto parsed_case =
+                    parse_symbol_case(value, range, "intrinsic", "INTRINSIC");
+                if (!parsed_case) {
+                    return std::unexpected(parsed_case.error());
+                }
+                lowering.intrinsic_cases.push_back(std::move(*parsed_case));
+                continue;
+            }
+            if (!lowering.intrinsic_cases.empty()) {
+                return std::unexpected(Diagnostic(
+                    "intrinsic lowering cannot mix bare intrinsic names with "
+                    "typed intrinsic selectors",
+                    range));
+            }
+            if (!lowering.intrinsic_name.empty()) {
+                return std::unexpected(
+                    Diagnostic("duplicate intrinsic lowering name", range));
+            }
             lowering.intrinsic_name = std::string(value);
             continue;
         }
@@ -296,6 +425,15 @@ auto parse_lowering(const SourceFile& source, SourceRange range,
                                                   range));
             }
             lowering.builtin_kind = *builtin_kind;
+            continue;
+        }
+        if (key == "link_case") {
+            auto parsed_case =
+                parse_symbol_case(value, range, "link_case", "SYMBOL");
+            if (!parsed_case) {
+                return std::unexpected(parsed_case.error());
+            }
+            lowering.extern_symbol_cases.push_back(std::move(*parsed_case));
             continue;
         }
         if (key == "llvm_return") {
@@ -329,27 +467,29 @@ auto parse_lowering(const SourceFile& source, SourceRange range,
                                           range));
     }
 
-    const auto has_intrinsic = !lowering.intrinsic_name.empty();
+    const auto has_intrinsic =
+        !lowering.intrinsic_name.empty() || !lowering.intrinsic_cases.empty();
     const auto has_constant =
         lowering.constant_kind != ast::LoweringConstantKind::None;
     const auto has_builtin =
         lowering.builtin_kind != ast::BuiltinCallKind::None;
+    const auto has_link_cases = !lowering.extern_symbol_cases.empty();
     const auto lowering_modes =
         static_cast<int>(has_intrinsic) + static_cast<int>(has_constant) +
-        static_cast<int>(has_builtin);
+        static_cast<int>(has_builtin) + static_cast<int>(has_link_cases);
     if (lowering_modes != 1) {
         return std::unexpected(Diagnostic(
             "lowering directive requires exactly one of intrinsic=..., "
-            "constant=..., or builtin=...",
+            "constant=..., builtin=..., or link_case=...",
             range));
     }
-    if ((has_constant || has_builtin) &&
+    if ((has_constant || has_builtin || has_link_cases) &&
         (lowering.intrinsic_return_spec.has_value() ||
          lowering.return_argument_index.has_value() ||
          !lowering.argument_overrides.empty())) {
         return std::unexpected(Diagnostic(
-            "constant and builtin lowerings do not support llvm_return=..., "
-            "return=..., or argN=...",
+            "constant, builtin, and link_case lowerings do not support "
+            "llvm_return=..., return=..., or argN=...",
             range));
     }
     if (lowering.target_offset >= source.text().size()) {
@@ -424,7 +564,8 @@ auto apply_lowerings(ast::Module& module,
             continue;
         }
         if (function->intrinsic_lowering.has_value() ||
-            function->builtin_lowering.has_value()) {
+            function->builtin_lowering.has_value() ||
+            !function->extern_symbol_cases.empty()) {
             diagnostics.push_back(
                 Diagnostic("duplicate lowering directive for function '" +
                                function->name + "'",
@@ -437,6 +578,8 @@ auto apply_lowerings(ast::Module& module,
                 .range = lowering.range,
                 .builtin_kind = lowering.builtin_kind,
             };
+        } else if (!lowering.extern_symbol_cases.empty()) {
+            function->extern_symbol_cases = lowering.extern_symbol_cases;
         } else {
             function->intrinsic_lowering = ast::IntrinsicLowering{
                 .range = lowering.range,
@@ -445,6 +588,7 @@ auto apply_lowerings(ast::Module& module,
                 .intrinsic_return_spec = lowering.intrinsic_return_spec,
                 .return_argument_index = lowering.return_argument_index,
                 .argument_overrides = lowering.argument_overrides,
+                .intrinsic_cases = lowering.intrinsic_cases,
             };
         }
     }
