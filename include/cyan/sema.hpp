@@ -131,6 +131,7 @@ class SemanticAnalyzer {
         bool in_scope = true;
         std::size_t scope_depth = 0;
         std::size_t unique_id = 0;
+        SourceRange range;
         Status status = Status::Uninitialized;
         std::vector<ast::ResolvedPlace> borrow_origins;
         std::vector<ast::ResolvedPlace> element_origins;
@@ -147,6 +148,7 @@ class SemanticAnalyzer {
     struct TemporaryLoan {
         ast::ResolvedPlace place;
         bool is_mut = false;
+        SourceRange range;
     };
 
     struct ScopeFrame {
@@ -165,20 +167,6 @@ class SemanticAnalyzer {
         std::vector<ContinueState> continue_states;
     };
 
-    struct FunctionState {
-        const ast::FunctionDecl* function = nullptr;
-        const Type* return_type = nullptr;
-        std::vector<ScopeFrame> scopes;
-        std::vector<LocalState> locals;
-        std::unordered_map<std::string, std::size_t> view_slot_locals;
-        std::vector<TemporaryLoan> temporary_loans;
-        std::vector<std::size_t> temporary_suspended_local_ids;
-        std::vector<LoopState> loops;
-        bool reachable = true;
-        std::size_t unchecked_depth = 0;
-        std::size_t relaxed_place_resolution_depth = 0;
-    };
-
     struct ViewLeafInfo {
         std::vector<std::uint32_t> path;
         const Type* type = nullptr;
@@ -190,6 +178,22 @@ class SemanticAnalyzer {
         std::optional<std::size_t> source_local_id;
         std::vector<ast::ResolvedPlace> element_sources;
         const Type* type = nullptr;
+    };
+
+    struct FunctionState {
+        const ast::FunctionDecl* function = nullptr;
+        const Type* return_type = nullptr;
+        std::vector<ScopeFrame> scopes;
+        std::vector<LocalState> locals;
+        std::unordered_map<std::size_t, std::vector<ViewLeafBinding>>
+            parameter_entry_bindings;
+        std::unordered_map<std::string, std::size_t> view_slot_locals;
+        std::vector<TemporaryLoan> temporary_loans;
+        std::vector<std::size_t> temporary_suspended_local_ids;
+        std::vector<LoopState> loops;
+        bool reachable = true;
+        std::size_t unchecked_depth = 0;
+        std::size_t relaxed_place_resolution_depth = 0;
     };
 
     struct ViewShape {

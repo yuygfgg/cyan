@@ -440,6 +440,10 @@ auto SemanticAnalyzer::analyze(ast::Package& package) -> SemanticAnalysis {
             if (function == nullptr || !function->type_parameters.empty()) {
                 continue;
             }
+            if (function->signature_status !=
+                ast::FunctionDecl::SignatureStatus::Valid) {
+                continue;
+            }
             if (function->resolved_return_type == nullptr) {
                 continue;
             }
@@ -1926,9 +1930,9 @@ auto SemanticAnalyzer::validateExternSignature(const ast::FunctionDecl& decl)
     const auto lowering_range =
         decl.builtin_lowering.has_value()
             ? std::optional<SourceRange>(decl.builtin_lowering->range)
-            : decl.intrinsic_lowering.has_value()
-                  ? std::optional<SourceRange>(decl.intrinsic_lowering->range)
-                  : std::nullopt;
+        : decl.intrinsic_lowering.has_value()
+            ? std::optional<SourceRange>(decl.intrinsic_lowering->range)
+            : std::nullopt;
     if (lowering_range.has_value() && !decl.is_extern) {
         return std::unexpected(Diagnostic(
             "lowering directives are only supported on extern functions",
@@ -1996,6 +2000,24 @@ auto SemanticAnalyzer::validateExternSignature(const ast::FunctionDecl& decl)
 auto SemanticAnalyzer::ensureFunctionSignature(ast::FunctionDecl& decl)
     -> std::expected<void, Diagnostic> {
     ScopedModule scoped_module(active_module, decl.owner_module);
+    if (decl.signature_status == ast::FunctionDecl::SignatureStatus::Valid) {
+        return {};
+    }
+    if (decl.signature_status == ast::FunctionDecl::SignatureStatus::Invalid) {
+        return {};
+    }
+
+    const auto fail =
+        [&](Diagnostic diagnostic) -> std::expected<void, Diagnostic> {
+        decl.signature_status = ast::FunctionDecl::SignatureStatus::Invalid;
+        return make_error(std::move(diagnostic));
+    };
+    const auto fail_message =
+        [&](std::string message,
+            SourceRange range) -> std::expected<void, Diagnostic> {
+        decl.signature_status = ast::FunctionDecl::SignatureStatus::Invalid;
+        return make_error(std::move(message), range);
+    };
 
     if (decl.impl_target_kind != ast::ImplTargetKind::None) {
         if (decl.name == "drop") {
@@ -2006,8 +2028,8 @@ auto SemanticAnalyzer::ensureFunctionSignature(ast::FunctionDecl& decl)
             if (decl.interface_decl == nullptr) {
                 const auto* interface_decl = findVisibleInterface(decl.name);
                 if (interface_decl == nullptr) {
-                    return make_error("unknown interface '" + decl.name + "'",
-                                      decl.range);
+                    return fail_message("unknown interface '" + decl.name + "'",
+                                        decl.range);
                 }
                 decl.interface_decl = interface_decl;
             }
@@ -2019,14 +2041,14 @@ auto SemanticAnalyzer::ensureFunctionSignature(ast::FunctionDecl& decl)
     }
 
     if (decl.return_type == nullptr) {
-        return make_error("impl is missing its interface return type",
-                          decl.range);
+        return fail_message("impl is missing its interface return type",
+                            decl.range);
     }
 
     if (decl.resolved_return_type == nullptr) {
         auto return_type = resolveType(*decl.return_type);
         if (!return_type) {
-            return std::unexpected(return_type.error());
+            return fail(return_type.error());
         }
         decl.resolved_return_type = *return_type;
     }
@@ -2037,20 +2059,20 @@ auto SemanticAnalyzer::ensureFunctionSignature(ast::FunctionDecl& decl)
         }
         auto parameter_type = resolveType(*parameter.type);
         if (!parameter_type) {
-            return std::unexpected(parameter_type.error());
+            return fail(parameter_type.error());
         }
         parameter.resolved_type = *parameter_type;
     }
 
     auto validated_dependency = validateReturnDependencies(decl);
     if (!validated_dependency) {
-        return std::unexpected(validated_dependency.error());
+        return fail(validated_dependency.error());
     }
 
     if (decl.is_extern) {
         auto validated_extern = validateExternSignature(decl);
         if (!validated_extern) {
-            return std::unexpected(validated_extern.error());
+            return fail(validated_extern.error());
         }
     }
 
@@ -2060,13 +2082,14 @@ auto SemanticAnalyzer::ensureFunctionSignature(ast::FunctionDecl& decl)
                                     : decl.parameters.front().resolved_type);
         auto validated_impl = validateResolvedImplSignature(decl, target_type);
         if (!validated_impl) {
-            return std::unexpected(validated_impl.error());
+            return fail(validated_impl.error());
         }
         if (decl.name == "drop") {
             types.registerDropFunction(target_type, &decl);
         }
     }
 
+    decl.signature_status = ast::FunctionDecl::SignatureStatus::Valid;
     return {};
 }
 

@@ -63,6 +63,25 @@ auto append_projected_places(std::vector<ast::ResolvedPlace> places,
     return places;
 }
 
+auto borrow_kind_name(bool is_mut) -> std::string_view {
+    return is_mut ? "mutable" : "shared";
+}
+
+auto borrow_conflict_message(bool requested_mut, bool existing_mut)
+    -> std::string {
+    if (requested_mut) {
+        if (existing_mut) {
+            return "borrow would violate aliasing rules: cannot take a "
+                   "mutable borrow because the place is already mutably "
+                   "borrowed";
+        }
+        return "borrow would violate aliasing rules: cannot take a mutable "
+               "borrow because the place is already shared-borrowed";
+    }
+    return "borrow would violate aliasing rules: cannot take a shared borrow "
+           "because the place is already mutably borrowed";
+}
+
 } // namespace
 
 auto SemanticAnalyzer::borrowSourcePlace(FunctionState& state, ast::Expr& expr)
@@ -386,6 +405,7 @@ auto SemanticAnalyzer::declareLocal(FunctionState& state, std::string name,
                    .in_scope = true,
                    .scope_depth = state.scopes.size() - 1,
                    .unique_id = next_local_id++,
+                   .range = range,
                    .status = LocalState::Status::Uninitialized,
                    .borrow_origins = {},
                    .element_origins = {},
@@ -408,6 +428,7 @@ auto SemanticAnalyzer::declareHiddenLocal(FunctionState& state,
         .in_scope = true,
         .scope_depth = state.scopes.size() - 1,
         .unique_id = next_local_id++,
+        .range = {},
         .status = LocalState::Status::Live,
         .borrow_origins = {},
         .element_origins = {},
@@ -741,6 +762,7 @@ auto SemanticAnalyzer::createNamedBorrow(FunctionState& state,
     releaseReborrowParent(state, local);
     setTopLevelOrigins(local, std::move(origin_places));
     local.element_origins = std::move(element_origins);
+    local.range = initializer.range;
     local.status = LocalState::Status::Live;
     auto attached = attachReborrowParent(state, local, initializer);
     if (!attached) {
@@ -835,6 +857,7 @@ auto SemanticAnalyzer::assignNamedBorrow(FunctionState& state,
         setTopLevelOrigins(local, std::move(origin_places));
         local.element_origins = std::move(element_origins);
     }
+    local.range = value.range;
     local.status = LocalState::Status::Live;
     auto attached = attachReborrowParent(state, local, value);
     if (!attached) {
@@ -1024,12 +1047,15 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
                                       bool want_mut, bool temporary_only)
     -> std::expected<ast::ResolvedPlace, Diagnostic> {
     auto push_temporary_loan = [&](ast::ResolvedPlace loan_place,
-                                   bool loan_is_mut) {
+                                   bool loan_is_mut, SourceRange loan_range) {
         if (!loan_is_mut) {
             loan_place.owner_local_id.reset();
         }
         state.temporary_loans.push_back(TemporaryLoan{
-            .place = std::move(loan_place), .is_mut = loan_is_mut});
+            .place = std::move(loan_place),
+            .is_mut = loan_is_mut,
+            .range = loan_range,
+        });
     };
 
     if (const auto* unary = std::get_if<ast::UnaryExpr>(&expr.node);
@@ -1091,7 +1117,8 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
 
         if (temporary_only) {
             for (auto source_place : *borrow_targets) {
-                push_temporary_loan(std::move(source_place), want_mut);
+                push_temporary_loan(std::move(source_place), want_mut,
+                                    expr.range);
             }
             if (want_mut && place->owner_local_id.has_value()) {
                 const auto parent_index =
@@ -1142,7 +1169,8 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
         }
         if (temporary_only) {
             for (auto source_place : *borrow_targets) {
-                push_temporary_loan(std::move(source_place), want_mut);
+                push_temporary_loan(std::move(source_place), want_mut,
+                                    expr.range);
             }
             if (want_mut && expr.resolved_place->owner_local_id.has_value()) {
                 const auto parent_index =
@@ -1199,7 +1227,8 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
                             loan_place.owner_local_id =
                                 (*binding)->source_local_id;
                         }
-                        push_temporary_loan(std::move(loan_place), false);
+                        push_temporary_loan(std::move(loan_place), false,
+                                            expr.range);
                     }
                 }
                 if (!(*binding)->source_places.empty()) {
@@ -1231,7 +1260,8 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
             }
             if (temporary_only) {
                 for (auto loan_place : *borrow_targets) {
-                    push_temporary_loan(std::move(loan_place), want_mut);
+                    push_temporary_loan(std::move(loan_place), want_mut,
+                                        expr.range);
                 }
                 if (want_mut &&
                     expr.resolved_place->owner_local_id.has_value()) {
@@ -1286,7 +1316,10 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
                     loan_place.owner_local_id = local.unique_id;
                 }
                 state.temporary_loans.push_back(TemporaryLoan{
-                    .place = std::move(loan_place), .is_mut = true});
+                    .place = std::move(loan_place),
+                    .is_mut = true,
+                    .range = expr.range,
+                });
             }
             state.temporary_suspended_local_ids.push_back(local.unique_id);
         }
@@ -1304,7 +1337,7 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
         if (temporary_only) {
             for (auto loan_place : local.element_origins) {
                 loan_place.owner_local_id = local.unique_id;
-                push_temporary_loan(std::move(loan_place), false);
+                push_temporary_loan(std::move(loan_place), false, expr.range);
             }
         }
         return local_origins.front();
@@ -1321,7 +1354,7 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
         if (temporary_only) {
             for (auto loan_place : local_origins) {
                 loan_place.owner_local_id = local.unique_id;
-                push_temporary_loan(std::move(loan_place), false);
+                push_temporary_loan(std::move(loan_place), false, expr.range);
             }
         }
         return local_origins.front();
@@ -1597,7 +1630,40 @@ auto SemanticAnalyzer::ensureCanBorrow(FunctionState& state,
                 continue;
             }
             if (is_mut || loan.is_mut) {
-                return make_error("borrow would violate aliasing rules", range);
+                Diagnostic diagnostic(
+                    borrow_conflict_message(is_mut, loan.is_mut), range);
+                const auto note_message =
+                    "conflicting " +
+                    std::string(borrow_kind_name(loan.is_mut)) +
+                    " borrow occurs here";
+                if (loan.range.source != nullptr &&
+                    loan.range.begin != loan.range.end) {
+                    diagnostic.addNote(note_message, loan.range);
+                } else if (loan.place.owner_local_id.has_value()) {
+                    const auto owner_index =
+                        findLocalById(state, *loan.place.owner_local_id);
+                    if (owner_index.has_value() &&
+                        !state.locals[*owner_index].is_hidden) {
+                        diagnostic.addNote(
+                            "conflicting " +
+                            std::string(borrow_kind_name(loan.is_mut)) +
+                            " borrow is held by local '" +
+                            state.locals[*owner_index].name + "'");
+                    } else {
+                        diagnostic.addNote(
+                            "a conflicting " +
+                            std::string(borrow_kind_name(loan.is_mut)) +
+                            " borrow is still live");
+                    }
+                } else {
+                    diagnostic.addNote(
+                        "a conflicting " +
+                        std::string(borrow_kind_name(loan.is_mut)) +
+                        " borrow is still live");
+                }
+                diagnostic.addHelp(
+                    "end the earlier borrow before taking this one");
+                return make_error(std::move(diagnostic));
             }
         }
         return {};

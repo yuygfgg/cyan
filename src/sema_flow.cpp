@@ -268,6 +268,7 @@ auto SemanticAnalyzer::activeNamedLoans(const FunctionState& state) const
                 loans.push_back(TemporaryLoan{
                     .place = place,
                     .is_mut = false,
+                    .range = local.range,
                 });
             }
             continue;
@@ -277,6 +278,7 @@ auto SemanticAnalyzer::activeNamedLoans(const FunctionState& state) const
             loans.push_back(TemporaryLoan{
                 .place = std::move(place),
                 .is_mut = is_borrow_like_type(local.type) && local.type->is_mut,
+                .range = local.range,
             });
         }
     }

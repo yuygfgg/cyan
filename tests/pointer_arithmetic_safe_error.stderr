@@ -1,1 +1,4 @@
 arithmetic operators require matching integer operands, matching floating-point operands, or unchecked pointer arithmetic
+arithmetic operands have incompatible types for '+'
+left operand has type 'i64*'
+right operand has type 'i64'

@@ -913,6 +913,7 @@ auto SemanticAnalyzer::setAggregateViewSlots(
         }
         setTopLevelOrigins(slot, assigned_sources);
         slot.element_origins = assigned_element_sources;
+        slot.range = range;
         auto outlives = ensureViewSourceOutlivesLocal(state, slot, range);
         if (!outlives) {
             return std::unexpected(outlives.error());

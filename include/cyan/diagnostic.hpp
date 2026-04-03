@@ -4,9 +4,21 @@
 
 #include <iosfwd>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace cyan {
+
+struct DiagnosticContext {
+    enum class Kind : std::uint8_t {
+        Note,
+        Help,
+    };
+
+    Kind kind = Kind::Note;
+    std::string message;
+    SourceRange range;
+};
 
 class Diagnostic {
   public:
@@ -16,10 +28,16 @@ class Diagnostic {
     [[nodiscard]] auto range() const -> SourceRange;
     [[nodiscard]] auto hasRange() const -> bool;
     [[nodiscard]] auto source() const -> const SourceFile*;
+    [[nodiscard]] auto contexts() const
+        -> const std::vector<DiagnosticContext>&;
+
+    auto addNote(std::string message, SourceRange range = {}) -> Diagnostic&;
+    auto addHelp(std::string message, SourceRange range = {}) -> Diagnostic&;
 
   private:
     std::string message_text;
     SourceRange source_range;
+    std::vector<DiagnosticContext> diagnostic_contexts;
 };
 
 using DiagnosticList = std::vector<Diagnostic>;

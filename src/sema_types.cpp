@@ -193,18 +193,24 @@ auto SemanticAnalyzer::instantiateFunctionTemplate(
         stored_decl->return_type = make_type_syntax_from_type(types.voidType());
     }
     if (stored_decl->return_type == nullptr) {
+        stored_decl->signature_status =
+            ast::FunctionDecl::SignatureStatus::Invalid;
         return unexpected_result<ast::FunctionDecl*>(
             "instantiated function is missing a return type",
             stored_decl->range);
     }
     auto return_type = resolveType(*stored_decl->return_type);
     if (!return_type) {
+        stored_decl->signature_status =
+            ast::FunctionDecl::SignatureStatus::Invalid;
         return std::unexpected(return_type.error());
     }
     stored_decl->resolved_return_type = *return_type;
     for (auto& parameter : stored_decl->parameters) {
         auto parameter_type = resolveType(*parameter.type);
         if (!parameter_type) {
+            stored_decl->signature_status =
+                ast::FunctionDecl::SignatureStatus::Invalid;
             return std::unexpected(parameter_type.error());
         }
         parameter.resolved_type = *parameter_type;
@@ -212,6 +218,8 @@ auto SemanticAnalyzer::instantiateFunctionTemplate(
 
     auto validated_dependency = validateReturnDependencies(*stored_decl);
     if (!validated_dependency) {
+        stored_decl->signature_status =
+            ast::FunctionDecl::SignatureStatus::Invalid;
         return std::unexpected(validated_dependency.error());
     }
 
@@ -223,6 +231,8 @@ auto SemanticAnalyzer::instantiateFunctionTemplate(
         auto validated_impl =
             validateResolvedImplSignature(*stored_decl, target_type);
         if (!validated_impl) {
+            stored_decl->signature_status =
+                ast::FunctionDecl::SignatureStatus::Invalid;
             return std::unexpected(validated_impl.error());
         }
         if (stored_decl->name == "drop") {
@@ -230,6 +240,7 @@ auto SemanticAnalyzer::instantiateFunctionTemplate(
         }
     }
 
+    stored_decl->signature_status = ast::FunctionDecl::SignatureStatus::Valid;
     auto analyzed = analyzeFunction(*stored_decl);
     if (!analyzed) {
         return std::unexpected(analyzed.error());

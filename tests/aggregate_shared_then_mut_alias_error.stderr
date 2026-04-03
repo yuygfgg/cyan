@@ -1,1 +1,3 @@
 borrow would violate aliasing rules
+cannot take a mutable borrow because the place is already shared-borrowed
+conflicting shared borrow occurs here

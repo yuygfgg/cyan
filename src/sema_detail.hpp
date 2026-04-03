@@ -23,10 +23,20 @@ inline auto make_error(std::string message, SourceRange range)
     return std::unexpected(Diagnostic(std::move(message), range));
 }
 
+inline auto make_error(Diagnostic diagnostic)
+    -> std::expected<void, Diagnostic> {
+    return std::unexpected(std::move(diagnostic));
+}
+
 template <typename T>
 auto unexpected_result(std::string message, SourceRange range)
     -> std::expected<T, Diagnostic> {
     return std::unexpected(Diagnostic(std::move(message), range));
+}
+
+template <typename T>
+auto unexpected_result(Diagnostic diagnostic) -> std::expected<T, Diagnostic> {
+    return std::unexpected(std::move(diagnostic));
 }
 
 template <typename... Ts> struct Overloaded : Ts... {
@@ -81,6 +91,9 @@ auto can_convert_pointer_value(const TypeContext& types, const Type* source,
                                const Type* target) -> bool;
 auto can_consume_value_type(const TypeContext& types, const Type* source,
                             const Type* target) -> bool;
+auto describe_view_path(const TypeContext& types, std::string_view root_name,
+                        const Type* root_type,
+                        const std::vector<std::uint32_t>& path) -> std::string;
 auto type_syntax_contains_name(const ast::TypeSyntax& type,
                                std::string_view name) -> bool;
 auto describe_type_syntax(const ast::TypeSyntax& type) -> std::string;

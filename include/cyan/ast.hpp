@@ -481,6 +481,12 @@ struct BuiltinLowering {
 };
 
 struct FunctionDecl {
+    enum class SignatureStatus : std::uint8_t {
+        Unchecked,
+        Valid,
+        Invalid,
+    };
+
     SourceRange range;
     TypeSyntaxPtr return_type;
     std::string name;
@@ -502,6 +508,8 @@ struct FunctionDecl {
     const InterfaceDecl* interface_decl = nullptr;
     std::optional<IntrinsicLowering> intrinsic_lowering;
     std::optional<BuiltinLowering> builtin_lowering;
+    SignatureStatus signature_status = SignatureStatus::Unchecked;
+    bool analysis_failed = false;
     bool is_unchecked = false;
     bool is_export = false;
     bool is_extern = false;

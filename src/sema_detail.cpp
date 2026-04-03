@@ -240,6 +240,61 @@ auto can_consume_value_type(const TypeContext& types, const Type* source,
     return false;
 }
 
+auto describe_view_path(const TypeContext& types, std::string_view root_name,
+                        const Type* root_type,
+                        const std::vector<std::uint32_t>& path) -> std::string {
+    std::string result(root_name);
+    const Type* current_type = root_type;
+    for (std::size_t index = 0; index < path.size(); ++index) {
+        current_type =
+            current_type == nullptr ? nullptr : types.unqualify(current_type);
+        if (path[index] == INDEX_FIELD_SENTINEL) {
+            result += "[]";
+            if (current_type != nullptr &&
+                (current_type->kind == TypeKind::Array ||
+                 current_type->kind == TypeKind::Slice)) {
+                current_type = current_type->element_type;
+            } else {
+                current_type = nullptr;
+            }
+            continue;
+        }
+        if (path[index] == ENUM_PAYLOAD_SENTINEL) {
+            if (current_type == nullptr ||
+                current_type->kind != TypeKind::Enum ||
+                index + 1 >= path.size()) {
+                result += ".<payload>";
+                break;
+            }
+            const auto variant_index = static_cast<std::size_t>(path[++index]);
+            if (variant_index >= current_type->enum_decl->variants.size()) {
+                result += ".<variant>";
+                break;
+            }
+            const auto& variant =
+                current_type->enum_decl->variants[variant_index];
+            result += ".";
+            result += variant.name;
+            current_type = variant.resolved_type;
+            continue;
+        }
+        if (current_type == nullptr || current_type->kind != TypeKind::Struct) {
+            result += ".<field>";
+            break;
+        }
+        const auto field_index = static_cast<std::size_t>(path[index]);
+        if (field_index >= current_type->struct_decl->fields.size()) {
+            result += ".<field>";
+            break;
+        }
+        const auto& field = current_type->struct_decl->fields[field_index];
+        result += ".";
+        result += field.name;
+        current_type = field.resolved_type;
+    }
+    return result;
+}
+
 auto type_syntax_contains_name(const ast::TypeSyntax& type,
                                std::string_view name) -> bool {
     if (type.kind == ast::TypeSyntax::Kind::Named && type.name == name) {

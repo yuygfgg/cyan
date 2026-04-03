@@ -7,6 +7,68 @@ namespace cyan {
 
 using namespace detail;
 
+namespace {
+
+auto binary_op_spelling(ast::BinaryOp op) -> std::string_view {
+    switch (op) {
+    case ast::BinaryOp::Add:
+        return "+";
+    case ast::BinaryOp::Subtract:
+        return "-";
+    case ast::BinaryOp::Multiply:
+        return "*";
+    case ast::BinaryOp::Divide:
+        return "/";
+    case ast::BinaryOp::Remainder:
+        return "%";
+    case ast::BinaryOp::ShiftLeft:
+        return "<<";
+    case ast::BinaryOp::ShiftRight:
+        return ">>";
+    case ast::BinaryOp::BitwiseAnd:
+        return "&";
+    case ast::BinaryOp::BitwiseXor:
+        return "^";
+    case ast::BinaryOp::BitwiseOr:
+        return "|";
+    case ast::BinaryOp::Less:
+        return "<";
+    case ast::BinaryOp::LessEqual:
+        return "<=";
+    case ast::BinaryOp::Greater:
+        return ">";
+    case ast::BinaryOp::GreaterEqual:
+        return ">=";
+    case ast::BinaryOp::Equal:
+        return "==";
+    case ast::BinaryOp::NotEqual:
+        return "!=";
+    case ast::BinaryOp::LogicalAnd:
+        return "&&";
+    case ast::BinaryOp::LogicalOr:
+        return "||";
+    }
+    return "?";
+}
+
+auto make_binary_operand_type_diagnostic(const TypeContext& types,
+                                         const ast::Expr& expr,
+                                         const ast::BinaryExpr& binary,
+                                         std::string message,
+                                         const Type* lhs_type,
+                                         const Type* rhs_type) -> Diagnostic {
+    Diagnostic diagnostic(std::move(message), expr.range);
+    diagnostic.addNote("left operand has type '" + types.describe(lhs_type) +
+                           "'",
+                       binary.lhs->range);
+    diagnostic.addNote("right operand has type '" + types.describe(rhs_type) +
+                           "'",
+                       binary.rhs->range);
+    return diagnostic;
+}
+
+} // namespace
+
 auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                                    const Type* expected_type)
     -> std::expected<const Type*, Diagnostic> {
@@ -540,7 +602,7 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                 case ast::BinaryOp::Subtract:
                 case ast::BinaryOp::Multiply:
                 case ast::BinaryOp::Divide:
-                case ast::BinaryOp::Remainder:
+                case ast::BinaryOp::Remainder: {
                     if (types.isInteger(lhs_value_type) &&
                         lhs_value_type == rhs_value_type) {
                         expr.resolved_type = lhs_value_type;
@@ -570,55 +632,94 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                         expr.resolved_type = rhs_value_type;
                         break;
                     }
-                    return unexpected_result<const Type*>(
+                    auto diagnostic = make_binary_operand_type_diagnostic(
+                        types, expr, binary,
+                        "arithmetic operands have incompatible types for '" +
+                            std::string(binary_op_spelling(binary.op)) + "'",
+                        lhs_value_type, rhs_value_type);
+                    diagnostic.addHelp(
                         "arithmetic operators require matching integer "
                         "operands, matching floating-point operands, or "
-                        "unchecked pointer arithmetic",
-                        expr.range);
+                        "unchecked pointer arithmetic");
+                    return unexpected_result<const Type*>(
+                        std::move(diagnostic));
+                }
                 case ast::BinaryOp::ShiftLeft:
-                case ast::BinaryOp::ShiftRight:
+                case ast::BinaryOp::ShiftRight: {
                     if (!types.isInteger(lhs_value_type) ||
                         !types.isInteger(rhs_value_type)) {
+                        auto diagnostic = make_binary_operand_type_diagnostic(
+                            types, expr, binary,
+                            "shift operands must both be integers for '" +
+                                std::string(binary_op_spelling(binary.op)) +
+                                "'",
+                            lhs_value_type, rhs_value_type);
+                        diagnostic.addHelp(
+                            "shift operators require integer operands");
                         return unexpected_result<const Type*>(
-                            "shift operators require integer operands",
-                            expr.range);
+                            std::move(diagnostic));
                     }
                     expr.resolved_type = lhs_value_type;
                     break;
+                }
                 case ast::BinaryOp::BitwiseAnd:
                 case ast::BinaryOp::BitwiseXor:
-                case ast::BinaryOp::BitwiseOr:
+                case ast::BinaryOp::BitwiseOr: {
                     if (!(types.isInteger(lhs_value_type) &&
                           lhs_value_type == rhs_value_type)) {
-                        return unexpected_result<const Type*>(
+                        auto diagnostic = make_binary_operand_type_diagnostic(
+                            types, expr, binary,
+                            "bitwise operands have incompatible types for '" +
+                                std::string(binary_op_spelling(binary.op)) +
+                                "'",
+                            lhs_value_type, rhs_value_type);
+                        diagnostic.addHelp(
                             "bitwise operators require matching integer "
-                            "operands",
-                            expr.range);
+                            "operands");
+                        return unexpected_result<const Type*>(
+                            std::move(diagnostic));
                     }
                     expr.resolved_type = lhs_value_type;
                     break;
+                }
                 case ast::BinaryOp::Less:
                 case ast::BinaryOp::LessEqual:
                 case ast::BinaryOp::Greater:
-                case ast::BinaryOp::GreaterEqual:
-                    if (!((types.isInteger(lhs_value_type) &&
-                           lhs_value_type == rhs_value_type) ||
-                          (types.isFloat(lhs_value_type) &&
-                           lhs_value_type == rhs_value_type))) {
-                        return unexpected_result<const Type*>(
+                case ast::BinaryOp::GreaterEqual: {
+                    if ((!types.isInteger(lhs_value_type) ||
+                         lhs_value_type != rhs_value_type) &&
+                        (!types.isFloat(lhs_value_type) ||
+                         lhs_value_type != rhs_value_type)) {
+                        auto diagnostic = make_binary_operand_type_diagnostic(
+                            types, expr, binary,
+                            "comparison operands have incompatible types for "
+                            "'" +
+                                std::string(binary_op_spelling(binary.op)) +
+                                "'",
+                            lhs_value_type, rhs_value_type);
+                        diagnostic.addHelp(
                             "comparison operators require matching integer "
-                            "or floating-point operands",
-                            expr.range);
+                            "or floating-point operands");
+                        return unexpected_result<const Type*>(
+                            std::move(diagnostic));
                     }
                     expr.resolved_type = types.boolType();
                     break;
+                }
                 case ast::BinaryOp::Equal:
-                case ast::BinaryOp::NotEqual:
+                case ast::BinaryOp::NotEqual: {
                     if (!can_consume_value_type(types, *lhs_type, *rhs_type) &&
                         !can_consume_value_type(types, *rhs_type, *lhs_type)) {
+                        auto diagnostic = make_binary_operand_type_diagnostic(
+                            types, expr, binary,
+                            "equality operands have incompatible types for '" +
+                                std::string(binary_op_spelling(binary.op)) +
+                                "'",
+                            *lhs_type, *rhs_type);
+                        diagnostic.addHelp(
+                            "equality operands must have the same type");
                         return unexpected_result<const Type*>(
-                            "equality operands must have the same type",
-                            expr.range);
+                            std::move(diagnostic));
                     }
                     if (!types.isCopy(lhs_value_type)) {
                         return unexpected_result<const Type*>(
@@ -628,16 +729,25 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                     }
                     expr.resolved_type = types.boolType();
                     break;
+                }
                 case ast::BinaryOp::LogicalAnd:
-                case ast::BinaryOp::LogicalOr:
+                case ast::BinaryOp::LogicalOr: {
                     if (lhs_value_type != types.boolType() ||
                         rhs_value_type != types.boolType()) {
+                        auto diagnostic = make_binary_operand_type_diagnostic(
+                            types, expr, binary,
+                            "logical operands must both be 'bool' for '" +
+                                std::string(binary_op_spelling(binary.op)) +
+                                "'",
+                            lhs_value_type, rhs_value_type);
+                        diagnostic.addHelp(
+                            "logical operators require bool operands");
                         return unexpected_result<const Type*>(
-                            "logical operators require bool operands",
-                            expr.range);
+                            std::move(diagnostic));
                     }
                     expr.resolved_type = types.boolType();
                     break;
+                }
                 }
                 expr.resolved_place.reset();
                 return expr.resolved_type;
@@ -1535,8 +1645,11 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                     local.status = LocalState::Status::Moved;
                     for (auto loan_place : local_origins) {
                         loan_place.owner_local_id = local.unique_id;
-                        state.temporary_loans.push_back(
-                            TemporaryLoan{loan_place, true});
+                        state.temporary_loans.push_back(TemporaryLoan{
+                            .place = loan_place,
+                            .is_mut = true,
+                            .range = argument.range,
+                        });
                     }
                     state.temporary_suspended_local_ids.push_back(
                         local.unique_id);
@@ -1552,7 +1665,10 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                     }
                     for (const auto& loan_place : local_origins) {
                         state.temporary_loans.push_back(TemporaryLoan{
-                            .place = loan_place, .is_mut = false});
+                            .place = loan_place,
+                            .is_mut = false,
+                            .range = argument.range,
+                        });
                     }
                 } else if (local.type->kind != TypeKind::Borrow ||
                            local_origins.empty()) {
@@ -1600,7 +1716,8 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                                     loan_place.owner_local_id = local.unique_id;
                                     state.temporary_loans.push_back(
                                         TemporaryLoan{.place = loan_place,
-                                                      .is_mut = true});
+                                                      .is_mut = true,
+                                                      .range = argument.range});
                                 }
                                 state.temporary_suspended_local_ids.push_back(
                                     local.unique_id);
@@ -1675,6 +1792,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                     state.temporary_loans.push_back(TemporaryLoan{
                         .place = std::move(loan_place),
                         .is_mut = false,
+                        .range = argument.range,
                     });
                 }
                 continue;
@@ -1691,6 +1809,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                 state.temporary_loans.push_back(TemporaryLoan{
                     .place = std::move(loan_place),
                     .is_mut = binding_is_mut,
+                    .range = argument.range,
                 });
             }
         }
@@ -1784,6 +1903,21 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
             auto ensured_signature = ensureFunctionSignature(*function);
             if (!ensured_signature) {
                 return std::unexpected(ensured_signature.error());
+            }
+            if (function->signature_status ==
+                ast::FunctionDecl::SignatureStatus::Invalid) {
+                expr.resolved_type = function->resolved_return_type != nullptr
+                                         ? function->resolved_return_type
+                                         : types.voidType();
+                expr.resolved_place.reset();
+                return expr.resolved_type;
+            }
+            if (function->analysis_failed) {
+                expr.resolved_type = function->resolved_return_type != nullptr
+                                         ? function->resolved_return_type
+                                         : types.voidType();
+                expr.resolved_place.reset();
+                return expr.resolved_type;
             }
             if (function->resolved_return_type == nullptr ||
                 std::ranges::any_of(
@@ -2735,6 +2869,21 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
     auto ensured_signature = ensureFunctionSignature(resolved_function);
     if (!ensured_signature) {
         return std::unexpected(ensured_signature.error());
+    }
+    if (resolved_function.signature_status ==
+        ast::FunctionDecl::SignatureStatus::Invalid) {
+        expr.resolved_type = resolved_function.resolved_return_type != nullptr
+                                 ? resolved_function.resolved_return_type
+                                 : types.voidType();
+        expr.resolved_place.reset();
+        return expr.resolved_type;
+    }
+    if (resolved_function.analysis_failed) {
+        expr.resolved_type = resolved_function.resolved_return_type != nullptr
+                                 ? resolved_function.resolved_return_type
+                                 : types.voidType();
+        expr.resolved_place.reset();
+        return expr.resolved_type;
     }
     if (resolved_function.resolved_return_type == nullptr ||
         std::ranges::any_of(resolved_function.parameters,

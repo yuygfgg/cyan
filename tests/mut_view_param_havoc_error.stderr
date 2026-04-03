@@ -1,1 +1,2 @@
-view value may be moved or uninitialized due to control flow
+mutable borrow parameter 'v' changes view path 'v.data' without declaring depends(...)
+depends(v.data on <source>)

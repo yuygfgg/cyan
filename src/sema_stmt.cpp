@@ -7,6 +7,7 @@ using namespace detail;
 auto SemanticAnalyzer::analyzeFunction(ast::FunctionDecl& decl)
     -> std::expected<void, Diagnostic> {
     ScopedModule scoped_module(active_module, decl.owner_module);
+    decl.analysis_failed = false;
     if (decl.is_extern) {
         return {};
     }
@@ -83,6 +84,32 @@ auto SemanticAnalyzer::analyzeFunction(ast::FunctionDecl& decl)
         }
     }
 
+    for (std::size_t index = 0; index < decl.parameters.size(); ++index) {
+        const auto& parameter = decl.parameters[index];
+        if (parameter.resolved_type == nullptr ||
+            parameter.resolved_type->kind != TypeKind::Borrow ||
+            !parameter.resolved_type->is_mut ||
+            parameter.resolved_type->element_type == nullptr ||
+            !typeContainsViews(parameter.resolved_type->element_type)) {
+            continue;
+        }
+        auto bindings = collectSlotBindings(
+            state, localPlace(parameter.local_id), parameter.resolved_type);
+        if (!bindings) {
+            report(bindings.error());
+            had_error = true;
+            continue;
+        }
+        auto projected = extendBindingsWithProjectedPointee(
+            state, *bindings, parameter.resolved_type, false, parameter.range);
+        if (!projected) {
+            report(projected.error());
+            had_error = true;
+            continue;
+        }
+        state.parameter_entry_bindings.emplace(index, std::move(*bindings));
+    }
+
     if (decl.body == nullptr) {
         report(Diagnostic("function is missing a body", decl.range));
         return make_error("function is missing a body", decl.range);
@@ -135,8 +162,10 @@ auto SemanticAnalyzer::analyzeFunction(ast::FunctionDecl& decl)
         had_error = true;
     }
     if (had_error) {
+        decl.analysis_failed = true;
         return make_error("function analysis failed", decl.range);
     }
+    decl.analysis_failed = false;
     return {};
 }
 
@@ -560,6 +589,8 @@ auto SemanticAnalyzer::validateMutableParameterDependencies(
     -> std::expected<void, Diagnostic> {
     std::unordered_map<std::size_t, std::vector<ViewLeafBinding>>
         cached_parameter_bindings;
+    std::unordered_map<std::size_t, std::vector<ViewLeafBinding>>
+        cached_projected_parameter_bindings;
     std::vector<bool> include_projected_parameter_bindings(
         state.function->parameters.size(), false);
     for (const auto& dependency : state.function->return_dependencies) {
@@ -591,6 +622,25 @@ auto SemanticAnalyzer::validateMutableParameterDependencies(
                                               std::move(*bindings));
         }
         return &cached_parameter_bindings.at(parameter_index);
+    };
+    auto projected_parameter_bindings = [&](std::size_t parameter_index)
+        -> std::expected<std::vector<ViewLeafBinding>*, Diagnostic> {
+        if (!cached_projected_parameter_bindings.contains(parameter_index)) {
+            const auto& parameter = state.function->parameters[parameter_index];
+            auto bindings = collectSlotBindings(
+                state, localPlace(parameter.local_id), parameter.resolved_type);
+            if (!bindings) {
+                return std::unexpected(bindings.error());
+            }
+            auto extended = extendBindingsWithProjectedPointee(
+                state, *bindings, parameter.resolved_type, false, range);
+            if (!extended) {
+                return std::unexpected(extended.error());
+            }
+            cached_projected_parameter_bindings.emplace(parameter_index,
+                                                        std::move(*bindings));
+        }
+        return &cached_projected_parameter_bindings.at(parameter_index);
     };
 
     for (const auto& dependency : state.function->return_dependencies) {
@@ -668,6 +718,82 @@ auto SemanticAnalyzer::validateMutableParameterDependencies(
                 "mutable parameter borrow or slice does not match "
                 "its declared depends source",
                 range);
+        }
+    }
+
+    const auto same_binding_places =
+        [&](const std::vector<ast::ResolvedPlace>* lhs,
+            const std::vector<ast::ResolvedPlace>* rhs) -> bool {
+        if (lhs == nullptr || rhs == nullptr) {
+            return lhs == rhs;
+        }
+        return canonicalizePlaces(*lhs) == canonicalizePlaces(*rhs);
+    };
+
+    for (std::size_t parameter_index = 0;
+         parameter_index < state.function->parameters.size();
+         ++parameter_index) {
+        const auto& parameter = state.function->parameters[parameter_index];
+        if (parameter.resolved_type == nullptr ||
+            parameter.resolved_type->kind != TypeKind::Borrow ||
+            !parameter.resolved_type->is_mut ||
+            parameter.resolved_type->element_type == nullptr ||
+            !typeContainsViews(parameter.resolved_type->element_type)) {
+            continue;
+        }
+
+        const auto entry_bindings_it =
+            state.parameter_entry_bindings.find(parameter_index);
+        if (entry_bindings_it == state.parameter_entry_bindings.end()) {
+            continue;
+        }
+
+        auto actual_bindings = projected_parameter_bindings(parameter_index);
+        if (!actual_bindings) {
+            return std::unexpected(actual_bindings.error());
+        }
+
+        for (const auto& leaf :
+             collectViewLeafInfos(parameter.resolved_type->element_type)) {
+            const auto dependency_it = std::ranges::find_if(
+                state.function->return_dependencies,
+                [&](const ast::ReturnDependency& dependency) {
+                    return !dependency.target.is_return &&
+                           dependency.target.parameter_index ==
+                               parameter_index &&
+                           dependency.target.resolved_path == leaf.path;
+                });
+            if (dependency_it != state.function->return_dependencies.end()) {
+                continue;
+            }
+
+            const auto* actual_binding =
+                findViewBinding(**actual_bindings, leaf.path);
+            const auto* entry_binding =
+                findViewBinding(entry_bindings_it->second, leaf.path);
+            if (same_binding_places(
+                    actual_binding == nullptr ? nullptr
+                                              : bindingPlaces(*actual_binding),
+                    entry_binding == nullptr ? nullptr
+                                             : bindingPlaces(*entry_binding))) {
+                continue;
+            }
+
+            const auto target_path = describe_view_path(
+                types, parameter.name, parameter.resolved_type->element_type,
+                leaf.path);
+            Diagnostic diagnostic("mutable borrow parameter '" +
+                                      parameter.name + "' changes view path '" +
+                                      target_path +
+                                      "' without declaring depends(...)",
+                                  parameter.range);
+            diagnostic.addNote(
+                "this view path no longer matches the parameter's entry "
+                "provenance",
+                parameter.range);
+            diagnostic.addHelp("add a depends clause such as depends(" +
+                               target_path + " on <source>)");
+            return make_error(std::move(diagnostic));
         }
     }
 
@@ -1377,7 +1503,11 @@ auto SemanticAnalyzer::analyzeSwitch(FunctionState& state,
             return std::unexpected(borrowed.error());
         }
         enum_place = *borrowed;
-        switch_loan = TemporaryLoan{.place = *borrowed, .is_mut = false};
+        switch_loan = TemporaryLoan{
+            .place = *borrowed,
+            .is_mut = false,
+            .range = stmt.scrutinee->range,
+        };
         switch_loan->place.owner_local_id.reset();
         enum_type = unary->operand->resolved_type;
         break;
@@ -1389,7 +1519,11 @@ auto SemanticAnalyzer::analyzeSwitch(FunctionState& state,
             return std::unexpected(borrowed.error());
         }
         enum_place = *borrowed;
-        switch_loan = TemporaryLoan{.place = *borrowed, .is_mut = true};
+        switch_loan = TemporaryLoan{
+            .place = *borrowed,
+            .is_mut = true,
+            .range = stmt.scrutinee->range,
+        };
         enum_type = unary->operand->resolved_type;
         break;
     }
