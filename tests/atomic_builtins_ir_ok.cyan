@@ -1,3 +1,4 @@
+import /std.atomic;
 void touch(shared i64* ptr) {
     i64 value = atomic_load(ptr, atomic_relaxed());
     atomic_store(ptr, value, atomic_release());

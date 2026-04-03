@@ -1,0 +1,28 @@
+import /std.atomic as atomic;
+
+i64 atomic_load(i64 value) {
+    return value + 1;
+}
+
+i64 atomic_store(i64 value) {
+    return value + 2;
+}
+
+i64 main() {
+    i64 raw = 0;
+    shared i64* ptr = &mut raw;
+
+    atomic.atomic_store(ptr, 41, atomic.atomic_seq_cst());
+    i64 seen = atomic.atomic_load(ptr, atomic.atomic_seq_cst());
+
+    if (atomic_load(41) != 42) {
+        return 1;
+    }
+    if (atomic_store(40) != 42) {
+        return 2;
+    }
+    if (seen != 41) {
+        return 3;
+    }
+    return 0;
+}

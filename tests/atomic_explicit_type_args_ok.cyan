@@ -1,0 +1,9 @@
+import /std.atomic as atomic;
+
+i64 main() {
+    i64 raw = 0;
+    shared i64* ptr = &mut raw;
+    atomic.atomic_store<i64>(ptr, 42, atomic.atomic_seq_cst());
+    return atomic.atomic_load<i64>(ptr, atomic.atomic_seq_cst()) - 42;
+}
+

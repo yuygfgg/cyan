@@ -1,4 +1,6 @@
 import /std.ptr as ptr;
+import /std.abi;
+import /std.view;
 
 extern {
     i32 cyan_runtime_parallel_do(const void* tasks, i64 count);

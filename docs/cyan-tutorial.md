@@ -91,6 +91,8 @@ One of the most important concepts in systems programming is understanding exact
 An array (`T[N]`) is a contiguous block of memory owned by the variable holding it. A slice (`[]T`) is a "view" or a "window" into a contiguous block of memory owned by someone else. Slices consist of a pointer and a length, and creating a slice **never** copies the underlying data.
 
 ```cyan
+import /std.view;
+
 struct Pair {
     i64 left;
     i64 right;
@@ -128,6 +130,7 @@ i64 main() {
 
 In this example:
 - `Pair pair = {3, 4};` demonstrates positional struct initialization. The fields are assigned in the order they are declared.
+- `import /std.view;` brings `len(...)` and `subslice(...)` into scope from the standard library.
 - `subslice(values, 1, len(values) - 1)` creates a view starting at index `1`. 
 
 Because a slice is merely a view, it **must not** outlive the data it points to. If a function attempts to return a slice pointing to a local array that is about to be destroyed, the compiler will catch the error and reject the code.
@@ -137,16 +140,16 @@ Because a slice is merely a view, it **must not** outlive the data it points to.
 In Cyan, string literals are stored in static memory and naturally end with a null terminator (`\0`). When you assign a string literal to a slice, the slice covers the **entire** literal storage, including that null byte.
 
 ```cyan
-import /std.slice as slice;
+import /std.view as view;
 
 i64 main() {
     // 'text' has a length of 6, not 5! It includes the '\0'.
     []const char text = "hello";
     
     // Create a sub-slice spanning the characters 'e', 'l', 'l'.
-    []const char part = slice.span_slice(text, 1, 3);
+    []const char part = view.subslice(text, 1, 3);
     
-    if (slice.span_len(text) == 6 && slice.span_len(part) == 3 &&
+    if (view.len(text) == 6 && view.len(part) == 3 &&
         part[0] == 'e' && part[2] == 'l') {
         return 0;
     }
@@ -154,7 +157,7 @@ i64 main() {
 }
 ```
 
-If you need a slice that exactly covers the visible text without the terminator, you must explicitly subslice it: `[]const char name = subslice("cyan", 0, 4);`.
+If you need a slice that exactly covers the visible text without the terminator, you must explicitly subslice it, for example `[]const char name = view.subslice("cyan", 0, 4);`.
 
 ---
 
@@ -164,6 +167,7 @@ Cyan uses explicit import paths to bring code from other files or the standard l
 
 - **Local imports** use relative dotted paths based on the project's directory structure.
 - **Builtin imports** are prefixed with a `/` and provide access to the standard library.
+- Operations such as `len(...)`, `subslice(...)`, atomics, and `fn_ptr(...)` are surfaced through stdlib imports like `/std.view`, `/std.atomic`, `/std.abi`, and `/std.thread` rather than being globally reserved names.
 
 `docs/snippets/modules_demo.cyan`:
 ```cyan
@@ -272,6 +276,8 @@ This is Cyan's most distinctive feature. In C, zero-copy parsers often rely on r
 In Cyan, this relationship is tracked formally by the compiler using the **`depends`** clause. When a function returns a view (a borrow or a slice), the signature must explicitly declare which input parameter owns the memory that the returned view points to. This allows the compiler to enforce lifetimes across function boundaries.
 
 ### Single Return Views
+
+These examples assume `import /std.view;`.
 
 ```cyan
 struct Split {
@@ -546,6 +552,8 @@ If you try to pass an ordinary raw pointer (`i64*`) across a thread boundary, Cy
 If you are implementing low-level lock-free coordination, you must explicitly annotate your pointers as `shared T*`. Atomic operations exclusively accept this `shared` qualifier:
 
 ```cyan
+import /std.atomic;
+
 i64 counter = 0;
 shared i64* total;
 unchecked {

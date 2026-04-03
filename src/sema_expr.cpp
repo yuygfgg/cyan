@@ -1737,41 +1737,134 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
 
     ast::FunctionDecl* function = nullptr;
     const auto callee_is_qualified = call.callee.find('.') != std::string::npos;
+    const ast::FunctionDecl* builtin_decl = nullptr;
+    ast::BuiltinCallKind builtin_decl_kind = ast::BuiltinCallKind::None;
+    if (auto* visible_function = findVisibleFunction(call.callee);
+        visible_function != nullptr &&
+        visible_function->builtin_lowering.has_value()) {
+        builtin_decl = visible_function;
+        builtin_decl_kind = visible_function->builtin_lowering->builtin_kind;
+    } else if (auto* visible_template =
+                   findVisibleFunctionTemplate(call.callee);
+               visible_template != nullptr &&
+               visible_template->builtin_lowering.has_value()) {
+        if (call.explicit_type_arguments.empty()) {
+            builtin_decl = visible_template;
+            builtin_decl_kind =
+                visible_template->builtin_lowering->builtin_kind;
+        } else {
+            TypeBindings type_bindings;
+            if (call.explicit_type_arguments.size() !=
+                visible_template->type_parameters.size()) {
+                return unexpected_result<const Type*>(
+                    "wrong number of explicit type arguments for '" +
+                        call.callee + "'",
+                    expr.range);
+            }
+            for (std::size_t index = 0;
+                 index < call.explicit_type_arguments.size(); ++index) {
+                auto resolved_type =
+                    resolveType(*call.explicit_type_arguments[index]);
+                if (!resolved_type) {
+                    return std::unexpected(resolved_type.error());
+                }
+                type_bindings.emplace(visible_template->type_parameters[index],
+                                      *resolved_type);
+            }
+
+            auto instantiated =
+                instantiateFunctionTemplate(*visible_template, type_bindings);
+            if (!instantiated) {
+                return std::unexpected(instantiated.error());
+            }
+            function = *instantiated;
+            builtin_decl = function;
+            builtin_decl_kind = function->builtin_lowering->builtin_kind;
+
+            auto ensured_signature = ensureFunctionSignature(*function);
+            if (!ensured_signature) {
+                return std::unexpected(ensured_signature.error());
+            }
+            if (function->resolved_return_type == nullptr ||
+                std::ranges::any_of(
+                    function->parameters, [](const ast::Parameter& parameter) {
+                        return parameter.resolved_type == nullptr;
+                    })) {
+                return unexpected_result<const Type*>(
+                    "cannot call a function with an invalid type signature",
+                    expr.range);
+            }
+
+            if (call.arguments.size() == function->parameters.size()) {
+                for (std::size_t index = 0; index < call.arguments.size();
+                     ++index) {
+                    auto prechecked_argument =
+                        analyzeExpr(state, *call.arguments[index],
+                                    function->parameters[index].resolved_type);
+                    if (!prechecked_argument) {
+                        return std::unexpected(prechecked_argument.error());
+                    }
+                }
+            }
+        }
+    }
     const auto builtin_available =
         !callee_is_qualified && findVisibleFunction(call.callee) == nullptr &&
         findVisibleFunctionTemplate(call.callee) == nullptr &&
         findVisibleInterface(call.callee) == nullptr &&
         !findVisibleEnumVariant(call.callee).has_value() &&
         findVisibleTemplateEnumVariants(call.callee).empty();
-    if ((call.callee == "atomic_relaxed" || call.callee == "atomic_acquire" ||
-         call.callee == "atomic_release" || call.callee == "atomic_acq_rel" ||
-         call.callee == "atomic_seq_cst") &&
-        builtin_available) {
-        if (!call.explicit_type_arguments.empty()) {
+    const auto bind_builtin_decl = [&]() -> void {
+        if (builtin_decl != nullptr) {
+            call.function = builtin_decl;
+        }
+    };
+    const auto builtin_decl_is_template_instance =
+        builtin_decl != nullptr && builtin_decl->template_decl != nullptr;
+    if (((call.callee == "__builtin_atomic_relaxed" ||
+          call.callee == "__builtin_atomic_acquire" ||
+          call.callee == "__builtin_atomic_release" ||
+          call.callee == "__builtin_atomic_acq_rel" ||
+          call.callee == "__builtin_atomic_seq_cst") &&
+         builtin_available) ||
+        builtin_decl_kind == ast::BuiltinCallKind::AtomicRelaxedOrder ||
+        builtin_decl_kind == ast::BuiltinCallKind::AtomicAcquireOrder ||
+        builtin_decl_kind == ast::BuiltinCallKind::AtomicReleaseOrder ||
+        builtin_decl_kind == ast::BuiltinCallKind::AtomicAcqRelOrder ||
+        builtin_decl_kind == ast::BuiltinCallKind::AtomicSeqCstOrder) {
+        if (!call.explicit_type_arguments.empty() &&
+            !builtin_decl_is_template_instance) {
             return unexpected_result<const Type*>(
                 "explicit type arguments require a generic function",
                 expr.range);
         }
         if (!call.arguments.empty()) {
             return unexpected_result<const Type*>(
-                call.callee + "() expects exactly zero arguments", expr.range);
+                std::string(builtin_decl != nullptr ? builtin_decl->name
+                                                    : "atomic order") +
+                    "() expects exactly zero arguments",
+                expr.range);
         }
-        if (call.callee == "atomic_relaxed") {
+        if (builtin_decl_kind != ast::BuiltinCallKind::None) {
+            call.builtin_kind = builtin_decl_kind;
+        } else if (call.callee == "__builtin_atomic_relaxed") {
             call.builtin_kind = ast::BuiltinCallKind::AtomicRelaxedOrder;
-        } else if (call.callee == "atomic_acquire") {
+        } else if (call.callee == "__builtin_atomic_acquire") {
             call.builtin_kind = ast::BuiltinCallKind::AtomicAcquireOrder;
-        } else if (call.callee == "atomic_release") {
+        } else if (call.callee == "__builtin_atomic_release") {
             call.builtin_kind = ast::BuiltinCallKind::AtomicReleaseOrder;
-        } else if (call.callee == "atomic_acq_rel") {
+        } else if (call.callee == "__builtin_atomic_acq_rel") {
             call.builtin_kind = ast::BuiltinCallKind::AtomicAcqRelOrder;
         } else {
             call.builtin_kind = ast::BuiltinCallKind::AtomicSeqCstOrder;
         }
+        bind_builtin_decl();
         expr.resolved_type = types.i64Type();
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (call.callee == "len" && builtin_available) {
+    if (((call.callee == "__builtin_len") && builtin_available) ||
+        builtin_decl_kind == ast::BuiltinCallKind::Len) {
         if (call.arguments.size() != 1) {
             return unexpected_result<const Type*>(
                 "len() expects exactly one argument", expr.range);
@@ -1788,13 +1881,16 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                 "len() requires an array or slice argument", expr.range);
         }
 
+        bind_builtin_decl();
         call.builtin_kind = ast::BuiltinCallKind::Len;
         expr.resolved_type = types.i64Type();
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (call.callee == "raw_data" && builtin_available) {
-        if (!call.explicit_type_arguments.empty()) {
+    if (((call.callee == "__builtin_raw_data") && builtin_available) ||
+        builtin_decl_kind == ast::BuiltinCallKind::RawData) {
+        if (!call.explicit_type_arguments.empty() &&
+            !builtin_decl_is_template_instance) {
             return unexpected_result<const Type*>(
                 "explicit type arguments require a generic function",
                 expr.range);
@@ -1814,12 +1910,14 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                 "raw_data() requires a slice argument", expr.range);
         }
 
+        bind_builtin_decl();
         call.builtin_kind = ast::BuiltinCallKind::RawData;
         expr.resolved_type = types.getPointer(types.getConst(types.voidType()));
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (call.callee == "fn_ptr" && builtin_available) {
+    if (((call.callee == "__builtin_fn_ptr") && builtin_available) ||
+        builtin_decl_kind == ast::BuiltinCallKind::FunctionPointer) {
         if (state.unchecked_depth == 0) {
             return unexpected_result<const Type*>(
                 "fn_ptr() is only allowed in unchecked blocks", expr.range);
@@ -1836,6 +1934,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                 "fn_ptr() requires a function name argument", expr.range);
         }
 
+        ast::FunctionDecl* target_function = nullptr;
         if (auto* direct_function = findVisibleFunction(target_name->name);
             direct_function != nullptr) {
             if (!call.explicit_type_arguments.empty()) {
@@ -1844,7 +1943,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                     "function target",
                     expr.range);
             }
-            call.function = direct_function;
+            target_function = direct_function;
         } else if (auto* template_decl =
                        findVisibleFunctionTemplate(target_name->name);
                    template_decl != nullptr) {
@@ -1873,25 +1972,28 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
             if (!instantiated) {
                 return std::unexpected(instantiated.error());
             }
-            call.function = *instantiated;
+            target_function = *instantiated;
         } else {
             return unexpected_result<const Type*>(
                 "fn_ptr() requires a visible function target", expr.range);
         }
 
-        if (call.function != nullptr &&
-            call.function->intrinsic_lowering.has_value()) {
+        if (target_function != nullptr &&
+            target_function->intrinsic_lowering.has_value()) {
             return unexpected_result<const Type*>(
                 "fn_ptr() cannot target intrinsic-lowered functions",
                 expr.range);
         }
 
+        bind_builtin_decl();
+        call.builtin_target_function = target_function;
         call.builtin_kind = ast::BuiltinCallKind::FunctionPointer;
         expr.resolved_type = types.getPointer(types.voidType());
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (call.callee == "subslice" && builtin_available) {
+    if (((call.callee == "__builtin_subslice") && builtin_available) ||
+        builtin_decl_kind == ast::BuiltinCallKind::Subslice) {
         if (call.arguments.size() != 3) {
             return unexpected_result<const Type*>(
                 "subslice() expects exactly three arguments", expr.range);
@@ -2007,6 +2109,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
             result_type = expected_type;
         }
 
+        bind_builtin_decl();
         call.builtin_kind = ast::BuiltinCallKind::Subslice;
         expr.resolved_type = result_type;
         expr.resolved_place.reset();
@@ -2040,8 +2143,10 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         }
         return expr.resolved_type;
     }
-    if (call.callee == "atomic_load" && builtin_available) {
-        if (!call.explicit_type_arguments.empty()) {
+    if (((call.callee == "__builtin_atomic_load") && builtin_available) ||
+        builtin_decl_kind == ast::BuiltinCallKind::AtomicLoad) {
+        if (!call.explicit_type_arguments.empty() &&
+            !builtin_decl_is_template_instance) {
             return unexpected_result<const Type*>(
                 "explicit type arguments require a generic function",
                 expr.range);
@@ -2066,13 +2171,16 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
             return std::unexpected(order.error());
         }
         static_cast<void>(*order);
+        bind_builtin_decl();
         call.builtin_kind = ast::BuiltinCallKind::AtomicLoad;
         expr.resolved_type = (*pointer_type)->element_type;
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (call.callee == "atomic_store" && builtin_available) {
-        if (!call.explicit_type_arguments.empty()) {
+    if (((call.callee == "__builtin_atomic_store") && builtin_available) ||
+        builtin_decl_kind == ast::BuiltinCallKind::AtomicStore) {
+        if (!call.explicit_type_arguments.empty() &&
+            !builtin_decl_is_template_instance) {
             return unexpected_result<const Type*>(
                 "explicit type arguments require a generic function",
                 expr.range);
@@ -2102,13 +2210,16 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
             return std::unexpected(order.error());
         }
         static_cast<void>(*order);
+        bind_builtin_decl();
         call.builtin_kind = ast::BuiltinCallKind::AtomicStore;
         expr.resolved_type = types.voidType();
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (call.callee == "atomic_exchange" && builtin_available) {
-        if (!call.explicit_type_arguments.empty()) {
+    if (((call.callee == "__builtin_atomic_exchange") && builtin_available) ||
+        builtin_decl_kind == ast::BuiltinCallKind::AtomicExchange) {
+        if (!call.explicit_type_arguments.empty() &&
+            !builtin_decl_is_template_instance) {
             return unexpected_result<const Type*>(
                 "explicit type arguments require a generic function",
                 expr.range);
@@ -2139,13 +2250,17 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
             return std::unexpected(order.error());
         }
         static_cast<void>(*order);
+        bind_builtin_decl();
         call.builtin_kind = ast::BuiltinCallKind::AtomicExchange;
         expr.resolved_type = (*pointer_type)->element_type;
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (call.callee == "atomic_compare_exchange" && builtin_available) {
-        if (!call.explicit_type_arguments.empty()) {
+    if (((call.callee == "__builtin_atomic_compare_exchange") &&
+         builtin_available) ||
+        builtin_decl_kind == ast::BuiltinCallKind::AtomicCompareExchange) {
+        if (!call.explicit_type_arguments.empty() &&
+            !builtin_decl_is_template_instance) {
             return unexpected_result<const Type*>(
                 "explicit type arguments require a generic function",
                 expr.range);
@@ -2190,25 +2305,35 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         if (!order_pair_valid) {
             return std::unexpected(order_pair_valid.error());
         }
+        bind_builtin_decl();
         call.builtin_kind = ast::BuiltinCallKind::AtomicCompareExchange;
         expr.resolved_type = (*pointer_type)->element_type;
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if ((call.callee == "atomic_fetch_add" ||
-         call.callee == "atomic_fetch_sub" ||
-         call.callee == "atomic_fetch_and" ||
-         call.callee == "atomic_fetch_or" ||
-         call.callee == "atomic_fetch_xor") &&
-        builtin_available) {
-        if (!call.explicit_type_arguments.empty()) {
+    if (((call.callee == "__builtin_atomic_fetch_add" ||
+          call.callee == "__builtin_atomic_fetch_sub" ||
+          call.callee == "__builtin_atomic_fetch_and" ||
+          call.callee == "__builtin_atomic_fetch_or" ||
+          call.callee == "__builtin_atomic_fetch_xor") &&
+         builtin_available) ||
+        builtin_decl_kind == ast::BuiltinCallKind::AtomicFetchAdd ||
+        builtin_decl_kind == ast::BuiltinCallKind::AtomicFetchSub ||
+        builtin_decl_kind == ast::BuiltinCallKind::AtomicFetchAnd ||
+        builtin_decl_kind == ast::BuiltinCallKind::AtomicFetchOr ||
+        builtin_decl_kind == ast::BuiltinCallKind::AtomicFetchXor) {
+        if (!call.explicit_type_arguments.empty() &&
+            !builtin_decl_is_template_instance) {
             return unexpected_result<const Type*>(
                 "explicit type arguments require a generic function",
                 expr.range);
         }
         if (call.arguments.size() != 3) {
             return unexpected_result<const Type*>(
-                call.callee + "() expects exactly three arguments", expr.range);
+                std::string(builtin_decl != nullptr ? builtin_decl->name
+                                                    : "atomic_fetch") +
+                    "() expects exactly three arguments",
+                expr.range);
         }
         auto pointer_type = require_atomic_pointer(*call.arguments[0], true);
         if (!pointer_type) {
@@ -2216,7 +2341,9 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         }
         if (!types.isInteger((*pointer_type)->element_type)) {
             return unexpected_result<const Type*>(
-                call.callee + "() requires an integer pointee type",
+                std::string(builtin_decl != nullptr ? builtin_decl->name
+                                                    : "atomic_fetch") +
+                    "() requires an integer pointee type",
                 call.arguments[0]->range);
         }
         auto value = consumeValue(state, *call.arguments[1],
@@ -2230,13 +2357,16 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
             return std::unexpected(order.error());
         }
         static_cast<void>(*order);
-        if (call.callee == "atomic_fetch_add") {
+        bind_builtin_decl();
+        if (builtin_decl_kind != ast::BuiltinCallKind::None) {
+            call.builtin_kind = builtin_decl_kind;
+        } else if (call.callee == "__builtin_atomic_fetch_add") {
             call.builtin_kind = ast::BuiltinCallKind::AtomicFetchAdd;
-        } else if (call.callee == "atomic_fetch_sub") {
+        } else if (call.callee == "__builtin_atomic_fetch_sub") {
             call.builtin_kind = ast::BuiltinCallKind::AtomicFetchSub;
-        } else if (call.callee == "atomic_fetch_and") {
+        } else if (call.callee == "__builtin_atomic_fetch_and") {
             call.builtin_kind = ast::BuiltinCallKind::AtomicFetchAnd;
-        } else if (call.callee == "atomic_fetch_or") {
+        } else if (call.callee == "__builtin_atomic_fetch_or") {
             call.builtin_kind = ast::BuiltinCallKind::AtomicFetchOr;
         } else {
             call.builtin_kind = ast::BuiltinCallKind::AtomicFetchXor;
@@ -2245,8 +2375,10 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (call.callee == "atomic_fence" && builtin_available) {
-        if (!call.explicit_type_arguments.empty()) {
+    if (((call.callee == "__builtin_atomic_fence") && builtin_available) ||
+        builtin_decl_kind == ast::BuiltinCallKind::AtomicFence) {
+        if (!call.explicit_type_arguments.empty() &&
+            !builtin_decl_is_template_instance) {
             return unexpected_result<const Type*>(
                 "explicit type arguments require a generic function",
                 expr.range);
@@ -2261,6 +2393,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
             return std::unexpected(order.error());
         }
         static_cast<void>(*order);
+        bind_builtin_decl();
         call.builtin_kind = ast::BuiltinCallKind::AtomicFence;
         expr.resolved_type = types.voidType();
         expr.resolved_place.reset();

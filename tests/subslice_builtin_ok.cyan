@@ -1,3 +1,4 @@
+import /std.view;
 []char middle(&char[12] text) {
     return subslice(text, 1, 3);
 }

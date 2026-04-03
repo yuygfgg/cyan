@@ -1,0 +1,10 @@
+export extern {
+    //@lower builtin=len
+    i64 len<T>([]T values);
+
+    //@lower builtin=raw_data
+    const void* raw_data<T>([]T values);
+
+    //@lower builtin=subslice
+    []T subslice<T>([]T values, i64 start, i64 count);
+}

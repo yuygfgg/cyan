@@ -1,3 +1,4 @@
+import /std.view;
 struct Split {
     []const char head;
     []const char tail;

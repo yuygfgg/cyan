@@ -1,0 +1,4 @@
+export extern {
+    //@lower builtin=fn_ptr
+    void* fn_ptr(void* target);
+}

@@ -1,3 +1,4 @@
+import /std.view;
 struct SliceValue {
     []const char text;
 };

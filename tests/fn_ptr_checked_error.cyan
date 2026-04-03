@@ -1,3 +1,4 @@
+import /std.abi;
 i64 plus_one(i64 value) {
     return value + 1;
 }

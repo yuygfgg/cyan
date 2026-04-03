@@ -1,3 +1,4 @@
+import /std.view;
 struct View {
     []const char data;
 };

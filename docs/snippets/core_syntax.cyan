@@ -1,3 +1,4 @@
+import /std.view;
 struct Pair {
     i64 left;
     i64 right;

@@ -1,3 +1,4 @@
+import /std.atomic;
 import /std.thread;
 
 struct SignalTask {

@@ -1,0 +1,7 @@
+import /std.view as view;
+
+void test() {
+    []i64 values = [1, 2, 3];
+    view.len<bool>(values);
+}
+

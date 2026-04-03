@@ -44,11 +44,17 @@ static constexpr char k_std_ryu_source[] = {
 static constexpr char k_std_ptr_source[] = {
 #embed "../stdlib/std/ptr.cyan"
     , 0};
+static constexpr char k_std_abi_source[] = {
+#embed "../stdlib/std/abi.cyan"
+    , 0};
+static constexpr char k_std_atomic_source[] = {
+#embed "../stdlib/std/atomic.cyan"
+    , 0};
 static constexpr char k_std_rc_source[] = {
 #embed "../stdlib/std/rc.cyan"
     , 0};
-static constexpr char k_std_slice_source[] = {
-#embed "../stdlib/std/slice.cyan"
+static constexpr char k_std_view_source[] = {
+#embed "../stdlib/std/view.cyan"
     , 0};
 static constexpr char k_std_sync_source[] = {
 #embed "../stdlib/std/sync.cyan"
@@ -57,11 +63,12 @@ static constexpr char k_std_thread_source[] = {
 #embed "../stdlib/std/thread.cyan"
     , 0};
 
-struct PendingIntrinsicLowering {
+struct PendingLowering {
     SourceRange range;
     std::size_t target_offset = 0;
     std::string intrinsic_name;
     ast::LoweringConstantKind constant_kind = ast::LoweringConstantKind::None;
+    ast::BuiltinCallKind builtin_kind = ast::BuiltinCallKind::None;
     std::optional<std::string> intrinsic_return_spec;
     std::optional<std::size_t> return_argument_index;
     std::vector<ast::IntrinsicLoweringArgument> argument_overrides;
@@ -92,10 +99,14 @@ auto builtin_module_sources()
              std::string_view(k_std_ryu_source, sizeof(k_std_ryu_source) - 1)},
             {"std.ptr",
              std::string_view(k_std_ptr_source, sizeof(k_std_ptr_source) - 1)},
+            {"std.abi",
+             std::string_view(k_std_abi_source, sizeof(k_std_abi_source) - 1)},
+            {"std.atomic", std::string_view(k_std_atomic_source,
+                                            sizeof(k_std_atomic_source) - 1)},
             {"std.rc",
              std::string_view(k_std_rc_source, sizeof(k_std_rc_source) - 1)},
-            {"std.slice", std::string_view(k_std_slice_source,
-                                           sizeof(k_std_slice_source) - 1)},
+            {"std.view", std::string_view(k_std_view_source,
+                                          sizeof(k_std_view_source) - 1)},
             {"std.sync",
              std::string_view(k_std_sync_source, sizeof(k_std_sync_source) - 1)},
             {"std.thread", std::string_view(k_std_thread_source,
@@ -154,6 +165,19 @@ auto skip_decl_prefix(std::string_view text, std::size_t offset)
     if (starts_with_keyword(text, offset, "export")) {
         offset = skip_trivia(text, offset + std::string_view("export").size());
     }
+    while (true) {
+        if (starts_with_keyword(text, offset, "const")) {
+            offset =
+                skip_trivia(text, offset + std::string_view("const").size());
+            continue;
+        }
+        if (starts_with_keyword(text, offset, "shared")) {
+            offset =
+                skip_trivia(text, offset + std::string_view("shared").size());
+            continue;
+        }
+        break;
+    }
     return offset;
 }
 
@@ -186,10 +210,41 @@ auto parse_return_argument_index(std::string_view text)
     return *value;
 }
 
-auto parse_intrinsic_lowering(const SourceFile& source, SourceRange range,
-                              std::string_view body)
-    -> std::expected<PendingIntrinsicLowering, Diagnostic> {
-    PendingIntrinsicLowering lowering;
+auto parse_builtin_lowering_kind(std::string_view text)
+    -> std::optional<ast::BuiltinCallKind> {
+    using enum ast::BuiltinCallKind;
+    static const auto builtins =
+        std::unordered_map<std::string_view, ast::BuiltinCallKind>{
+            {"len", Len},
+            {"subslice", Subslice},
+            {"raw_data", RawData},
+            {"fn_ptr", FunctionPointer},
+            {"atomic_relaxed", AtomicRelaxedOrder},
+            {"atomic_acquire", AtomicAcquireOrder},
+            {"atomic_release", AtomicReleaseOrder},
+            {"atomic_acq_rel", AtomicAcqRelOrder},
+            {"atomic_seq_cst", AtomicSeqCstOrder},
+            {"atomic_load", AtomicLoad},
+            {"atomic_store", AtomicStore},
+            {"atomic_exchange", AtomicExchange},
+            {"atomic_compare_exchange", AtomicCompareExchange},
+            {"atomic_fetch_add", AtomicFetchAdd},
+            {"atomic_fetch_sub", AtomicFetchSub},
+            {"atomic_fetch_and", AtomicFetchAnd},
+            {"atomic_fetch_or", AtomicFetchOr},
+            {"atomic_fetch_xor", AtomicFetchXor},
+            {"atomic_fence", AtomicFence},
+        };
+    if (const auto it = builtins.find(text); it != builtins.end()) {
+        return it->second;
+    }
+    return std::nullopt;
+}
+
+auto parse_lowering(const SourceFile& source, SourceRange range,
+                    std::string_view body)
+    -> std::expected<PendingLowering, Diagnostic> {
+    PendingLowering lowering;
     lowering.range = range;
     lowering.target_offset = skip_decl_prefix(source.text(), range.end);
 
@@ -233,6 +288,16 @@ auto parse_intrinsic_lowering(const SourceFile& source, SourceRange range,
                                                   std::string(value) + "'",
                                               range));
         }
+        if (key == "builtin") {
+            const auto builtin_kind = parse_builtin_lowering_kind(value);
+            if (!builtin_kind.has_value()) {
+                return std::unexpected(Diagnostic("unknown lowering builtin '" +
+                                                      std::string(value) + "'",
+                                                  range));
+            }
+            lowering.builtin_kind = *builtin_kind;
+            continue;
+        }
         if (key == "llvm_return") {
             lowering.intrinsic_return_spec = std::string(value);
             continue;
@@ -267,18 +332,24 @@ auto parse_intrinsic_lowering(const SourceFile& source, SourceRange range,
     const auto has_intrinsic = !lowering.intrinsic_name.empty();
     const auto has_constant =
         lowering.constant_kind != ast::LoweringConstantKind::None;
-    if (has_intrinsic == has_constant) {
+    const auto has_builtin =
+        lowering.builtin_kind != ast::BuiltinCallKind::None;
+    const auto lowering_modes =
+        static_cast<int>(has_intrinsic) + static_cast<int>(has_constant) +
+        static_cast<int>(has_builtin);
+    if (lowering_modes != 1) {
         return std::unexpected(Diagnostic(
-            "lowering directive requires exactly one of intrinsic=... or "
-            "constant=...",
+            "lowering directive requires exactly one of intrinsic=..., "
+            "constant=..., or builtin=...",
             range));
     }
-    if (has_constant && (lowering.intrinsic_return_spec.has_value() ||
-                         lowering.return_argument_index.has_value() ||
-                         !lowering.argument_overrides.empty())) {
+    if ((has_constant || has_builtin) &&
+        (lowering.intrinsic_return_spec.has_value() ||
+         lowering.return_argument_index.has_value() ||
+         !lowering.argument_overrides.empty())) {
         return std::unexpected(Diagnostic(
-            "constant lowerings do not support llvm_return=..., return=..., "
-            "or argN=...",
+            "constant and builtin lowerings do not support llvm_return=..., "
+            "return=..., or argN=...",
             range));
     }
     if (lowering.target_offset >= source.text().size()) {
@@ -288,9 +359,9 @@ auto parse_intrinsic_lowering(const SourceFile& source, SourceRange range,
     return lowering;
 }
 
-auto collect_intrinsic_lowerings(const SourceFile& source)
-    -> std::pair<std::vector<PendingIntrinsicLowering>, DiagnosticList> {
-    std::vector<PendingIntrinsicLowering> lowerings;
+auto collect_lowerings(const SourceFile& source)
+    -> std::pair<std::vector<PendingLowering>, DiagnosticList> {
+    std::vector<PendingLowering> lowerings;
     DiagnosticList diagnostics;
 
     const auto text = source.text();
@@ -306,7 +377,7 @@ auto collect_intrinsic_lowerings(const SourceFile& source)
         if (trimmed.starts_with("//")) {
             const auto body = trim_ascii(trimmed.substr(2));
             if (body.starts_with("@lower")) {
-                auto parsed = parse_intrinsic_lowering(
+                auto parsed = parse_lowering(
                     source, source.range(line_begin, line_end), body);
                 if (!parsed) {
                     diagnostics.push_back(parsed.error());
@@ -322,35 +393,38 @@ auto collect_intrinsic_lowerings(const SourceFile& source)
     return {std::move(lowerings), std::move(diagnostics)};
 }
 
-auto apply_intrinsic_lowerings(
-    ast::Module& module, const std::vector<PendingIntrinsicLowering>& lowerings)
+auto apply_lowerings(ast::Module& module,
+                     const std::vector<PendingLowering>& lowerings)
     -> DiagnosticList {
     DiagnosticList diagnostics;
-    std::unordered_map<std::size_t, ast::Decl*> decls_by_begin;
-    decls_by_begin.reserve(module.declarations.size());
-    for (auto& decl : module.declarations) {
-        decls_by_begin.emplace(
-            std::visit([](auto& value) { return value.range.begin; }, decl),
-            &decl);
-    }
-
     for (const auto& lowering : lowerings) {
-        const auto decl_it = decls_by_begin.find(lowering.target_offset);
-        if (decl_it == decls_by_begin.end()) {
+        ast::Decl* target_decl = nullptr;
+        for (auto& decl : module.declarations) {
+            const auto decl_begin =
+                std::visit([](auto& value) { return value.range.begin; }, decl);
+            if (decl_begin != lowering.target_offset) {
+                continue;
+            }
+            target_decl = &decl;
+            break;
+        }
+
+        if (target_decl == nullptr) {
             diagnostics.push_back(Diagnostic(
                 "lowering directive must immediately precede a declaration",
                 lowering.range));
             continue;
         }
 
-        auto* function = std::get_if<ast::FunctionDecl>(decl_it->second);
+        auto* function = std::get_if<ast::FunctionDecl>(target_decl);
         if (function == nullptr) {
             diagnostics.push_back(Diagnostic(
                 "lowering directives may only be attached to functions",
                 lowering.range));
             continue;
         }
-        if (function->intrinsic_lowering.has_value()) {
+        if (function->intrinsic_lowering.has_value() ||
+            function->builtin_lowering.has_value()) {
             diagnostics.push_back(
                 Diagnostic("duplicate lowering directive for function '" +
                                function->name + "'",
@@ -358,14 +432,21 @@ auto apply_intrinsic_lowerings(
             continue;
         }
 
-        function->intrinsic_lowering = ast::IntrinsicLowering{
-            .range = lowering.range,
-            .intrinsic_name = lowering.intrinsic_name,
-            .constant_kind = lowering.constant_kind,
-            .intrinsic_return_spec = lowering.intrinsic_return_spec,
-            .return_argument_index = lowering.return_argument_index,
-            .argument_overrides = lowering.argument_overrides,
-        };
+        if (lowering.builtin_kind != ast::BuiltinCallKind::None) {
+            function->builtin_lowering = ast::BuiltinLowering{
+                .range = lowering.range,
+                .builtin_kind = lowering.builtin_kind,
+            };
+        } else {
+            function->intrinsic_lowering = ast::IntrinsicLowering{
+                .range = lowering.range,
+                .intrinsic_name = lowering.intrinsic_name,
+                .constant_kind = lowering.constant_kind,
+                .intrinsic_return_spec = lowering.intrinsic_return_spec,
+                .return_argument_index = lowering.return_argument_index,
+                .argument_overrides = lowering.argument_overrides,
+            };
+        }
     }
     return diagnostics;
 }
@@ -446,12 +527,11 @@ auto parse_source(const SourceFile& source)
 
     Parser parser(source, std::move(*tokens));
     auto module = parser.parseModule();
-    auto [lowerings, lowering_diagnostics] =
-        collect_intrinsic_lowerings(source);
+    auto [lowerings, lowering_diagnostics] = collect_lowerings(source);
     module.diagnostics.insert(module.diagnostics.end(),
                               lowering_diagnostics.begin(),
                               lowering_diagnostics.end());
-    auto apply_diagnostics = apply_intrinsic_lowerings(module, lowerings);
+    auto apply_diagnostics = apply_lowerings(module, lowerings);
     module.diagnostics.insert(module.diagnostics.end(),
                               apply_diagnostics.begin(),
                               apply_diagnostics.end());

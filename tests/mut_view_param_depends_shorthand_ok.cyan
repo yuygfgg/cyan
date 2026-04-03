@@ -1,3 +1,4 @@
+import /std.view;
 struct Pair {
     []const char left;
     []const char right;

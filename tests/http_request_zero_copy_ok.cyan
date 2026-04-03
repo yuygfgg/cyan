@@ -1,3 +1,4 @@
+import /std.view;
 extern {
     i64 mock_http_read(char* out, i64 capacity);
 }

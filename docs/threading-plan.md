@@ -22,7 +22,8 @@ Phase 1 is implemented:
 - `/std.thread` now exposes owned-task spawn/join APIs
 - the native runtime now has a small executor shared by `parallel_do(...)` and
   `spawn(...)`
-- the compiler gained one general builtin, `fn_ptr(...)`
+- `/std.abi` now exposes builtin-lowered `fn_ptr(...)`, which `/std.thread`
+  uses internally
 - no `spawn`-specific compiler lowering was added
 
 ## Surface API
@@ -102,9 +103,12 @@ Important details:
 - if the runtime cannot enqueue a task, stdlib falls back to inline
   run-and-drop so task semantics still complete
 
-No extra stdlib module was required for phase 1. Existing `Arc<T>`, `Mutex<T>`,
-atomics, and `shared T*` remain the ways to communicate results back to the
-caller.
+The stdlib split is now explicit:
+
+- `/std.thread` owns task execution APIs
+- `/std.abi` owns the raw function-address escape hatch `fn_ptr(...)`
+- `/std.atomic` owns memory-order helpers and atomic operations
+- `/std.sync` remains the safe `Arc<T>` and `Mutex<T>` layer
 
 ## Runtime Work
 
@@ -159,10 +163,11 @@ join-state. That avoids dead time and makes nested parallel usage less fragile.
 
 ## Compiler Work
 
-The compiler needed one minimal general-purpose feature:
+The compiler needed one minimal general-purpose feature exposed through
+`/std.abi`:
 
 ```cyan
-fn_ptr(...)
+/std.abi.fn_ptr(...)
 ```
 
 Rules:
@@ -179,14 +184,16 @@ fn_ptr(plus_one)
 fn_ptr<T>(spawn_run_once)
 ```
 
-Codegen lowers this to the function symbol address, bitcast to `void*`.
+Internally the compiler reserves `__builtin_fn_ptr(...)`, while user-facing
+code reaches the feature through `/std.abi.fn_ptr(...)`. Codegen lowers the
+call to the function symbol address, bitcast to `void*`.
 
 This is enough for runtime callback registration. It is intentionally smaller
 than adding first-class typed function pointer support.
 
 The compiler does not know anything special about `spawn(...)`. It only knows
 how to instantiate normal generic functions and how to materialize raw function
-addresses for `fn_ptr(...)`.
+addresses for `/std.abi.fn_ptr(...)`.
 
 ## Language Changes
 
@@ -205,8 +212,9 @@ That means:
 - `spawnable = run_once + thread_sendable` is just another interface alias
 - `spawn<T>(T task)` is just another generic stdlib function
 
-The only new compiler-exposed surface is `fn_ptr(...)`, which is an unchecked
-escape hatch, not a new type-system feature.
+The only new compiler-exposed surface is builtin lowering for
+`/std.abi.fn_ptr(...)`, which is an unchecked escape hatch, not a new
+type-system feature.
 
 ## Safety Boundary
 
@@ -261,7 +269,7 @@ The chosen design is:
 - keep the native runtime
 - keep `parallel_do(...)` borrowed and blocking
 - add owned `spawn(...)` in stdlib, not in the compiler
-- pass owned-task thunks into the runtime through `fn_ptr(...)`
+- pass owned-task thunks into the runtime through `/std.abi.fn_ptr(...)`
 - keep the compiler change minimal and general-purpose
 
 That is the smallest change set that gives Cyan a real owned-task model without

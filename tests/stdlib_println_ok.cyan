@@ -1,3 +1,4 @@
+import /std.view;
 import /std.file as file;
 import /std.mem as mem;
 import /std.println;

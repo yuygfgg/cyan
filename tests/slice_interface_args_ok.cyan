@@ -1,3 +1,4 @@
+import /std.view;
 interface<T> i64 measure(&T value);
 
 struct Box {

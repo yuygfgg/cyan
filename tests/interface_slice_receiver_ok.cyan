@@ -1,7 +1,8 @@
+import /std.view as view;
 interface<T> i64 span_len(&T value);
 
 impl span_len(&[]const char value) {
-    return len(*value);
+    return view.len(*value);
 }
 
 struct Request {
@@ -11,7 +12,7 @@ struct Request {
 i64 sum([]&span_len values) {
     i64 i = 0;
     i64 total = 0;
-    while (i < len(values)) {
+    while (i < view.len(values)) {
         total = total + span_len(values[i]);
         i++;
     }
@@ -19,8 +20,8 @@ i64 sum([]&span_len values) {
 }
 
 i64 main() {
-    []const char root = subslice("hello", 0, 5);
-    Request request = {subslice("abc", 0, 3)};
+    []const char root = view.subslice("hello", 0, 5);
+    Request request = {view.subslice("abc", 0, 3)};
     if (span_len(root) != 5) {
         return 1;
     }

@@ -1,6 +1,7 @@
 import /std.cstr as cstr;
 import /std.file as file;
 import /std.heap as heap;
+import /std.view;
 import /std.strconv as strconv;
 
 extern {

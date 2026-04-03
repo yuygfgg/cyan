@@ -1,3 +1,4 @@
+import /std.abi;
 extern {
     i64 call_i64(void* raw, i64 value);
 }

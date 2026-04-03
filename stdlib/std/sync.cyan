@@ -1,3 +1,5 @@
+import /std.atomic;
+
 extern {
     void* malloc(i64 size);
     void free(void* ptr);

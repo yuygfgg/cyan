@@ -2,7 +2,7 @@
 
 Read the documentation in this directory beside the repository.
 
-- [Cyan Tutorial](cyan-tutorial.md) is the main guide. It starts from a tiny program, then spends most of its time on slices, borrows, `switch`, `depends(...)`, interfaces, `unchecked`, `/std.println`, and `/std.ptr`.
+- [Cyan Tutorial](cyan-tutorial.md) is the main guide. It starts from a tiny program, then spends most of its time on slices, borrows, `switch`, `depends(...)`, interfaces, `unchecked`, `/std.view`, `/std.println`, `/std.atomic`, `/std.sync`, `/std.thread`, `/std.abi`, and `/std.ptr`.
 - [Zero-Copy HTTP Walkthrough](http-zero-copy-walkthrough.md) is the companion deep dive into the repository's zero-copy HTTP example and the socket-based variant in `examples/http_parse/`.
 
 The standalone teaching files live in `docs/snippets/`. Longer excerpts in the prose are adapted from repository examples and stdlib code.

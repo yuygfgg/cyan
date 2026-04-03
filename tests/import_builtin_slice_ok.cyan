@@ -1,9 +1,9 @@
-import /std.slice as slice;
+import /std.view as view;
 
 i64 main() {
     []const char text = "hello";
-    []const char part = slice.span_slice(text, 1, 3);
-    if (slice.span_len(text) == 6 && slice.span_len(part) == 3 &&
+    []const char part = view.subslice(text, 1, 3);
+    if (view.len(text) == 6 && view.len(part) == 3 &&
         part[0] == 'e' && part[2] == 'l') {
         return 0;
     }

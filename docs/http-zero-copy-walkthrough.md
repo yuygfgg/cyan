@@ -32,6 +32,9 @@ hello
 
 That one string is the entire world for the parser. The Cyan code never needs to allocate a second copy of `POST`, `/submit`, `example.test`, or `hello`. It only needs to remember where each interesting region begins and how long it is.
 
+The example file imports `/std.view` for `len(...)` and `subslice(...)`, and
+imports `/std.println` for the final formatted output.
+
 The easiest mental picture is this:
 
 ```text

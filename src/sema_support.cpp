@@ -1923,12 +1923,21 @@ auto SemanticAnalyzer::findVisibleTemplateEnumVariants(std::string_view name)
 
 auto SemanticAnalyzer::validateExternSignature(const ast::FunctionDecl& decl)
     -> std::expected<void, Diagnostic> {
-    if (decl.intrinsic_lowering.has_value() && !decl.is_extern) {
+    const auto lowering_range =
+        decl.builtin_lowering.has_value()
+            ? std::optional<SourceRange>(decl.builtin_lowering->range)
+            : decl.intrinsic_lowering.has_value()
+                  ? std::optional<SourceRange>(decl.intrinsic_lowering->range)
+                  : std::nullopt;
+    if (lowering_range.has_value() && !decl.is_extern) {
         return std::unexpected(Diagnostic(
             "lowering directives are only supported on extern functions",
-            decl.intrinsic_lowering->range));
+            *lowering_range));
     }
     if (!decl.is_extern) {
+        return {};
+    }
+    if (decl.builtin_lowering.has_value()) {
         return {};
     }
     if (!decl.type_parameters.empty()) {

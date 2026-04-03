@@ -1,3 +1,4 @@
+import /std.view;
 interface<T> void fmt(&T value, &mut i64 out);
 
 struct Box {

@@ -853,7 +853,8 @@ class LLVMCodegen {
             if (auto* function_decl = std::get_if<ast::FunctionDecl>(&decl);
                 function_decl != nullptr &&
                 function_decl->type_parameters.empty() &&
-                !function_decl->intrinsic_lowering.has_value()) {
+                !function_decl->intrinsic_lowering.has_value() &&
+                !function_decl->builtin_lowering.has_value()) {
                 std::vector<llvm::Type*> parameter_types;
                 parameter_types.reserve(function_decl->parameters.size());
                 for (const auto& parameter : function_decl->parameters) {
@@ -2365,10 +2366,10 @@ class LLVMCodegen {
     }
 
     auto emitFunctionPointerBuiltin(ast::CallExpr& call) -> llvm::Value* {
-        if (call.function == nullptr) {
+        if (call.builtin_target_function == nullptr) {
             return nullptr;
         }
-        const auto function_it = function_map.find(call.function);
+        const auto function_it = function_map.find(call.builtin_target_function);
         if (function_it == function_map.end()) {
             return nullptr;
         }

@@ -1,3 +1,4 @@
+import /std.view;
 i64 main() {
     char[4] text = "abc";
     &mut char[4] whole = &text;

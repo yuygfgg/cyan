@@ -1,0 +1,47 @@
+export extern {
+    //@lower builtin=atomic_relaxed
+    i64 atomic_relaxed();
+
+    //@lower builtin=atomic_acquire
+    i64 atomic_acquire();
+
+    //@lower builtin=atomic_release
+    i64 atomic_release();
+
+    //@lower builtin=atomic_acq_rel
+    i64 atomic_acq_rel();
+
+    //@lower builtin=atomic_seq_cst
+    i64 atomic_seq_cst();
+
+    //@lower builtin=atomic_load
+    T atomic_load<T>(shared T* ptr, i64 order);
+
+    //@lower builtin=atomic_store
+    void atomic_store<T>(shared T* ptr, T value, i64 order);
+
+    //@lower builtin=atomic_exchange
+    T atomic_exchange<T>(shared T* ptr, T value, i64 order);
+
+    //@lower builtin=atomic_compare_exchange
+    T atomic_compare_exchange<T>(shared T* ptr, T expected, T desired,
+                                 i64 success_order, i64 failure_order);
+
+    //@lower builtin=atomic_fetch_add
+    T atomic_fetch_add<T>(shared T* ptr, T value, i64 order);
+
+    //@lower builtin=atomic_fetch_sub
+    T atomic_fetch_sub<T>(shared T* ptr, T value, i64 order);
+
+    //@lower builtin=atomic_fetch_and
+    T atomic_fetch_and<T>(shared T* ptr, T value, i64 order);
+
+    //@lower builtin=atomic_fetch_or
+    T atomic_fetch_or<T>(shared T* ptr, T value, i64 order);
+
+    //@lower builtin=atomic_fetch_xor
+    T atomic_fetch_xor<T>(shared T* ptr, T value, i64 order);
+
+    //@lower builtin=atomic_fence
+    void atomic_fence(i64 order);
+}

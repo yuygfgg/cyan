@@ -1,3 +1,4 @@
+import /std.view;
 i64 inner<T>(const char* label, []T values) {
     return len(values);
 }

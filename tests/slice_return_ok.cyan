@@ -1,3 +1,4 @@
+import /std.view;
 i64 sum([]i64 values) {
     i64 i = 0;
     i64 total = 0;

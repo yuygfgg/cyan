@@ -1,3 +1,4 @@
+import /std.view;
 i64 main() {
     i64[4] arr = [1, 2, 3, 4];
     &mut i64[4] whole = &mut arr;

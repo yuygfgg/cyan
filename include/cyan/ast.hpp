@@ -213,6 +213,7 @@ struct CallExpr {
     std::vector<ExprPtr> arguments;
     BuiltinCallKind builtin_kind = BuiltinCallKind::None;
     const FunctionDecl* function = nullptr;
+    const FunctionDecl* builtin_target_function = nullptr;
     const EnumDecl* enum_decl = nullptr;
     const InterfaceDecl* dispatched_interface = nullptr;
     std::uint32_t dispatched_interface_slot = 0;
@@ -474,6 +475,11 @@ struct IntrinsicLowering {
     std::vector<IntrinsicLoweringArgument> argument_overrides;
 };
 
+struct BuiltinLowering {
+    SourceRange range;
+    BuiltinCallKind builtin_kind = BuiltinCallKind::None;
+};
+
 struct FunctionDecl {
     SourceRange range;
     TypeSyntaxPtr return_type;
@@ -495,6 +501,7 @@ struct FunctionDecl {
     std::string impl_target_name;
     const InterfaceDecl* interface_decl = nullptr;
     std::optional<IntrinsicLowering> intrinsic_lowering;
+    std::optional<BuiltinLowering> builtin_lowering;
     bool is_unchecked = false;
     bool is_export = false;
     bool is_extern = false;
