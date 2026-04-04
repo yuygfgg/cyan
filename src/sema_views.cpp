@@ -1051,8 +1051,11 @@ auto SemanticAnalyzer::validateReturnDependencies(ast::FunctionDecl& decl)
                    parameter.resolved_type->element_type != nullptr &&
                    typeContainsViews(parameter.resolved_type->element_type);
         });
+    const auto is_generic_function = !decl.type_parameters.empty() ||
+                                     decl.template_decl != nullptr ||
+                                     !decl.type_arguments.empty();
     if (!decl.return_dependencies.empty() && !returns_views &&
-        !has_mut_view_parameter) {
+        !has_mut_view_parameter && !is_generic_function) {
         return make_error("depends clause is only valid on functions whose "
                           "return type or mutable borrow parameters contain "
                           "a borrow or slice view",

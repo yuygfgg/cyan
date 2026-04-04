@@ -1,0 +1,41 @@
+import /std.result;
+import /std.view;
+
+bool span_eq([]const char left, []const char right) {
+    if (len(left) != len(right)) {
+        return false;
+    }
+
+    i64 i = 0;
+    while (i < len(left)) {
+        if (left[i] != right[i]) {
+            return false;
+        }
+        i++;
+    }
+    return true;
+}
+
+Result<[]const char, i64> tail([]const char text)
+    depends(return.Ok on text) {
+    return Ok(subslice(text, 1, len(text) - 1));
+}
+
+Result<[]const char, i64> forward([]const char text)
+    depends(return.Ok on text) {
+    []const char value = tail(text)?;
+    return Ok(value);
+}
+
+i64 main() {
+    []const char text = subslice("cyan", 0, 4);
+    switch (move forward(text)) {
+        case Ok(value):
+            if (!span_eq(value, subslice("yan", 0, 3))) {
+                return 1;
+            }
+        case Err(_):
+            return 2;
+    }
+    return 0;
+}

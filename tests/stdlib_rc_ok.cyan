@@ -1,7 +1,9 @@
 import /std.rc;
+import /std.result;
+import /std.error;
 
 i64 main() {
-    Rc<i64> value = rc_new(7);
+    Rc<i64> value = must(rc_new(7));
     {
         Rc<i64> copy = rc_clone(&value);
         if (*rc_get(&copy) != 7) {

@@ -1,0 +1,22 @@
+import /std.result;
+import /std.error;
+import /std.err;
+import /std.fmt;
+
+enum Fail {
+    Bad,
+};
+
+impl err(&Fail value) {}
+
+impl fmt(&Fail value, &mut StringBuilder out) {
+    switch (move *value) {
+        case Bad:
+            return fmt_write_cstr(out, "bad");
+    }
+}
+
+i64 main() {
+    Result<i64, Fail> value = Err(Bad());
+    return expect(value, "boom");
+}

@@ -1,9 +1,117 @@
-export extern {
-    void* fopen(const char* path, const char* mode);
-    void* fdopen(i32 fd, const char* mode);
-    i32 fclose(void* file);
-    i64 fread(char* ptr, i64 size, i64 count, void* file);
-    i64 fwrite(const char* ptr, i64 size, i64 count, void* file);
-    i32 fseek(void* file, i64 offset, i32 whence);
-    i64 ftell(void* file);
+import /std.err;
+import /std.fmt;
+import /std.ptr as stdptr;
+import /std.result;
+
+extern {
+    //@lower link_case=ret:ptr,arg0:ptr,arg1:ptr:fopen
+    void* fopen_raw(const char* path, const char* mode);
+
+    //@lower link_case=ret:ptr,arg0:i32,arg1:ptr:fdopen
+    void* fdopen_raw(i32 fd, const char* mode);
+
+    //@lower link_case=ret:i32,arg0:ptr:fclose
+    i32 fclose_raw(void* file);
+
+    //@lower link_case=ret:i64,arg0:ptr,arg1:i64,arg2:i64,arg3:ptr:fread
+    i64 fread_raw(char* ptr, i64 size, i64 count, void* file);
+
+    //@lower link_case=ret:i64,arg0:ptr,arg1:i64,arg2:i64,arg3:ptr:fwrite
+    i64 fwrite_raw(const char* ptr, i64 size, i64 count, void* file);
+
+    //@lower link_case=ret:i32,arg0:ptr,arg1:i64,arg2:i32:fseek
+    i32 fseek_raw(void* file, i64 offset, i32 whence);
+
+    //@lower link_case=ret:i64,arg0:ptr:ftell
+    i64 ftell_raw(void* file);
+
+    //@lower link_case=ret:i32,arg0:ptr:ferror
+    i32 ferror_raw(void* file);
+}
+
+export enum FileError {
+    FileOpenFailed,
+    FileFdOpenFailed,
+    FileCloseFailed,
+    FileReadFailed,
+    FileWriteFailed,
+    FileSeekFailed,
+    FileTellFailed,
+};
+
+impl err(&FileError value) {}
+
+impl fmt(&FileError value, &mut StringBuilder out) {
+    FileError copy = *value;
+    switch (move copy) {
+        case FileOpenFailed:
+            return fmt_write_cstr(out, "file open failed");
+        case FileFdOpenFailed:
+            return fmt_write_cstr(out, "file fdopen failed");
+        case FileCloseFailed:
+            return fmt_write_cstr(out, "file close failed");
+        case FileReadFailed:
+            return fmt_write_cstr(out, "file read failed");
+        case FileWriteFailed:
+            return fmt_write_cstr(out, "file write failed");
+        case FileSeekFailed:
+            return fmt_write_cstr(out, "file seek failed");
+        case FileTellFailed:
+            return fmt_write_cstr(out, "file tell failed");
+    }
+}
+
+export Result<void*, FileError> fopen(const char* path, const char* mode) {
+    void* file = fopen_raw(path, mode);
+    if (file == stdptr.null<void>()) {
+        return Err(FileOpenFailed());
+    }
+    return Ok(file);
+}
+
+export Result<void*, FileError> fdopen(i32 fd, const char* mode) {
+    void* file = fdopen_raw(fd, mode);
+    if (file == stdptr.null<void>()) {
+        return Err(FileFdOpenFailed());
+    }
+    return Ok(file);
+}
+
+export Result<Unit, FileError> fclose(void* file) {
+    if (fclose_raw(file) != 0) {
+        return Err(FileCloseFailed());
+    }
+    return Ok(Unit());
+}
+
+export Result<i64, FileError> fread(char* ptr, i64 size, i64 count, void* file) {
+    i64 actual = fread_raw(ptr, size, count, file);
+    if (actual != count && ferror_raw(file) != 0) {
+        return Err(FileReadFailed());
+    }
+    return Ok(actual);
+}
+
+export Result<i64, FileError> fwrite(const char* ptr, i64 size, i64 count,
+                                     void* file) {
+    i64 actual = fwrite_raw(ptr, size, count, file);
+    if (actual != count && ferror_raw(file) != 0) {
+        return Err(FileWriteFailed());
+    }
+    return Ok(actual);
+}
+
+export Result<Unit, FileError> fseek(void* file, i64 offset, i32 whence) {
+    if (fseek_raw(file, offset, whence) != 0) {
+        return Err(FileSeekFailed());
+    }
+    return Ok(Unit());
+}
+
+export Result<i64, FileError> ftell(void* file) {
+    i64 position = ftell_raw(file);
+    if (position < 0) {
+        return Err(FileTellFailed());
+    }
+    return Ok(position);
 }

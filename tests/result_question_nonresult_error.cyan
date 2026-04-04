@@ -1,0 +1,5 @@
+import /std.result;
+
+Result<i64, i64> bad(i64 value) {
+    return Ok(value?);
+}

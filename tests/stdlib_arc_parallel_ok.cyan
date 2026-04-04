@@ -1,4 +1,6 @@
 import /std.atomic;
+import /std.result;
+import /std.error;
 import /std.sync;
 import /std.thread;
 
@@ -29,7 +31,7 @@ i64 main() {
     }
 
     SharedState state = {total_ptr};
-    Arc<SharedState> root = arc_new(state);
+    Arc<SharedState> root = must(arc_new(state));
 
     ArcTask first = {arc_clone(&root), 5000};
     ArcTask second = {arc_clone(&root), 5000};

@@ -1,0 +1,66 @@
+import /std.result;
+
+extern {
+    void record_drop();
+    i64 dropped_count();
+}
+
+enum Fail {
+    Bad,
+};
+
+struct Guard {
+    i64 id;
+};
+
+impl drop(&mut Guard guard) {
+    record_drop();
+}
+
+Result<i64, Fail> fallible(bool ok) {
+    if (ok) {
+        return Ok(7);
+    }
+    return Err(Bad());
+}
+
+Guard make_guard(i64 id) {
+    return {id};
+}
+
+i64 consume(Guard guard, i64 value) {
+    return value;
+}
+
+Result<i64, Fail> from_temp(bool ok) {
+    i64 value = consume(make_guard(1), fallible(ok)?);
+    return Ok(value);
+}
+
+Result<i64, Fail> from_local(bool ok) {
+    Guard guard = make_guard(2);
+    i64 value = consume(guard, fallible(ok)?);
+    return Ok(value);
+}
+
+i64 main() {
+    switch (move from_temp(false)) {
+        case Ok(_):
+            return 1;
+        case Err(Bad):
+    }
+    if (dropped_count() != 1) {
+        return 2;
+    }
+
+    switch (move from_local(false)) {
+        case Ok(_):
+            return 3;
+        case Err(Bad):
+    }
+    if (dropped_count() != 2) {
+        return 4;
+    }
+
+    return 0;
+}

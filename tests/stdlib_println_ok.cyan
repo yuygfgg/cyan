@@ -2,6 +2,8 @@ import /std.view;
 import /std.file as file;
 import /std.mem as mem;
 import /std.println;
+import /std.result;
+import /std.error;
 
 i64 main() {
     char[15] expected = "cyan 42\nready\n";
@@ -9,25 +11,21 @@ i64 main() {
                     '\0', '\0', '\0', '\0', '\0', '\0'];
     []const char name = subslice("cyan", 0, 4);
     i64 answer = 42;
-    void* handle = file.fopen("tests/cyan_stdlib_println_ok.tmp", "w+b");
+    void* handle = must(file.fopen("tests/cyan_stdlib_println_ok.tmp", "w+b"));
 
     fprint(handle, "{}", [name]);
     fprint0(handle, " ");
     fprintln(handle, "{}", [answer]);
     fprintln0(handle, "ready");
 
-    if (file.fseek(handle, 0, 0) != 0) {
-        return 1;
-    }
-    if (file.fread(&mut out[0], 1, 14, handle) != 14) {
+    must(file.fseek(handle, 0, 0));
+    if (must(file.fread(&mut out[0], 1, 14, handle)) != 14) {
         return 2;
     }
     if (mem.memcmp(&out[0], &expected[0], 15) != 0) {
         return 3;
     }
-    if (file.fclose(handle) != 0) {
-        return 4;
-    }
+    must(file.fclose(handle));
 
     return 0;
 }

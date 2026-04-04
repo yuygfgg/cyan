@@ -1,6 +1,8 @@
 import /std.cstr as cstr;
 import /std.heap as heap;
 import /std.mem as mem;
+import /std.result;
+import /std.error;
 import /std.strconv as strconv;
 
 i64 expect_text(char* buf, i64 written, const char* expected) {
@@ -15,7 +17,7 @@ i64 expect_text(char* buf, i64 written, const char* expected) {
 }
 
 i64 main() {
-    char* buf = heap.malloc_array<char>(64);
+    char* buf = must(heap.malloc_array<char>(64));
 
     i128 min_i128 = -170141183460469231731687303715884105728;
     i128 max_i128 = 170141183460469231731687303715884105727;
@@ -34,23 +36,30 @@ i64 main() {
         return 3;
     }
 
-    if (strconv.parse_i128("-170141183460469231731687303715884105728") != min_i128) {
+    if (must(strconv.parse_i128("-170141183460469231731687303715884105728")) != min_i128) {
         return 4;
     }
-    if (strconv.parse_i128("+170141183460469231731687303715884105727") != max_i128) {
+    if (must(strconv.parse_i128("+170141183460469231731687303715884105727")) != max_i128) {
         return 5;
     }
-    if (strconv.parse_i128("   -42xyz") != (-42 as i128)) {
+    if (must(strconv.parse_i128("   -42xyz")) != (-42 as i128)) {
         return 6;
     }
-    if (strconv.parse_u128("340282366920938463463374607431768211455") != max_u128) {
+    if (must(strconv.parse_u128("340282366920938463463374607431768211455")) != max_u128) {
         return 7;
     }
-    if (strconv.parse_u128("  +18446744073709551616tail") != (18446744073709551616 as u128)) {
+    if (must(strconv.parse_u128("  +18446744073709551616tail")) != (18446744073709551616 as u128)) {
         return 8;
     }
-    if (strconv.parse_u128("-1") != max_u128) {
-        return 9;
+    switch (move strconv.parse_u128("-1")) {
+        case Ok(_):
+            return 9;
+        case Err(StrconvParseNegativeUnsigned):
+    }
+    switch (move strconv.parse_i128("")) {
+        case Ok(_):
+            return 10;
+        case Err(StrconvParseNoDigits):
     }
 
     heap.free_ptr(buf);

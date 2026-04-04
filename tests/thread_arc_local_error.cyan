@@ -1,4 +1,6 @@
 import /std.sync;
+import /std.result;
+import /std.error;
 import /std.thread;
 
 struct GLContext {
@@ -15,7 +17,7 @@ impl run_task(&RenderTask task) {}
 
 i64 main() {
     GLContext ctx = {1};
-    Arc<GLContext> shared = arc_new(ctx);
+    Arc<GLContext> shared = must(arc_new(ctx));
     RenderTask task = {shared};
     parallel_do([task]);
     return 0;

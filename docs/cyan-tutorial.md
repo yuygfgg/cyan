@@ -399,7 +399,9 @@ interface readable_seekable = read + seek;
 You can make your custom structs printable by implementing the standard `fmt` interface, which integrates directly with `/std.println`.
 
 ```cyan
+import /std.fmt;
 import /std.println;
+import /std.result;
 
 struct Point {
     i64 x;
@@ -407,11 +409,12 @@ struct Point {
 };
 
 impl fmt(&Point value, &mut StringBuilder out) {
-    fmt_write_cstr(out, "Point(");
-    fmt_write_i64(out, value.x);
-    fmt_write_cstr(out, ", ");
-    fmt_write_i64(out, value.y);
-    fmt_write_char(out, ')');
+    fmt_write_cstr(out, "Point(")?;
+    fmt_write_i64(out, value.x)?;
+    fmt_write_cstr(out, ", ")?;
+    fmt_write_i64(out, value.y)?;
+    fmt_write_char(out, ')')?;
+    return Ok(Unit());
 }
 
 i64 main() {
@@ -423,7 +426,125 @@ i64 main() {
 
 ---
 
-## 9. Unchecked Operations & Raw Memory
+## 9. Error Handling
+
+Cyan uses explicit return values for fallible operations. The standard shape is `Result<T, E>` from `/std.result`, where `Ok(T)` is success and `Err(E)` is failure.
+
+### 9.1 Propagating Errors with `?`
+
+The postfix `?` operator removes boilerplate when your current function also returns `Result`.
+
+```cyan
+import /std.result;
+
+enum DigitError {
+    DigitNonDecimal,
+};
+
+Result<i64, DigitError> parse_digit(char ch) {
+    i32 code = ch as i32;
+    if (code < ('0' as i32) || code > ('9' as i32)) {
+        return Err(DigitNonDecimal());
+    }
+    return Ok((code - ('0' as i32)) as i64);
+}
+
+Result<i64, DigitError> parse_two_digits(char left, char right) {
+    i64 a = parse_digit(left)?;
+    i64 b = parse_digit(right)?;
+    return Ok(a * 10 + b);
+}
+```
+
+`?` has two precise rules:
+- the operand must be `Result<T, E>`
+- `E` must match the enclosing function's `Result<_, E>` error type exactly
+
+When the operand is `Err(e)`, the current function returns immediately with `Err(e)`. Regular scope cleanup and `drop` behavior still applies.
+
+### 9.2 Failing Fast with `must(...)` and `expect(...)`
+
+When an error is unrecoverable at the call site, use `/std.error`:
+
+- `must(result)` panics with a default prefix + formatted error detail
+- `expect(result, "message")` panics with your message + formatted error detail
+
+```cyan
+import /std.error;
+import /std.heap as heap;
+
+i64 main() {
+    char* buffer = must(heap.malloc_array<char>(128));
+    heap.free_ptr(buffer);
+    return 0;
+}
+```
+
+Use this style for setup code where continuing after failure is not meaningful.
+
+For libraries and reusable components, prefer returning `Result` and using `?`.
+
+### 9.3 `panic(...)` for Unrecoverable States
+
+`panic(...)` is in `/std.panic`. It immediately terminates execution and prints the message.
+
+```cyan
+import /std.panic;
+
+i64 main() {
+    panic("internal invariant broken");
+}
+```
+
+`must(...)` and `expect(...)` are built on top of `panic(...)`.
+
+### 9.4 Defining Custom Error Types
+
+Error payloads are usually enums. To make them work with `must(...)` and `expect(...)`, implement both `/std.err` and `/std.fmt`.
+
+```cyan
+import /std.err;
+import /std.error;
+import /std.fmt;
+import /std.result;
+
+enum ConfigError {
+    MissingPort,
+    InvalidPort(i64),
+};
+
+impl err(&ConfigError value) {}
+
+impl fmt(&ConfigError value, &mut StringBuilder out) {
+    ConfigError copy = *value;
+    switch (move copy) {
+        case MissingPort:
+            return fmt_write_cstr(out, "missing config key: port");
+        case InvalidPort(port):
+            fmt_write_cstr(out, "invalid port: ")?;
+            return fmt_write_i64(out, port);
+    }
+}
+
+Result<i64, ConfigError> load_port(bool has_port, i64 raw_port) {
+    if (!has_port) {
+        return Err(MissingPort());
+    }
+    if (raw_port <= 0 || raw_port > 65535) {
+        return Err(InvalidPort(raw_port));
+    }
+    return Ok(raw_port);
+}
+
+i64 main() {
+    i64 port = expect(load_port(true, 8080), "config load failed");
+    return port - 8080;
+}
+```
+
+---
+
+## 10. Unchecked Operations & Raw Memory
 
 Systems programming sometimes requires stepping outside the compiler's strict safety guarantees—whether to interface with C libraries (`extern`), perform raw pointer arithmetic, or execute manual memory allocations. 
 
@@ -461,17 +582,18 @@ To acquire a null pointer, use the standard library helper `ptr.null<T>()`, maki
 
 ---
 
-## 10. Concurrency
+## 11. Concurrency
 
 Cyan provides robust abstractions for safe concurrent execution. It utilizes a system of thread boundary markers (`local`, `send`, `share`) to ensure that data races and invalid cross-thread accesses are caught at compile time.
 
-### 10.1 Fork-Join Tasks (`parallel_do`)
+### 11.1 Fork-Join Tasks (`parallel_do`)
 
 `parallel_do` is used for scoped concurrency: it launches a batch of tasks and blocks the current thread until all tasks complete. Because the execution is fully scoped, it is mathematically guaranteed that the worker threads will finish before the caller's stack frame is destroyed. This means tasks can safely process **borrows** (`&T`) of local variables.
 
 ```cyan
 import /std.sync;
 import /std.thread;
+import /std.error;
 
 struct AddTask {
     &Mutex<i64> total; // A borrow of a shared Mutex
@@ -486,7 +608,7 @@ impl run_task(&AddTask task) {
 }
 
 i64 main() {
-    Mutex<i64> total = mutex_new(0);
+    Mutex<i64> total = must(mutex_new(0));
     AddTask left = {&total, 4};
     AddTask middle = {&total, 7};
     
@@ -499,7 +621,7 @@ i64 main() {
 
 For `parallel_do` to accept a task, the task structure must satisfy the `thread_shared` marker, ensuring it does not contain thread-bound (`local`) resources.
 
-### 10.2 Spawned Tasks (`spawn`)
+### 11.2 Spawned Tasks (`spawn`)
 
 If you want a background task that outlives the caller's scope, you use `spawn`. Because the caller might exit before the task finishes, you **cannot** pass borrows to a spawned task. Instead, the task must take ownership of its data.
 
@@ -508,6 +630,7 @@ For shared mutable state across spawned tasks, you use `Arc<T>` (Atomic Referenc
 ```cyan
 import /std.sync;
 import /std.thread;
+import /std.error;
 
 struct SharedState {
     Mutex<i64> total;
@@ -526,12 +649,12 @@ impl run_once(&mut AddTask task) {
 }
 
 i64 main() {
-    Arc<SharedState> root = arc_new({mutex_new(0)});
+    Arc<SharedState> root = must(arc_new({must(mutex_new(0))}));
 
     AddTask left = {arc_clone(&root), 4};
     
-    // spawn returns a JoinHandle. Ownership of 'left' transfers to the runtime.
-    JoinHandle a = spawn(left);
+    // spawn returns a Result<JoinHandle, SpawnError>.
+    JoinHandle a = must(spawn(left));
     
     // We wait for the task to complete.
     join(&mut a);
@@ -540,7 +663,7 @@ i64 main() {
 }
 ```
 
-### 10.3 Thread Boundaries and Atomics
+### 11.3 Thread Boundaries and Atomics
 
 The compiler uses marker capabilities to govern what types can cross thread boundaries:
 - **`local`**: Data tied to a specific thread (e.g., an OpenGL context or UI widget). It cannot be sent or shared across threads.

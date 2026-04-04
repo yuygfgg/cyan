@@ -1,29 +1,32 @@
 import /std.atomic;
-
-extern {
-    void* malloc(i64 size);
-    void free(void* ptr);
-}
+import /std.heap as heap;
+import /std.result;
 
 export struct Arc<T> {
     shared i64* strong;
     shared T* data;
 };
 
-export Arc<T> arc_new<T>(T value) {
-    i64* raw_strong;
+export Result<Arc<T>, heap.AllocError> arc_new<T>(T value) {
+    i64* raw_strong = heap.malloc_array<i64>(1)?;
     T* raw_data;
+    switch (move heap.malloc_array<T>(1)) {
+        case Ok(memory):
+            raw_data = memory;
+        case Err(error):
+            heap.free_ptr(raw_strong);
+            return Err(error);
+    }
+
     shared i64* strong;
     shared T* data;
     unchecked {
-        raw_strong = malloc(sizeof(i64)) as i64*;
-        raw_data = malloc(sizeof(T)) as T*;
         *raw_strong = 1;
         *raw_data = value;
         strong = raw_strong as shared i64*;
         data = raw_data as shared T*;
     }
-    return {strong, data};
+    return Ok({strong, data});
 }
 
 export Arc<T> arc_clone<T>(&Arc<T> arc) {
@@ -45,8 +48,8 @@ impl drop<T>(&mut Arc<T> self) {
     atomic_fence(atomic_acquire());
     unchecked {
         drop(self.data as &mut T on self);
-        free(self.data as void*);
-        free(self.strong as void*);
+        heap.free_ptr(self.data as T*);
+        heap.free_ptr(self.strong as i64*);
     }
 }
 
@@ -60,20 +63,26 @@ export struct MutexGuard<T> {
     &mut T data;
 };
 
-export Mutex<T> mutex_new<T>(T value) {
-    i64* raw_locked;
+export Result<Mutex<T>, heap.AllocError> mutex_new<T>(T value) {
+    i64* raw_locked = heap.malloc_array<i64>(1)?;
     T* raw_data;
+    switch (move heap.malloc_array<T>(1)) {
+        case Ok(memory):
+            raw_data = memory;
+        case Err(error):
+            heap.free_ptr(raw_locked);
+            return Err(error);
+    }
+
     shared i64* locked;
     shared T* data;
     unchecked {
-        raw_locked = malloc(sizeof(i64)) as i64*;
-        raw_data = malloc(sizeof(T)) as T*;
         *raw_locked = 0;
         *raw_data = value;
         locked = raw_locked as shared i64*;
         data = raw_data as shared T*;
     }
-    return {locked, data};
+    return Ok({locked, data});
 }
 
 export MutexGuard<T> lock<T>(&Mutex<T> mutex)
@@ -94,7 +103,7 @@ impl drop<T>(&mut MutexGuard<T> self) {
 impl drop<T>(&mut Mutex<T> self) {
     unchecked {
         drop(self.data as &mut T on self);
-        free(self.data as void*);
-        free(self.locked as void*);
+        heap.free_ptr(self.data as T*);
+        heap.free_ptr(self.locked as i64*);
     }
 }

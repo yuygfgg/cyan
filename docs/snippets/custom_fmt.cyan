@@ -1,4 +1,6 @@
+import /std.fmt;
 import /std.println;
+import /std.result;
 
 struct Point {
     i64 x;
@@ -6,11 +8,12 @@ struct Point {
 };
 
 impl fmt(&Point value, &mut StringBuilder out) {
-    fmt_write_cstr(out, "Point(");
-    fmt_write_i64(out, value.x);
-    fmt_write_cstr(out, ", ");
-    fmt_write_i64(out, value.y);
-    fmt_write_char(out, ')');
+    fmt_write_cstr(out, "Point(")?;
+    fmt_write_i64(out, value.x)?;
+    fmt_write_cstr(out, ", ")?;
+    fmt_write_i64(out, value.y)?;
+    fmt_write_char(out, ')')?;
+    return Ok(Unit());
 }
 
 i64 main() {

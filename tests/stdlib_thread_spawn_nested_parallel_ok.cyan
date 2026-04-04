@@ -1,4 +1,6 @@
 import /std.atomic;
+import /std.result;
+import /std.error;
 import /std.thread;
 
 struct InnerTask {
@@ -42,9 +44,9 @@ i64 main() {
     OuterTask right = {total_ptr, 40, 10};
     OuterTask middle = {total_ptr, 40, 10};
 
-    JoinHandle a = spawn(left);
-    JoinHandle b = spawn(right);
-    JoinHandle c = spawn(middle);
+    JoinHandle a = must(spawn(left));
+    JoinHandle b = must(spawn(right));
+    JoinHandle c = must(spawn(middle));
     join(&mut a);
     join(&mut b);
     join(&mut c);

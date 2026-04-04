@@ -75,6 +75,7 @@ enum class TokenKind : std::uint8_t {
     RBracket,
     Equal,
     EqualEqual,
+    Question,
     Bang,
     BangEqual,
     Plus,

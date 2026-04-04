@@ -1,5 +1,6 @@
 import /std.view;
 import /std.println;
+import /std.result;
 
 // Use extern to import C functions.
 // None is needed in this example though.

@@ -1812,6 +1812,10 @@ auto SemanticAnalyzer::analyzeExprStmt(FunctionState& state,
     if (!expr_type) {
         return std::unexpected(expr_type.error());
     }
+    if (const auto* call = std::get_if<ast::CallExpr>(&stmt.expr->node);
+        call != nullptr && call->builtin_kind == ast::BuiltinCallKind::Panic) {
+        state.reachable = false;
+    }
     return {};
 }
 

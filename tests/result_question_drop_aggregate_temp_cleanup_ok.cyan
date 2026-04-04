@@ -1,0 +1,66 @@
+import /std.result;
+
+extern {
+    void record_drop();
+    i64 dropped_count();
+}
+
+enum Fail {
+    Bad,
+};
+
+struct Guard {
+    i64 id;
+};
+
+struct Pair {
+    Guard left;
+    i64 right;
+};
+
+impl drop(&mut Guard guard) {
+    record_drop();
+}
+
+Result<i64, Fail> fallible(bool ok) {
+    if (ok) {
+        return Ok(7);
+    }
+    return Err(Bad());
+}
+
+Guard make_guard(i64 id) {
+    return {id};
+}
+
+Result<i64, Fail> from_struct(bool ok) {
+    Pair pair = {make_guard(1), fallible(ok)?};
+    return Ok(pair.right);
+}
+
+Result<i64, Fail> from_array(bool ok) {
+    Guard[2] guards = [make_guard(2), make_guard(fallible(ok)?)];
+    return Ok(guards[0].id);
+}
+
+i64 main() {
+    switch (move from_struct(false)) {
+        case Ok(_):
+            return 1;
+        case Err(Bad):
+    }
+    if (dropped_count() != 1) {
+        return 2;
+    }
+
+    switch (move from_array(false)) {
+        case Ok(_):
+            return 3;
+        case Err(Bad):
+    }
+    if (dropped_count() != 2) {
+        return 4;
+    }
+
+    return 0;
+}

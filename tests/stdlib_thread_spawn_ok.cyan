@@ -1,4 +1,6 @@
 import /std.atomic;
+import /std.result;
+import /std.error;
 import /std.thread;
 
 struct AddTask {
@@ -22,9 +24,9 @@ i64 main() {
     AddTask middle = {total_ptr, 7};
     AddTask right = {total_ptr, 9};
 
-    JoinHandle a = spawn(left);
-    JoinHandle b = spawn(middle);
-    JoinHandle c = spawn(right);
+    JoinHandle a = must(spawn(left));
+    JoinHandle b = must(spawn(middle));
+    JoinHandle c = must(spawn(right));
     join(&mut a);
     join(&mut b);
     join(&mut c);

@@ -1,5 +1,7 @@
 import /std.sync;
 import /std.thread;
+import /std.result;
+import /std.error;
 
 struct SharedState {
     Mutex<i64> total;
@@ -18,16 +20,16 @@ impl run_once(&mut ArcTask task) {
 }
 
 i64 main() {
-    SharedState initial = {mutex_new(0)};
-    Arc<SharedState> root = arc_new(initial);
+    SharedState initial = {must(mutex_new(0))};
+    Arc<SharedState> root = must(arc_new(initial));
 
     ArcTask left = {arc_clone(&root), 4};
     ArcTask middle = {arc_clone(&root), 7};
     ArcTask right = {arc_clone(&root), 9};
 
-    JoinHandle a = spawn(left);
-    JoinHandle b = spawn(middle);
-    JoinHandle c = spawn(right);
+    JoinHandle a = must(spawn(left));
+    JoinHandle b = must(spawn(middle));
+    JoinHandle c = must(spawn(right));
     join(&mut a);
     join(&mut b);
     join(&mut c);

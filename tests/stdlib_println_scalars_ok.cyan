@@ -2,11 +2,13 @@ import /std.file as file;
 import /std.heap as heap;
 import /std.mem as mem;
 import /std.println;
+import /std.result;
+import /std.error;
 
 i64 main() {
     char[92] expected =
         "true false Z -8 -1600 -320000 -6400000000 250 65000 4000000000 9000000000000000000 1.5 0.1\n";
-    char* out = heap.malloc_array<char>(92);
+    char* out = must(heap.malloc_array<char>(92));
     mem.fill<char>(out, 0, 92);
 
     bool yes = true;
@@ -23,7 +25,7 @@ i64 main() {
     f32 short_float = 1.5 as f32;
     f64 long_float = 0.1;
 
-    void* handle = file.fopen("tests/cyan_stdlib_println_scalars_ok.tmp", "w+b");
+    void* handle = must(file.fopen("tests/cyan_stdlib_println_scalars_ok.tmp", "w+b"));
 
     fprintln(handle, "{} {} {} {} {} {} {} {} {} {} {} {} {}", [
         yes,
@@ -41,18 +43,14 @@ i64 main() {
         long_float
     ]);
 
-    if (file.fseek(handle, 0, 0) != 0) {
-        return 1;
-    }
-    if (file.fread(out, 1, 91, handle) != 91) {
+    must(file.fseek(handle, 0, 0));
+    if (must(file.fread(out, 1, 91, handle)) != 91) {
         return 2;
     }
     if (mem.memcmp(out, &expected[0], 92) != 0) {
         return 3;
     }
-    if (file.fclose(handle) != 0) {
-        return 4;
-    }
+    must(file.fclose(handle));
     heap.free_ptr(out);
 
     return 0;

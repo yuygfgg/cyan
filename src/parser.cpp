@@ -1902,6 +1902,17 @@ auto Parser::parsePostfix() -> std::expected<ast::ExprPtr, Diagnostic> {
             continue;
         }
 
+        if (match(TokenKind::Question)) {
+            pending_call_type_arguments.clear();
+            ast::CallExpr call;
+            call.callee = "__builtin_result_try";
+            call.callee_range =
+                source_file.range((*expr)->range.begin, previous().range.end);
+            call.arguments.push_back(std::move(*expr));
+            expr = make_expr(call.callee_range, std::move(call));
+            continue;
+        }
+
         break;
     }
 

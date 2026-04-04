@@ -1,0 +1,9 @@
+import /std.panic;
+
+void fail_with(char* message) {
+    panic(message);
+}
+
+i64 main() {
+    return 0;
+}

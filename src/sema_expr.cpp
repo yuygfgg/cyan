@@ -76,6 +76,7 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
     expr.interface_impls.clear();
     expr.slice_source_type = nullptr;
     expr.slice_source_place.reset();
+    expr.early_return_drop_local_ids.clear();
     if (expected_type != nullptr &&
         expected_type->kind == TypeKind::Interface) {
         auto coerced = coerceExprToInterface(state, expr, expected_type);
@@ -1853,6 +1854,81 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
             slot.status = LocalState::Status::Unavailable;
         }
     };
+    struct ResultBuiltinInfo {
+        const Type* result_type = nullptr;
+        const ast::EnumDecl* enum_decl = nullptr;
+        std::uint32_t ok_variant_index = 0;
+        std::uint32_t err_variant_index = 0;
+        const Type* ok_type = nullptr;
+        const Type* err_type = nullptr;
+    };
+    const auto classify_result_type =
+        [&](const Type* type) -> std::optional<ResultBuiltinInfo> {
+        const auto* base = types.unqualify(type);
+        if (base == nullptr || base->kind != TypeKind::Enum ||
+            base->enum_decl == nullptr) {
+            return std::nullopt;
+        }
+        const auto* enum_decl = base->enum_decl;
+        const auto* canonical_enum_decl = enum_decl->template_decl != nullptr
+                                              ? enum_decl->template_decl
+                                              : enum_decl;
+        if (canonical_enum_decl->owner_module == nullptr ||
+            canonical_enum_decl->owner_module->module_name != "std.result" ||
+            canonical_enum_decl->name != "Result" ||
+            enum_decl->variants.size() != 2) {
+            return std::nullopt;
+        }
+        std::optional<std::uint32_t> ok_variant_index;
+        std::optional<std::uint32_t> err_variant_index;
+        for (std::size_t index = 0; index < enum_decl->variants.size();
+             ++index) {
+            const auto& variant = enum_decl->variants[index];
+            if (variant.name == "Ok") {
+                ok_variant_index = static_cast<std::uint32_t>(index);
+            } else if (variant.name == "Err") {
+                err_variant_index = static_cast<std::uint32_t>(index);
+            }
+        }
+        if (!ok_variant_index.has_value() || !err_variant_index.has_value()) {
+            return std::nullopt;
+        }
+        const auto* ok_type =
+            enum_decl->variants[*ok_variant_index].resolved_type;
+        const auto* err_type =
+            enum_decl->variants[*err_variant_index].resolved_type;
+        if (ok_type == nullptr || err_type == nullptr) {
+            return std::nullopt;
+        }
+        return ResultBuiltinInfo{.result_type = base,
+                                 .enum_decl = enum_decl,
+                                 .ok_variant_index = *ok_variant_index,
+                                 .err_variant_index = *err_variant_index,
+                                 .ok_type = ok_type,
+                                 .err_type = err_type};
+    };
+    const auto strip_result_variant_bindings =
+        [&](const std::vector<ViewLeafBinding>& bindings,
+            std::uint32_t variant_index) {
+            std::vector<ast::CachedViewBinding> cached_bindings;
+            for (const auto& binding : bindings) {
+                if (binding.path.size() < 2 ||
+                    binding.path[0] != ENUM_PAYLOAD_SENTINEL ||
+                    binding.path[1] != variant_index) {
+                    continue;
+                }
+                std::vector<std::uint32_t> path(binding.path.begin() + 2,
+                                                binding.path.end());
+                cached_bindings.push_back(ast::CachedViewBinding{
+                    .path = std::move(path),
+                    .source_places = binding.source_places,
+                    .source_local_id = binding.source_local_id,
+                    .element_sources = binding.element_sources,
+                    .type = binding.type,
+                });
+            }
+            return cached_bindings;
+        };
 
     ast::FunctionDecl* function = nullptr;
     const auto callee_is_qualified = call.callee.find('.') != std::string::npos;
@@ -2018,6 +2094,110 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         bind_builtin_decl();
         call.builtin_kind = ast::BuiltinCallKind::Len;
         expr.resolved_type = types.i64Type();
+        expr.resolved_place.reset();
+        return expr.resolved_type;
+    }
+    if (((call.callee == "__builtin_result_try") && builtin_available) ||
+        builtin_decl_kind == ast::BuiltinCallKind::ResultTry) {
+        if (!call.explicit_type_arguments.empty() &&
+            !builtin_decl_is_template_instance) {
+            return unexpected_result<const Type*>(
+                "explicit type arguments require a generic function",
+                expr.range);
+        }
+        if (call.arguments.size() != 1) {
+            return unexpected_result<const Type*>(
+                "'?' expects exactly one operand", expr.range);
+        }
+
+        auto operand_type = analyzeExpr(state, *call.arguments.front());
+        if (!operand_type) {
+            return std::unexpected(operand_type.error());
+        }
+        const auto operand_result = classify_result_type(*operand_type);
+        if (!operand_result.has_value()) {
+            return unexpected_result<const Type*>(
+                "operator '?' requires a Result<T, E> operand",
+                call.arguments.front()->range);
+        }
+        const auto return_result = classify_result_type(state.return_type);
+        if (!return_result.has_value()) {
+            return unexpected_result<const Type*>(
+                "operator '?' requires the enclosing function to return "
+                "Result<T, E>",
+                expr.range);
+        }
+        if (!types.isSame(operand_result->err_type, return_result->err_type)) {
+            return unexpected_result<const Type*>(
+                "operator '?' requires the operand error type to match the "
+                "enclosing function's Result error type exactly",
+                expr.range);
+        }
+        if (typeContainsViews(operand_result->err_type)) {
+            return unexpected_result<const Type*>(
+                "operator '?' does not yet support Result error payloads that "
+                "contain borrows or slices",
+                expr.range);
+        }
+
+        if (typeContainsViews(operand_result->result_type)) {
+            auto bindings =
+                collectExprViewBindings(state, *call.arguments.front());
+            if (!bindings) {
+                return std::unexpected(bindings.error());
+            }
+            auto cached_bindings = strip_result_variant_bindings(
+                *bindings, operand_result->ok_variant_index);
+            if (!cached_bindings.empty()) {
+                expr.cached_view_bindings = std::move(cached_bindings);
+            }
+        }
+
+        auto value = consumeValue(state, *call.arguments.front(),
+                                  operand_result->result_type);
+        if (!value) {
+            return std::unexpected(value.error());
+        }
+
+        bind_builtin_decl();
+        call.builtin_kind = ast::BuiltinCallKind::ResultTry;
+        expr.resolved_type = operand_result->ok_type;
+        expr.resolved_place.reset();
+        expr.early_return_drop_local_ids = collectDropLocalIds(
+            state, [](const LocalState& local) { return local.in_scope; });
+        return expr.resolved_type;
+    }
+    if (((call.callee == "__builtin_panic") && builtin_available) ||
+        builtin_decl_kind == ast::BuiltinCallKind::Panic) {
+        if (!call.explicit_type_arguments.empty() &&
+            !builtin_decl_is_template_instance) {
+            return unexpected_result<const Type*>(
+                "explicit type arguments require a generic function",
+                expr.range);
+        }
+        if (call.arguments.size() != 1) {
+            return unexpected_result<const Type*>(
+                "panic() expects exactly one const char* argument", expr.range);
+        }
+
+        auto message_type =
+            requireReadable(state, *call.arguments.front(),
+                            types.getPointer(types.getConst(types.charType())));
+        if (!message_type) {
+            return std::unexpected(message_type.error());
+        }
+        const auto* expected_message_type =
+            types.getPointer(types.getConst(types.charType()));
+        if (!can_consume_value_type(types, *message_type,
+                                    expected_message_type)) {
+            return unexpected_result<const Type*>(
+                "panic() argument must have type const char*",
+                call.arguments.front()->range);
+        }
+
+        bind_builtin_decl();
+        call.builtin_kind = ast::BuiltinCallKind::Panic;
+        expr.resolved_type = types.voidType();
         expr.resolved_place.reset();
         return expr.resolved_type;
     }

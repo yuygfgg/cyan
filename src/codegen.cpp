@@ -30,11 +30,13 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 
@@ -160,7 +162,6 @@ class LLVMCodegen {
             return std::unexpected(
                 Diagnostic("generated LLVM module is invalid"));
         }
-
         if (output_kind == OutputKind::LLVMIR) {
             std::error_code code;
             llvm::raw_fd_ostream stream(output_path.string(), code,
@@ -198,10 +199,33 @@ class LLVMCodegen {
         std::uint64_t payload_padding = 0;
     };
 
+    struct ResultBuiltinInfo {
+        const Type* result_type = nullptr;
+        std::uint32_t ok_variant_index = 0;
+        std::uint32_t err_variant_index = 0;
+        const Type* ok_type = nullptr;
+        const Type* err_type = nullptr;
+    };
+
     struct LocalSlot {
         llvm::Value* address = nullptr;
         const Type* type = nullptr;
         llvm::Value* initialized_flag = nullptr;
+    };
+
+    struct PendingValueDrop {
+        llvm::Value* address = nullptr;
+        const Type* type = nullptr;
+    };
+
+    struct PendingValueDropScope {
+        std::vector<PendingValueDrop>& drops;
+        std::size_t base = 0;
+
+        explicit PendingValueDropScope(std::vector<PendingValueDrop>& drops)
+            : drops(drops), base(drops.size()) {}
+
+        ~PendingValueDropScope() { drops.resize(base); }
     };
 
     struct FunctionFrame {
@@ -789,59 +813,168 @@ class LLVMCodegen {
             declare_decl(*decl);
         }
 
-        auto define_decl = [&](ast::Decl& decl) {
+        std::unordered_set<const Type*> active_layout_types;
+        std::function<std::expected<void, Diagnostic>(const Type*)>
+            ensureTypeLayout;
+        std::function<std::expected<void, Diagnostic>(const Type*)>
+            ensureStructLayout;
+        std::function<std::expected<void, Diagnostic>(const Type*)>
+            ensureEnumLayout;
+
+        const auto recursive_layout_diagnostic =
+            [&](const Type* type) -> Diagnostic {
+            type = type == nullptr ? nullptr : types.unqualify(type);
+            auto range = SourceRange{};
+            if (type != nullptr) {
+                if (type->struct_decl != nullptr) {
+                    range = type->struct_decl->range;
+                } else if (type->enum_decl != nullptr) {
+                    range = type->enum_decl->range;
+                }
+            }
+            return Diagnostic("type '" + types.describe(type) +
+                                  "' has recursive value layout",
+                              range);
+        };
+
+        ensureStructLayout =
+            [&](const Type* type) -> std::expected<void, Diagnostic> {
+            type = types.unqualify(type);
+            auto* layout = struct_types.at(type);
+            if (!layout->isOpaque()) {
+                return {};
+            }
+            if (!active_layout_types.insert(type).second) {
+                return std::unexpected(recursive_layout_diagnostic(type));
+            }
+
+            const auto* decl = type->struct_decl;
+            std::vector<llvm::Type*> field_types;
+            field_types.reserve(decl->fields.size());
+            for (const auto& field : decl->fields) {
+                auto field_ready = ensureTypeLayout(field.resolved_type);
+                if (!field_ready) {
+                    active_layout_types.erase(type);
+                    return std::unexpected(field_ready.error());
+                }
+                field_types.push_back(lowerType(field.resolved_type));
+            }
+            layout->setBody(field_types, false);
+            active_layout_types.erase(type);
+            return {};
+        };
+
+        ensureEnumLayout =
+            [&](const Type* type) -> std::expected<void, Diagnostic> {
+            type = types.unqualify(type);
+            auto& layout = enum_layouts.at(type);
+            if (!layout.type->isOpaque()) {
+                return {};
+            }
+            if (!active_layout_types.insert(type).second) {
+                return std::unexpected(recursive_layout_diagnostic(type));
+            }
+
+            const auto* decl = type->enum_decl;
+            const auto& data_layout = module.getDataLayout();
+            std::uint64_t max_payload_size = 0;
+            std::uint64_t max_payload_align = 1;
+            layout.payload_types.clear();
+            layout.payload_types.reserve(decl->variants.size());
+            for (const auto& variant : decl->variants) {
+                layout.payload_types.push_back(variant.resolved_type);
+                if (variant.resolved_type == nullptr) {
+                    continue;
+                }
+                auto payload_ready = ensureTypeLayout(variant.resolved_type);
+                if (!payload_ready) {
+                    active_layout_types.erase(type);
+                    return std::unexpected(payload_ready.error());
+                }
+                auto* payload_type = lowerType(variant.resolved_type);
+                max_payload_size = std::max<std::uint64_t>(
+                    max_payload_size,
+                    data_layout.getTypeAllocSize(payload_type));
+                max_payload_align = std::max<std::uint64_t>(
+                    max_payload_align,
+                    data_layout.getABITypeAlign(payload_type).value());
+            }
+            layout.payload_size = max_payload_size;
+            layout.payload_padding =
+                (max_payload_align - (8 % max_payload_align)) %
+                max_payload_align;
+            std::vector<llvm::Type*> fields = {
+                llvm::Type::getInt64Ty(context),
+                llvm::ArrayType::get(llvm::Type::getInt8Ty(context),
+                                     layout.payload_padding),
+                llvm::ArrayType::get(llvm::Type::getInt8Ty(context),
+                                     layout.payload_size),
+            };
+            layout.type->setBody(fields, false);
+            active_layout_types.erase(type);
+            return {};
+        };
+
+        ensureTypeLayout =
+            [&](const Type* type) -> std::expected<void, Diagnostic> {
+            if (type == nullptr) {
+                return {};
+            }
+            type = types.unqualify(type);
+            switch (type->kind) {
+            case TypeKind::Array:
+                return ensureTypeLayout(type->element_type);
+            case TypeKind::Struct:
+                return ensureStructLayout(type);
+            case TypeKind::Enum:
+                return ensureEnumLayout(type);
+            case TypeKind::Void:
+            case TypeKind::Integer:
+            case TypeKind::Float:
+            case TypeKind::Char:
+            case TypeKind::Bool:
+            case TypeKind::Slice:
+            case TypeKind::Interface:
+            case TypeKind::Borrow:
+            case TypeKind::Pointer:
+                return {};
+            }
+            return {};
+        };
+
+        auto define_decl =
+            [&](ast::Decl& decl) -> std::expected<void, Diagnostic> {
             if (auto* struct_decl = std::get_if<ast::StructDecl>(&decl);
                 struct_decl != nullptr &&
                 struct_decl->type_parameters.empty()) {
-                std::vector<llvm::Type*> field_types;
-                field_types.reserve(struct_decl->fields.size());
-                for (const auto& field : struct_decl->fields) {
-                    field_types.push_back(lowerType(field.resolved_type));
+                auto ready = ensureStructLayout(struct_decl->resolved_type);
+                if (!ready) {
+                    return std::unexpected(ready.error());
                 }
-                struct_types[struct_decl->resolved_type]->setBody(field_types,
-                                                                  false);
-                return;
+                return {};
             }
             if (auto* enum_decl = std::get_if<ast::EnumDecl>(&decl);
                 enum_decl != nullptr && enum_decl->type_parameters.empty()) {
-                auto& layout = enum_layouts[enum_decl->resolved_type];
-                const auto& data_layout = module.getDataLayout();
-                std::uint64_t max_payload_size = 0;
-                std::uint64_t max_payload_align = 1;
-                for (const auto& variant : enum_decl->variants) {
-                    layout.payload_types.push_back(variant.resolved_type);
-                    if (variant.resolved_type == nullptr) {
-                        continue;
-                    }
-                    auto* payload_type = lowerType(variant.resolved_type);
-                    max_payload_size = std::max<std::uint64_t>(
-                        max_payload_size,
-                        data_layout.getTypeAllocSize(payload_type));
-                    max_payload_align = std::max<std::uint64_t>(
-                        max_payload_align,
-                        data_layout.getABITypeAlign(payload_type).value());
+                auto ready = ensureEnumLayout(enum_decl->resolved_type);
+                if (!ready) {
+                    return std::unexpected(ready.error());
                 }
-                layout.payload_size = max_payload_size;
-                layout.payload_padding =
-                    (max_payload_align - (8 % max_payload_align)) %
-                    max_payload_align;
-                std::vector<llvm::Type*> fields = {
-                    llvm::Type::getInt64Ty(context),
-                    llvm::ArrayType::get(llvm::Type::getInt8Ty(context),
-                                         layout.payload_padding),
-                    llvm::ArrayType::get(llvm::Type::getInt8Ty(context),
-                                         layout.payload_size),
-                };
-                layout.type->setBody(fields, false);
             }
+            return {};
         };
-        for (const auto& module_decl : package.modules) {
-            for (auto& decl : module_decl->declarations) {
-                define_decl(decl);
+        for (const auto& package_module : package.modules) {
+            for (auto& decl : package_module->declarations) {
+                auto defined = define_decl(decl);
+                if (!defined) {
+                    return std::unexpected(defined.error());
+                }
             }
         }
         for (auto& decl : package.instantiated_declarations) {
-            define_decl(*decl);
+            auto defined = define_decl(*decl);
+            if (!defined) {
+                return std::unexpected(defined.error());
+            }
         }
         return {};
     }
@@ -946,8 +1079,10 @@ class LLVMCodegen {
         builder.clearFastMathFlags();
         applyOfastFunctionAttributes(*function);
         beginDebugFunction(decl, function);
+        current_function_decl = &decl;
 
         frame.locals.clear();
+        pending_value_drops.clear();
 
         std::size_t index = 0;
         for (auto& argument : function->args()) {
@@ -989,6 +1124,7 @@ class LLVMCodegen {
         debug_scope_stack.clear();
         current_subprogram = nullptr;
         debug_locals.clear();
+        current_function_decl = nullptr;
         return {};
     }
 
@@ -1411,24 +1547,25 @@ class LLVMCodegen {
         auto* tag_value = builder.CreateLoad(llvm::Type::getInt64Ty(context),
                                              tag_ptr, "switch.tag");
 
-        llvm::BasicBlock* default_block = nullptr;
+        auto* default_block =
+            llvm::BasicBlock::Create(context, "switch.default", function);
         const auto explicit_case_count = static_cast<unsigned>(
             std::count_if(switch_stmt.cases.begin(), switch_stmt.cases.end(),
                           [](const ast::SwitchCase& switch_case) {
                               return !switch_case.is_default;
                           }));
         auto* switch_inst =
-            builder.CreateSwitch(tag_value, nullptr, explicit_case_count);
+            builder.CreateSwitch(tag_value, default_block, explicit_case_count);
 
         std::vector<llvm::BasicBlock*> case_blocks;
         case_blocks.reserve(switch_stmt.cases.size());
         for (std::size_t index = 0; index < switch_stmt.cases.size(); ++index) {
-            auto* case_block =
-                llvm::BasicBlock::Create(context, "switch.case", function);
+            auto* case_block = switch_stmt.cases[index].is_default
+                                   ? default_block
+                                   : llvm::BasicBlock::Create(
+                                         context, "switch.case", function);
             case_blocks.push_back(case_block);
-            if (switch_stmt.cases[index].is_default) {
-                default_block = case_block;
-            } else {
+            if (!switch_stmt.cases[index].is_default) {
                 switch_inst->addCase(
                     llvm::ConstantInt::get(
                         llvm::Type::getInt64Ty(context),
@@ -1436,11 +1573,6 @@ class LLVMCodegen {
                     case_block);
             }
         }
-        if (default_block == nullptr) {
-            default_block = llvm::BasicBlock::Create(
-                context, "switch.unreachable", function);
-        }
-        switch_inst->setDefaultDest(default_block);
 
         for (std::size_t index = 0; index < switch_stmt.cases.size(); ++index) {
             auto& switch_case = switch_stmt.cases[index];
@@ -1484,6 +1616,8 @@ class LLVMCodegen {
                 [](const ast::SwitchCase& c) { return c.is_default; })) {
             builder.SetInsertPoint(default_block);
             builder.CreateUnreachable();
+        } else if (!default_block->hasNPredecessorsOrMore(1)) {
+            default_block->eraseFromParent();
         }
 
         if (merge_block->hasNPredecessorsOrMore(1)) {
@@ -2385,6 +2519,212 @@ class LLVMCodegen {
             function_it->second, llvm::PointerType::get(context, 0));
     }
 
+    auto emitPanicBuiltin(ast::CallExpr& call) -> llvm::Value* {
+        if (call.arguments.size() != 1) {
+            return nullptr;
+        }
+        auto* message = emitExpr(*call.arguments.front());
+        if (message == nullptr) {
+            return nullptr;
+        }
+
+        auto* pointer_type = llvm::PointerType::get(context, 0);
+        auto* i32_type = llvm::Type::getInt32Ty(context);
+        auto* i64_type = llvm::Type::getInt64Ty(context);
+        auto* panic_default = builder.CreatePointerCast(
+            builder.CreateGlobalString("panic"), pointer_type, "panic.default");
+        auto* is_null_message = builder.CreateICmpEQ(
+            message, llvm::ConstantPointerNull::get(pointer_type),
+            "panic.msg.is_null");
+        auto* final_message = builder.CreateSelect(
+            is_null_message, panic_default, message, "panic.msg");
+
+        auto strlen_fn = module.getOrInsertFunction(
+            "strlen", llvm::FunctionType::get(i64_type, {pointer_type}, false));
+        auto write_fn = module.getOrInsertFunction(
+            "write", llvm::FunctionType::get(
+                         i64_type, {i32_type, pointer_type, i64_type}, false));
+        auto exit_fn = module.getOrInsertFunction(
+            "exit", llvm::FunctionType::get(llvm::Type::getVoidTy(context),
+                                            {i32_type}, false));
+
+        auto* message_len =
+            builder.CreateCall(strlen_fn, {final_message}, "panic.msg.len");
+        builder.CreateCall(write_fn, {llvm::ConstantInt::get(i32_type, 2),
+                                      final_message, message_len});
+
+        auto* newline = builder.CreatePointerCast(
+            builder.CreateGlobalString("\n"), pointer_type, "panic.newline");
+        builder.CreateCall(write_fn,
+                           {llvm::ConstantInt::get(i32_type, 2), newline,
+                            llvm::ConstantInt::get(i64_type, 1)});
+        builder.CreateCall(exit_fn, {llvm::ConstantInt::get(i32_type, 1)});
+        builder.CreateUnreachable();
+        builder.ClearInsertionPoint();
+        return llvm::PoisonValue::get(llvm::Type::getInt1Ty(context));
+    }
+
+    auto classifyResultBuiltinType(const Type* type) const
+        -> std::optional<ResultBuiltinInfo> {
+        const auto* base = types.unqualify(type);
+        if (base == nullptr || base->kind != TypeKind::Enum ||
+            base->enum_decl == nullptr) {
+            return std::nullopt;
+        }
+        const auto* enum_decl = base->enum_decl;
+        const auto* canonical_enum_decl = enum_decl->template_decl != nullptr
+                                              ? enum_decl->template_decl
+                                              : enum_decl;
+        if (canonical_enum_decl->owner_module == nullptr ||
+            canonical_enum_decl->owner_module->module_name != "std.result" ||
+            canonical_enum_decl->name != "Result" ||
+            enum_decl->variants.size() != 2) {
+            return std::nullopt;
+        }
+        std::optional<std::uint32_t> ok_variant_index;
+        std::optional<std::uint32_t> err_variant_index;
+        for (std::size_t index = 0; index < enum_decl->variants.size();
+             ++index) {
+            const auto& variant = enum_decl->variants[index];
+            if (variant.name == "Ok") {
+                ok_variant_index = static_cast<std::uint32_t>(index);
+            } else if (variant.name == "Err") {
+                err_variant_index = static_cast<std::uint32_t>(index);
+            }
+        }
+        if (!ok_variant_index.has_value() || !err_variant_index.has_value()) {
+            return std::nullopt;
+        }
+        const auto* ok_type =
+            enum_decl->variants[*ok_variant_index].resolved_type;
+        const auto* err_type =
+            enum_decl->variants[*err_variant_index].resolved_type;
+        if (ok_type == nullptr || err_type == nullptr) {
+            return std::nullopt;
+        }
+        return ResultBuiltinInfo{.result_type = base,
+                                 .ok_variant_index = *ok_variant_index,
+                                 .err_variant_index = *err_variant_index,
+                                 .ok_type = ok_type,
+                                 .err_type = err_type};
+    }
+
+    auto emitEnumValue(const Type* enum_type, std::uint32_t variant_index,
+                       llvm::Value* payload_value, std::string_view temp_name)
+        -> llvm::Value* {
+        if (enum_type == nullptr || enum_type->kind != TypeKind::Enum ||
+            enum_type->enum_decl == nullptr) {
+            return nullptr;
+        }
+        auto* enum_storage = createEntryAlloca(temp_name, enum_type);
+        builder.CreateStore(llvm::Constant::getNullValue(lowerType(enum_type)),
+                            enum_storage);
+
+        auto* tag_ptr = builder.CreateStructGEP(
+            lowerType(enum_type), enum_storage, 0, "enum.tag.ptr");
+        builder.CreateStore(llvm::ConstantInt::get(
+                                llvm::Type::getInt64Ty(context), variant_index),
+                            tag_ptr);
+
+        const auto& variant = enum_type->enum_decl->variants[variant_index];
+        if (variant.resolved_type != nullptr) {
+            auto* payload_ptr = createPayloadPointer(
+                enum_layouts.at(enum_type), enum_storage, variant_index);
+            builder.CreateStore(payload_value, payload_ptr);
+        }
+
+        return builder.CreateLoad(lowerType(enum_type), enum_storage,
+                                  std::string(temp_name));
+    }
+
+    auto emitResultBuiltin(ast::Expr& expr, ast::CallExpr& call)
+        -> llvm::Value* {
+        if (call.arguments.empty() ||
+            call.arguments.front()->resolved_type == nullptr) {
+            return nullptr;
+        }
+        const auto result_info =
+            classifyResultBuiltinType(call.arguments.front()->resolved_type);
+        if (!result_info.has_value()) {
+            return nullptr;
+        }
+
+        auto* result_value = emitExpr(*call.arguments.front());
+        if (result_value == nullptr) {
+            return nullptr;
+        }
+        auto* result_storage =
+            createEntryAlloca("result.tmp", result_info->result_type);
+        builder.CreateStore(result_value, result_storage);
+        auto* tag_ptr =
+            builder.CreateStructGEP(lowerType(result_info->result_type),
+                                    result_storage, 0, "result.tag.ptr");
+        auto* tag_value = builder.CreateLoad(llvm::Type::getInt64Ty(context),
+                                             tag_ptr, "result.tag");
+
+        auto* function = builder.GetInsertBlock()->getParent();
+        auto* ok_block =
+            llvm::BasicBlock::Create(context, "result.ok", function);
+        auto* err_block =
+            llvm::BasicBlock::Create(context, "result.err", function);
+        auto* merge_block =
+            llvm::BasicBlock::Create(context, "result.cont", function);
+        auto* is_ok = builder.CreateICmpEQ(
+            tag_value,
+            llvm::ConstantInt::get(llvm::Type::getInt64Ty(context),
+                                   result_info->ok_variant_index),
+            "result.is_ok");
+        builder.CreateCondBr(is_ok, ok_block, err_block);
+
+        builder.SetInsertPoint(ok_block);
+        auto* ok_payload_ptr =
+            createPayloadPointer(enum_layouts.at(result_info->result_type),
+                                 result_storage, result_info->ok_variant_index);
+        auto* ok_payload =
+            builder.CreateLoad(lowerType(result_info->ok_type), ok_payload_ptr,
+                               "result.ok.payload");
+        auto* ok_block_end = builder.GetInsertBlock();
+        builder.CreateBr(merge_block);
+
+        builder.SetInsertPoint(err_block);
+        auto* err_payload_ptr = createPayloadPointer(
+            enum_layouts.at(result_info->result_type), result_storage,
+            result_info->err_variant_index);
+        auto* err_payload =
+            builder.CreateLoad(lowerType(result_info->err_type),
+                               err_payload_ptr, "result.err.payload");
+
+        if (current_function_decl == nullptr) {
+            return nullptr;
+        }
+        const auto return_result = classifyResultBuiltinType(
+            current_function_decl->resolved_return_type);
+        if (!return_result.has_value()) {
+            return nullptr;
+        }
+        auto* err_result = emitEnumValue(return_result->result_type,
+                                         return_result->err_variant_index,
+                                         err_payload, "result.err.ret");
+        if (err_result == nullptr) {
+            return nullptr;
+        }
+        auto pending_drops = emitPendingValueDrops();
+        if (!pending_drops) {
+            return nullptr;
+        }
+        auto dropped = emitDropLocalIds(expr.early_return_drop_local_ids);
+        if (!dropped) {
+            return nullptr;
+        }
+        builder.CreateRet(err_result);
+
+        builder.SetInsertPoint(merge_block);
+        auto* phi = builder.CreatePHI(lowerType(result_info->ok_type), 1,
+                                      "result.ok.value");
+        phi->addIncoming(ok_payload, ok_block_end);
+        return phi;
+    }
+
     auto emitExpr(ast::Expr& expr) -> llvm::Value* {
         ScopedDebugLocation debug_location(*this, expr.range);
         if (expr.resolved_type != nullptr &&
@@ -2614,10 +2954,17 @@ class LLVMCodegen {
                         ast::BuiltinCallKind::FunctionPointer) {
                         return emitFunctionPointerBuiltin(call);
                     }
+                    if (call.builtin_kind == ast::BuiltinCallKind::Panic) {
+                        return emitPanicBuiltin(call);
+                    }
+                    if (call.builtin_kind == ast::BuiltinCallKind::ResultTry) {
+                        return emitResultBuiltin(expr, call);
+                    }
                     if (call.builtin_kind != ast::BuiltinCallKind::None &&
                         call.builtin_kind != ast::BuiltinCallKind::Len &&
                         call.builtin_kind != ast::BuiltinCallKind::Subslice &&
-                        call.builtin_kind != ast::BuiltinCallKind::RawData) {
+                        call.builtin_kind != ast::BuiltinCallKind::RawData &&
+                        call.builtin_kind != ast::BuiltinCallKind::Panic) {
                         return emitAtomicBuiltin(call);
                     }
                     if (call.builtin_kind == ast::BuiltinCallKind::Len) {
@@ -2645,6 +2992,27 @@ class LLVMCodegen {
                         call.function->intrinsic_lowering.has_value()) {
                         return emitIntrinsicLowering(call);
                     }
+
+                    [[maybe_unused]] const auto pending_drop_scope =
+                        PendingValueDropScope{pending_value_drops};
+                    const auto materialize_owned_argument =
+                        [&](llvm::Value* value, const Type* parameter_type,
+                            std::string_view temp_name) -> llvm::Value* {
+                        if (value == nullptr || parameter_type == nullptr ||
+                            !types.needsDrop(parameter_type)) {
+                            return value;
+                        }
+                        auto* slot =
+                            createEntryAlloca(temp_name, parameter_type);
+                        builder.CreateStore(value, slot);
+                        pending_value_drops.push_back(PendingValueDrop{
+                            .address = slot,
+                            .type = parameter_type,
+                        });
+                        return builder.CreateLoad(
+                            lowerType(parameter_type), slot,
+                            std::string(temp_name) + ".value");
+                    };
 
                     if (call.dispatched_interface != nullptr &&
                         call.function == nullptr) {
@@ -2688,7 +3056,16 @@ class LLVMCodegen {
                         arguments.push_back(data_pointer);
                         for (std::size_t index = 1;
                              index < call.arguments.size(); ++index) {
+                            const auto* parameter_type =
+                                call.dispatched_interface->parameters[index]
+                                    .resolved_type;
                             auto* argument = emitExpr(*call.arguments[index]);
+                            if (argument == nullptr) {
+                                return nullptr;
+                            }
+                            argument = materialize_owned_argument(
+                                argument, parameter_type,
+                                "ifarg." + std::to_string(index) + ".tmp");
                             if (argument == nullptr) {
                                 return nullptr;
                             }
@@ -2768,6 +3145,12 @@ class LLVMCodegen {
                             if (lowered_argument == nullptr) {
                                 return nullptr;
                             }
+                            lowered_argument = materialize_owned_argument(
+                                lowered_argument, parameter_type,
+                                "call.arg." + std::to_string(index) + ".tmp");
+                            if (lowered_argument == nullptr) {
+                                return nullptr;
+                            }
                             arguments.push_back(lowered_argument);
                         }
                     }
@@ -2801,8 +3184,27 @@ class LLVMCodegen {
                 [&](ast::InitListExpr& init_list) -> llvm::Value* {
                     auto* storage =
                         createEntryAlloca("init.tmp", expr.resolved_type);
+                    [[maybe_unused]] const auto pending_drop_scope =
+                        PendingValueDropScope{pending_value_drops};
+                    const auto* struct_type =
+                        types.unqualify(expr.resolved_type);
+                    const auto* struct_decl =
+                        struct_type != nullptr &&
+                                struct_type->kind == TypeKind::Struct
+                            ? struct_type->struct_decl
+                            : nullptr;
                     for (std::size_t index = 0;
                          index < init_list.elements.size(); ++index) {
+                        const Type* field_type = nullptr;
+                        if (struct_decl != nullptr &&
+                            index < struct_decl->fields.size()) {
+                            field_type =
+                                struct_decl->fields[index].resolved_type;
+                        }
+                        if (field_type == nullptr) {
+                            field_type =
+                                init_list.elements[index]->resolved_type;
+                        }
                         auto* element = emitExpr(*init_list.elements[index]);
                         if (element == nullptr) {
                             return nullptr;
@@ -2811,18 +3213,27 @@ class LLVMCodegen {
                             lowerType(expr.resolved_type), storage,
                             static_cast<unsigned>(index), "init.field.addr");
                         builder.CreateStore(element, field_address);
+                        if (field_type != nullptr &&
+                            types.needsDrop(field_type)) {
+                            pending_value_drops.push_back(PendingValueDrop{
+                                .address = field_address,
+                                .type = field_type,
+                            });
+                        }
                     }
                     return builder.CreateLoad(lowerType(expr.resolved_type),
                                               storage, "inittmp");
                 },
                 [&](ast::ArrayLiteralExpr& array_literal) -> llvm::Value* {
+                    [[maybe_unused]] const auto pending_drop_scope =
+                        PendingValueDropScope{pending_value_drops};
                     if (types.unqualify(expr.resolved_type)->kind ==
                         TypeKind::Slice) {
                         const auto* slice_type =
                             types.unqualify(expr.resolved_type);
-                        const auto* storage_type =
-                            types.getArray(slice_type->element_type,
-                                           array_literal.elements.size());
+                        const auto* element_type = slice_type->element_type;
+                        const auto* storage_type = types.getArray(
+                            element_type, array_literal.elements.size());
                         llvm::Value* storage = nullptr;
                         LocalSlot* storage_slot = nullptr;
                         if (expr.slice_storage_local_id != 0) {
@@ -2867,6 +3278,13 @@ class LLVMCodegen {
                                      llvm::Type::getInt64Ty(context), index)},
                                 "slice.array.elem.addr");
                             builder.CreateStore(element, element_address);
+                            if (element_type != nullptr &&
+                                types.needsDrop(element_type)) {
+                                pending_value_drops.push_back(PendingValueDrop{
+                                    .address = element_address,
+                                    .type = element_type,
+                                });
+                            }
                         }
                         if (storage_slot != nullptr &&
                             storage_slot->initialized_flag != nullptr) {
@@ -2897,6 +3315,9 @@ class LLVMCodegen {
 
                     auto* storage =
                         createEntryAlloca("array.tmp", expr.resolved_type);
+                    const auto* array_type =
+                        types.unqualify(expr.resolved_type);
+                    const auto* element_type = array_type->element_type;
                     auto* zero = llvm::ConstantInt::get(
                         llvm::Type::getInt64Ty(context), 0);
                     for (std::size_t index = 0;
@@ -2912,6 +3333,13 @@ class LLVMCodegen {
                                        llvm::Type::getInt64Ty(context), index)},
                             "array.elem.addr");
                         builder.CreateStore(element, element_address);
+                        if (element_type != nullptr &&
+                            types.needsDrop(element_type)) {
+                            pending_value_drops.push_back(PendingValueDrop{
+                                .address = element_address,
+                                .type = element_type,
+                            });
+                        }
                     }
                     return builder.CreateLoad(lowerType(expr.resolved_type),
                                               storage, "arraytmp");
@@ -3286,6 +3714,18 @@ class LLVMCodegen {
         return {};
     }
 
+    auto emitPendingValueDrops() -> std::expected<void, Diagnostic> {
+        for (std::size_t index = pending_value_drops.size(); index > 0;
+             --index) {
+            const auto& pending = pending_value_drops[index - 1];
+            auto dropped = emitDropValue(pending.address, pending.type);
+            if (!dropped) {
+                return std::unexpected(dropped.error());
+            }
+        }
+        return {};
+    }
+
     auto emitDropValue(llvm::Value* address, const Type* type)
         -> std::expected<void, Diagnostic> {
         type = types.unqualify(type);
@@ -3419,7 +3859,9 @@ class LLVMCodegen {
     std::vector<llvm::BasicBlock*> break_targets;
     std::vector<llvm::BasicBlock*> continue_targets;
     std::vector<llvm::DIScope*> debug_scope_stack;
+    std::vector<PendingValueDrop> pending_value_drops;
     FunctionFrame frame;
+    const ast::FunctionDecl* current_function_decl = nullptr;
 };
 
 } // namespace

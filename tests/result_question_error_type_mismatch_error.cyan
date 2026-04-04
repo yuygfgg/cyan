@@ -1,0 +1,10 @@
+import /std.result;
+
+Result<i64, i32> left() {
+    return Err(3);
+}
+
+Result<i64, i64> right() {
+    i64 value = left()?;
+    return Ok(value);
+}

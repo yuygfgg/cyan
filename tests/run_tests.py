@@ -63,6 +63,8 @@ def run_case(binary: pathlib.Path, path: pathlib.Path) -> tuple[bool, str]:
     expected_ir = read_optional_lines(path.with_suffix(".ir"))
     forbidden_ir = read_optional_lines(path.with_suffix(".irnot"))
     expected_run = read_optional_text(path.with_suffix(".run"))
+    expected_run_stdout = read_optional_lines(path.with_suffix(".runstdout"))
+    expected_run_stderr = read_optional_lines(path.with_suffix(".runstderr"))
     support_c = path.with_suffix(".c")
 
     check_proc = run_compiler(binary, path, "--check")
@@ -181,6 +183,27 @@ def run_case(binary: pathlib.Path, path: pathlib.Path) -> tuple[bool, str]:
                 f"{path.name}: expected runtime exit code {expected_exit}, "
                 f"got {run_proc.returncode}\n{output}",
             )
+
+        run_output_failures = require_substrings(
+            run_proc.stdout,
+            expected_run_stdout,
+            label="runtime stdout",
+            case_name=path.name,
+        )
+        run_output_failures.extend(
+            require_substrings(
+                run_proc.stderr,
+                expected_run_stderr,
+                label="runtime stderr",
+                case_name=path.name,
+            )
+        )
+        if run_output_failures:
+            output = (
+                f"stdout:\n{run_proc.stdout}\n"
+                f"stderr:\n{run_proc.stderr}"
+            )
+            return False, "\n".join(run_output_failures + [output])
 
     return True, ""
 

@@ -1,4 +1,6 @@
 import /std.rc;
+import /std.result;
+import /std.error;
 import /std.thread;
 
 struct RcTask {
@@ -8,7 +10,7 @@ struct RcTask {
 impl run_task(&RcTask task) {}
 
 i64 main() {
-    RcTask task = {rc_new(3)};
+    RcTask task = {must(rc_new(3))};
     parallel_do([task]);
     return 0;
 }

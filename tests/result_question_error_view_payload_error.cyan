@@ -1,0 +1,13 @@
+import /std.result;
+import /std.view;
+
+Result<i64, []const char> fail([]const char text)
+    depends(return.Err on text) {
+    return Err(text);
+}
+
+Result<i64, []const char> forward([]const char text)
+    depends(return.Err on text) {
+    i64 value = fail(text)?;
+    return Ok(value);
+}

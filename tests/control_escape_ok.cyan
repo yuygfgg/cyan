@@ -1,4 +1,6 @@
 import /std.strconv as strconv;
+import /std.result;
+import /std.error;
 
 i64 main() {
     []const char controls = "\v\f";
@@ -12,10 +14,10 @@ i64 main() {
         return 3;
     }
 
-    if (strconv.parse_i128("\v\f-42tail") != (-42 as i128)) {
+    if (must(strconv.parse_i128("\v\f-42tail")) != (-42 as i128)) {
         return 4;
     }
-    if (strconv.parse_u128("\f\v+42tail") != (42 as u128)) {
+    if (must(strconv.parse_u128("\f\v+42tail")) != (42 as u128)) {
         return 5;
     }
 

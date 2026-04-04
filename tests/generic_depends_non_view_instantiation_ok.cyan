@@ -1,0 +1,23 @@
+struct RefBox {
+    &i64 value;
+};
+
+T id<T>(T value) depends(return on value) {
+    return value;
+}
+
+i64 main() {
+    i64 number = 7;
+    i64 copied = id(number);
+    if (copied != 7) {
+        return 1;
+    }
+
+    RefBox boxed = {&number};
+    RefBox forwarded = id(boxed);
+    if (*forwarded.value != 7) {
+        return 2;
+    }
+
+    return 0;
+}

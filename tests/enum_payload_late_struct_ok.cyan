@@ -1,0 +1,23 @@
+enum Value {
+    Some(Pair),
+    None,
+};
+
+struct Pair {
+    i64 left;
+    i64 right;
+};
+
+i64 sum(Value value) {
+    switch (move value) {
+        case Some(pair):
+            return pair.left + pair.right;
+        case None:
+            return -1;
+    }
+}
+
+i64 main() {
+    Pair pair = {2, 3};
+    return sum(Some(pair)) - 5;
+}

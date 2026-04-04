@@ -1,5 +1,7 @@
 import /std.sync;
 import /std.thread;
+import /std.result;
+import /std.error;
 
 struct AddTask {
     &Mutex<i64> total;
@@ -16,7 +18,7 @@ impl run_task(&AddTask task) {
 }
 
 i64 main() {
-    Mutex<i64> total = mutex_new(0);
+    Mutex<i64> total = must(mutex_new(0));
 
     AddTask first = {&total, 2000};
     AddTask second = {&total, 2000};

@@ -44,6 +44,21 @@ static constexpr char k_std_ryu_source[] = {
 static constexpr char k_std_ptr_source[] = {
 #embed "../stdlib/std/ptr.cyan"
     , 0};
+static constexpr char k_std_result_source[] = {
+#embed "../stdlib/std/result.cyan"
+    , 0};
+static constexpr char k_std_err_source[] = {
+#embed "../stdlib/std/err.cyan"
+    , 0};
+static constexpr char k_std_error_source[] = {
+#embed "../stdlib/std/error.cyan"
+    , 0};
+static constexpr char k_std_fmt_source[] = {
+#embed "../stdlib/std/fmt.cyan"
+    , 0};
+static constexpr char k_std_panic_source[] = {
+#embed "../stdlib/std/panic.cyan"
+    , 0};
 static constexpr char k_std_abi_source[] = {
 #embed "../stdlib/std/abi.cyan"
     , 0};
@@ -107,6 +122,16 @@ auto builtin_module_sources()
              std::string_view(k_std_ryu_source, sizeof(k_std_ryu_source) - 1)},
             {"std.ptr",
              std::string_view(k_std_ptr_source, sizeof(k_std_ptr_source) - 1)},
+            {"std.result", std::string_view(k_std_result_source,
+                                            sizeof(k_std_result_source) - 1)},
+            {"std.err",
+             std::string_view(k_std_err_source, sizeof(k_std_err_source) - 1)},
+            {"std.error", std::string_view(k_std_error_source,
+                                           sizeof(k_std_error_source) - 1)},
+            {"std.fmt",
+             std::string_view(k_std_fmt_source, sizeof(k_std_fmt_source) - 1)},
+            {"std.panic", std::string_view(k_std_panic_source,
+                                           sizeof(k_std_panic_source) - 1)},
             {"std.abi",
              std::string_view(k_std_abi_source, sizeof(k_std_abi_source) - 1)},
             {"std.atomic", std::string_view(k_std_atomic_source,
@@ -232,6 +257,7 @@ auto parse_builtin_lowering_kind(std::string_view text)
             {"subslice", Subslice},
             {"raw_data", RawData},
             {"fn_ptr", FunctionPointer},
+            {"panic", Panic},
             {"atomic_relaxed", AtomicRelaxedOrder},
             {"atomic_acquire", AtomicAcquireOrder},
             {"atomic_release", AtomicReleaseOrder},

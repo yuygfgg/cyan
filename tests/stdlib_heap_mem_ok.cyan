@@ -1,6 +1,8 @@
 import /std.cstr as cstr;
 import /std.heap as heap;
 import /std.mem as mem;
+import /std.result;
+import /std.error;
 
 i64 main() {
     char[5] text = "cyan";
@@ -18,14 +20,14 @@ i64 main() {
         return 3;
     }
 
-    char* heap_text = heap.malloc_array<char>(5);
+    char* heap_text = must(heap.malloc_array<char>(5));
     mem.fill(heap_text, 0 as u8, 5);
     mem.copy(heap_text, &text[0], 5);
     if (cstr.strcmp(heap_text, "cyan") != 0) {
         return 4;
     }
 
-    char* grown = heap.realloc_array<char>(heap_text, 8);
+    char* grown = must(heap.realloc_array<char>(heap_text, 8));
     if (cstr.strcmp(grown, "cyan") != 0) {
         return 5;
     }

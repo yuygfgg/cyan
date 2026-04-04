@@ -2438,6 +2438,7 @@ auto is_semantic_operator(TokenKind kind) -> bool {
     case TokenKind::Dot:
     case TokenKind::Equal:
     case TokenKind::EqualEqual:
+    case TokenKind::Question:
     case TokenKind::Bang:
     case TokenKind::BangEqual:
     case TokenKind::Plus:

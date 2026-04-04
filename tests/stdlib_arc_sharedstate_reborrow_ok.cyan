@@ -1,4 +1,6 @@
 import /std.sync;
+import /std.result;
+import /std.error;
 
 struct SharedState {
     Mutex<i64> total;
@@ -17,8 +19,8 @@ void bump(&mut Box box) {
 }
 
 i64 main() {
-    SharedState state = {mutex_new(0)};
-    Box box = {arc_new(state), 9};
+    SharedState state = {must(mutex_new(0))};
+    Box box = {must(arc_new(state)), 9};
     bump(&mut box);
     &SharedState shared = arc_get(&box.state);
     MutexGuard<i64> guard = lock(&shared.total);

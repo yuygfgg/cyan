@@ -1,10 +1,47 @@
+import /std.err;
+import /std.fmt;
+import /std.result;
 import /std.ryu as ryu;
-import /std.ptr as ptr;
 
 extern {
-    i64 strtoll(const char* text, void* endptr, i32 base);
-    u64 strtoull(const char* text, void* endptr, i32 base);
-    f64 strtod(const char* text, void* endptr);
+    f64 strtod(const char* text, const char** endptr);
+}
+
+export enum StrconvParseError {
+    StrconvParseNoDigits,
+    StrconvParseOverflow,
+    StrconvParseUnderflow,
+    StrconvParseNegativeUnsigned,
+};
+
+impl err(&StrconvParseError value) {}
+
+impl fmt(&StrconvParseError value, &mut StringBuilder out) {
+    StrconvParseError copy = *value;
+    switch (move copy) {
+        case StrconvParseNoDigits:
+            return fmt_write_cstr(out, "parse failed: no digits");
+        case StrconvParseOverflow:
+            return fmt_write_cstr(out, "parse failed: overflow");
+        case StrconvParseUnderflow:
+            return fmt_write_cstr(out, "parse failed: underflow");
+        case StrconvParseNegativeUnsigned:
+            return fmt_write_cstr(out, "parse failed: negative unsigned");
+    }
+}
+
+export enum StrconvFormatError {
+    StrconvFormatFailed,
+};
+
+impl err(&StrconvFormatError value) {}
+
+impl fmt(&StrconvFormatError value, &mut StringBuilder out) {
+    StrconvFormatError copy = *value;
+    switch (move copy) {
+        case StrconvFormatFailed:
+            return fmt_write_cstr(out, "float formatting failed");
+    }
 }
 
 void buffer_push_char(char* out, &mut i64 len, char value) {
@@ -75,6 +112,16 @@ i32 decimal_digit_value(char value) {
     return (value as i32) - ('0' as i32);
 }
 
+const char* skip_ascii_space(const char* text) {
+    const char* cursor = text;
+    unchecked {
+        while (*cursor != '\0' && is_ascii_space(*cursor)) {
+            cursor = cursor + 1;
+        }
+    }
+    return cursor;
+}
+
 export i64 write_i64(char* out, i64 value) {
     i64 len = 0;
     unchecked {
@@ -125,29 +172,26 @@ export i64 write_u128(char* out, u128 value) {
     return len;
 }
 
-export i64 write_f64(char* out, i64 capacity, f64 value) {
-    return ryu.write_f64(out, capacity, value);
-}
-
-export i64 write_f32(char* out, i64 capacity, f32 value) {
-    return ryu.write_f32(out, capacity, value);
-}
-
-export i64 parse_i64(const char* text) {
-    return strtoll(text, ptr.null<void>(), 10);
-}
-
-export u64 parse_u64(const char* text) {
-    return strtoull(text, ptr.null<void>(), 10);
-}
-
-export i128 parse_i128(const char* text) {
-    const char* cursor = text;
-    unchecked {
-        while (*cursor != '\0' && is_ascii_space(*cursor)) {
-            cursor = cursor + 1;
-        }
+export Result<i64, StrconvFormatError> write_f64(char* out, i64 capacity,
+                                                 f64 value) {
+    i64 written = ryu.write_f64(out, capacity, value);
+    if (written < 0) {
+        return Err(StrconvFormatFailed());
     }
+    return Ok(written);
+}
+
+export Result<i64, StrconvFormatError> write_f32(char* out, i64 capacity,
+                                                 f32 value) {
+    i64 written = ryu.write_f32(out, capacity, value);
+    if (written < 0) {
+        return Err(StrconvFormatFailed());
+    }
+    return Ok(written);
+}
+
+export Result<i128, StrconvParseError> parse_i128(const char* text) {
+    const char* cursor = skip_ascii_space(text);
 
     bool negative = false;
     unchecked {
@@ -172,16 +216,16 @@ export i128 parse_i128(const char* text) {
                 saw_digit = true;
                 i128 digit = decimal_digit_value(*cursor) as i128;
                 if (value < (min_i128 + digit) / (10 as i128)) {
-                    return min_i128;
+                    return Err(StrconvParseUnderflow());
                 }
                 value = value * (10 as i128) - digit;
                 cursor = cursor + 1;
             }
         }
         if (!saw_digit) {
-            return 0 as i128;
+            return Err(StrconvParseNoDigits());
         }
-        return value;
+        return Ok(value);
     }
 
     i128 value = 0 as i128;
@@ -191,7 +235,7 @@ export i128 parse_i128(const char* text) {
             saw_digit = true;
             i128 digit = decimal_digit_value(*cursor) as i128;
             if (value > (max_i128 - digit) / (10 as i128)) {
-                return max_i128;
+                return Err(StrconvParseOverflow());
             }
             value = value * (10 as i128) + digit;
             cursor = cursor + 1;
@@ -199,27 +243,20 @@ export i128 parse_i128(const char* text) {
     }
 
     if (!saw_digit) {
-        return 0 as i128;
+        return Err(StrconvParseNoDigits());
     }
-    return value;
+    return Ok(value);
 }
 
-export u128 parse_u128(const char* text) {
-    const char* cursor = text;
-    unchecked {
-        while (*cursor != '\0' && is_ascii_space(*cursor)) {
-            cursor = cursor + 1;
-        }
-    }
+export Result<u128, StrconvParseError> parse_u128(const char* text) {
+    const char* cursor = skip_ascii_space(text);
 
-    bool negative = false;
     unchecked {
         if (*cursor == '+') {
             cursor = cursor + 1;
         } else {
             if (*cursor == '-') {
-                negative = true;
-                cursor = cursor + 1;
+                return Err(StrconvParseNegativeUnsigned());
             }
         }
     }
@@ -232,11 +269,7 @@ export u128 parse_u128(const char* text) {
             saw_digit = true;
             u128 digit = decimal_digit_value(*cursor) as u128;
             if (value > (max_u128 - digit) / (10 as u128)) {
-                value = max_u128;
-                while (is_decimal_digit(*cursor)) {
-                    cursor = cursor + 1;
-                }
-                break;
+                return Err(StrconvParseOverflow());
             }
             value = value * (10 as u128) + digit;
             cursor = cursor + 1;
@@ -244,18 +277,43 @@ export u128 parse_u128(const char* text) {
     }
 
     if (!saw_digit) {
-        return 0 as u128;
+        return Err(StrconvParseNoDigits());
     }
-    if (negative) {
-        return (0 as u128) - value;
-    }
-    return value;
+    return Ok(value);
 }
 
-export f64 parse_f64(const char* text) {
-    return strtod(text, ptr.null<void>());
+export Result<i64, StrconvParseError> parse_i64(const char* text) {
+    i128 value = parse_i128(text)?;
+    i128 min_i64 = (-9223372036854775807 as i128) - (1 as i128);
+    i128 max_i64 = 9223372036854775807 as i128;
+    if (value < min_i64) {
+        return Err(StrconvParseUnderflow());
+    }
+    if (value > max_i64) {
+        return Err(StrconvParseOverflow());
+    }
+    return Ok(value as i64);
 }
 
-export f32 parse_f32(const char* text) {
-    return parse_f64(text) as f32;
+export Result<u64, StrconvParseError> parse_u64(const char* text) {
+    u128 value = parse_u128(text)?;
+    u128 max_u64 = ((0 as u64) - (1 as u64)) as u128;
+    if (value > max_u64) {
+        return Err(StrconvParseOverflow());
+    }
+    return Ok(value as u64);
+}
+
+export Result<f64, StrconvParseError> parse_f64(const char* text) {
+    const char* end = text;
+    f64 value = strtod(text, &mut end);
+    if (end == text) {
+        return Err(StrconvParseNoDigits());
+    }
+    return Ok(value);
+}
+
+export Result<f32, StrconvParseError> parse_f32(const char* text) {
+    f64 value = parse_f64(text)?;
+    return Ok(value as f32);
 }

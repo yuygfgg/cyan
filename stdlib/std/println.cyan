@@ -1,344 +1,239 @@
 import /std.cstr as cstr;
+import /std.err;
+import /std.error;
 import /std.file as file;
-import /std.heap as heap;
+import /std.fmt;
+import /std.result;
 import /std.view;
-import /std.strconv as strconv;
 
 extern {
     i32 dup(i32 fd);
+    i32 close(i32 fd);
 }
 
-export struct StringBuilder {
-    char* ptr;
-    i64 len;
-    i64 capacity;
+export enum PrintError {
+    PrintFmtFailed(FmtError),
+    PrintFileFailed(file.FileError),
+    PrintShortWrite,
 };
 
-impl drop(&mut StringBuilder self) {
-    heap.free_ptr(self.ptr);
+PrintError print_from_file(file.FileError error) {
+    return PrintFileFailed(error);
 }
 
-StringBuilder builder_new(i64 capacity) {
-    char* memory = heap.malloc_array<char>(capacity);
-    unchecked {
-        memory[0] = '\0';
+PrintError print_from_fmt(FmtError error) {
+    return PrintFmtFailed(error);
+}
+
+Result<Unit, PrintError> write_stream(void* stream, &StringBuilder out) {
+    i64 written;
+    switch (move file.fwrite(out.ptr, 1, out.len, stream)) {
+        case Ok(count):
+            written = count;
+        case Err(error):
+            return Err(print_from_file(error));
     }
-    return {memory, 0, capacity};
-}
-
-void builder_reserve(&mut StringBuilder out, i64 needed) {
-    if (needed <= out.capacity) {
-        return;
+    if (written != out.len) {
+        return Err(PrintShortWrite());
     }
-
-    i64 next_capacity = out.capacity;
-    while (next_capacity < needed) {
-        next_capacity = next_capacity * 2;
-    }
-
-    out.ptr = heap.realloc_array<char>(out.ptr, next_capacity);
-    out.capacity = next_capacity;
+    return Ok(Unit());
 }
 
-void builder_push_char(&mut StringBuilder out, char value) {
-    i64 needed = out.len + 2;
-    builder_reserve(out, needed);
-    unchecked {
-        out.ptr[out.len] = value;
-        out.len = out.len + 1;
-        out.ptr[out.len] = '\0';
-    }
-}
+Result<Unit, PrintError> write_fd(i32 fd, &StringBuilder out) {
+    i32 duplicated_fd = dup(fd);
 
-void builder_append_cstring(&mut StringBuilder out, const char* text) {
-    i64 text_len = cstr.strlen(text);
-    i64 needed = out.len + text_len + 1;
-    builder_reserve(out, needed);
-
-    unchecked {
-        i64 i = 0;
-        while (i < text_len) {
-            out.ptr[out.len + i] = text[i];
-            i = i + 1;
-        }
-        out.len = out.len + text_len;
-        out.ptr[out.len] = '\0';
-    }
-}
-
-void builder_append_slice(&mut StringBuilder out, []const char text) {
-    i64 text_len = len(text);
-    i64 needed = out.len + text_len + 1;
-    builder_reserve(out, needed);
-
-    i64 i = 0;
-    while (i < text_len) {
-        unchecked {
-            out.ptr[out.len + i] = text[i];
-        }
-        i++;
-    }
-
-    unchecked {
-        out.len = out.len + text_len;
-        out.ptr[out.len] = '\0';
-    }
-}
-
-void builder_append_buffer(&mut StringBuilder out, char* text, i64 text_len) {
-    i64 needed = out.len + text_len + 1;
-    builder_reserve(out, needed);
-
-    i64 i = 0;
-    while (i < text_len) {
-        unchecked {
-            out.ptr[out.len + i] = text[i];
-        }
-        i++;
-    }
-
-    unchecked {
-        out.len = out.len + text_len;
-        out.ptr[out.len] = '\0';
-    }
-}
-
-void builder_append_i64(&mut StringBuilder out, i64 value) {
-    i64 needed = out.len + 21;
-    builder_reserve(out, needed);
-    unchecked {
-        char* dst = out.ptr + out.len;
-        i64 written = strconv.write_i64(dst, value);
-        out.len = out.len + written;
-    }
-}
-
-void builder_append_u64(&mut StringBuilder out, u64 value) {
-    i64 needed = out.len + 21;
-    builder_reserve(out, needed);
-    unchecked {
-        char* dst = out.ptr + out.len;
-        i64 written = strconv.write_u64(dst, value);
-        out.len = out.len + written;
-    }
-}
-
-void builder_append_i128(&mut StringBuilder out, i128 value) {
-    i64 needed = out.len + 41;
-    builder_reserve(out, needed);
-    unchecked {
-        char* dst = out.ptr + out.len;
-        i64 written = strconv.write_i128(dst, value);
-        out.len = out.len + written;
-    }
-}
-
-void builder_append_u128(&mut StringBuilder out, u128 value) {
-    i64 needed = out.len + 40;
-    builder_reserve(out, needed);
-    unchecked {
-        char* dst = out.ptr + out.len;
-        i64 written = strconv.write_u128(dst, value);
-        out.len = out.len + written;
-    }
-}
-
-void builder_append_f64(&mut StringBuilder out, f64 value) {
-    i64 needed = out.len + 64;
-    builder_reserve(out, needed);
-    i64 written = 0;
-    unchecked {
-        char* dst = out.ptr + out.len;
-        written = strconv.write_f64(dst, out.capacity - out.len, value);
-    }
-    if (written < 0) {
-        builder_append_cstring(out, "<float fmt error>");
-        return;
-    }
-    out.len = out.len + written;
-}
-
-export interface<T> void fmt(&T value, &mut StringBuilder out);
-
-export void fmt_write_char(&mut StringBuilder out, char value) {
-    builder_push_char(out, value);
-}
-
-export void fmt_write_cstr(&mut StringBuilder out, const char* text) {
-    builder_append_cstring(out, text);
-}
-
-export void fmt_write_slice(&mut StringBuilder out, []const char text) {
-    builder_append_slice(out, text);
-}
-
-export void fmt_write_i64(&mut StringBuilder out, i64 value) {
-    builder_append_i64(out, value);
-}
-
-export void fmt_write_u64(&mut StringBuilder out, u64 value) {
-    builder_append_u64(out, value);
-}
-
-export void fmt_write_f64(&mut StringBuilder out, f64 value) {
-    builder_append_f64(out, value);
-}
-
-export void fmt_write_bool(&mut StringBuilder out, bool value) {
-    if (value) {
-        builder_append_cstring(out, "true");
-        return;
-    }
-    builder_append_cstring(out, "false");
-}
-
-impl fmt(&[]const char value, &mut StringBuilder out) {
-    builder_append_slice(out, *value);
-}
-
-impl fmt(&bool value, &mut StringBuilder out) {
-    fmt_write_bool(out, *value);
-}
-
-impl fmt(&char value, &mut StringBuilder out) {
-    builder_push_char(out, *value);
-}
-
-impl fmt(&i8 value, &mut StringBuilder out) {
-    builder_append_i64(out, *value as i64);
-}
-
-impl fmt(&i16 value, &mut StringBuilder out) {
-    builder_append_i64(out, *value as i64);
-}
-
-impl fmt(&i32 value, &mut StringBuilder out) {
-    builder_append_i64(out, *value as i64);
-}
-
-impl fmt(&i64 value, &mut StringBuilder out) {
-    builder_append_i64(out, *value);
-}
-
-impl fmt(&i128 value, &mut StringBuilder out) {
-    builder_append_i128(out, *value);
-}
-
-impl fmt(&u8 value, &mut StringBuilder out) {
-    builder_append_u64(out, *value as u64);
-}
-
-impl fmt(&u16 value, &mut StringBuilder out) {
-    builder_append_u64(out, *value as u64);
-}
-
-impl fmt(&u32 value, &mut StringBuilder out) {
-    builder_append_u64(out, *value as u64);
-}
-
-impl fmt(&u64 value, &mut StringBuilder out) {
-    builder_append_u64(out, *value);
-}
-
-impl fmt(&u128 value, &mut StringBuilder out) {
-    builder_append_u128(out, *value);
-}
-
-impl fmt(&f32 value, &mut StringBuilder out) {
-    builder_append_f64(out, *value as f64);
-}
-
-impl fmt(&f64 value, &mut StringBuilder out) {
-    builder_append_f64(out, *value);
-}
-
-void render_into(&mut StringBuilder out, const char* format_text, []&fmt args) {
-    i64 next_arg = 0;
-
-    unchecked {
-        const char* cursor = format_text;
-        while (*cursor != '\0') {
-            if (cursor[0] == '{' && cursor[1] == '}') {
-                if (next_arg < len(args)) {
-                    fmt(args[next_arg], out);
-                    next_arg++;
-                } else {
-                    builder_append_cstring(out, "<missing>");
-                }
-                cursor = cursor + 2;
-                continue;
+    void* stream;
+    switch (move file.fdopen(duplicated_fd, "w")) {
+        case Ok(handle):
+            stream = handle;
+        case Err(error):
+            if (duplicated_fd >= 0) {
+                close(duplicated_fd);
             }
-
-            if (cursor[0] == '{' && cursor[1] == '{') {
-                builder_push_char(out, '{');
-                cursor = cursor + 2;
-                continue;
-            }
-
-            if (cursor[0] == '}' && cursor[1] == '}') {
-                builder_push_char(out, '}');
-                cursor = cursor + 2;
-                continue;
-            }
-
-            builder_push_char(out, *cursor);
-            cursor = cursor + 1;
-        }
+            return Err(print_from_file(error));
     }
 
-    if (next_arg < len(args)) {
-        builder_append_cstring(out, " <extra args>");
+    Result<Unit, PrintError> write_result = write_stream(stream, out);
+
+    Result<Unit, PrintError> close_result;
+    switch (move file.fclose(stream)) {
+        case Ok(_):
+            close_result = Ok(Unit());
+        case Err(error):
+            close_result = Err(print_from_file(error));
+    }
+
+    bool had_write_error = false;
+    PrintError write_error = PrintShortWrite();
+    switch (move write_result) {
+        case Ok(_):
+            had_write_error = false;
+        case Err(error):
+            had_write_error = true;
+            write_error = error;
+    }
+
+    switch (move close_result) {
+        case Ok(_):
+            if (had_write_error) {
+                return Err(write_error);
+            }
+            return Ok(Unit());
+        case Err(error):
+            if (had_write_error) {
+                return Err(write_error);
+            }
+            return Err(error);
     }
 }
 
-void write_fd(i32 fd, &StringBuilder out) {
-    void* stream = file.fdopen(dup(fd), "w");
-    file.fwrite(out.ptr, 1, out.len, stream);
-    file.fclose(stream);
+export Result<Unit, PrintError> try_fprint(void* stream, const char* format_text,
+                                           []&fmt args) {
+    StringBuilder out;
+    switch (move builder_new(64)) {
+        case Ok(builder):
+            out = builder;
+        case Err(error):
+            return Err(print_from_fmt(error));
+    }
+    switch (move render_into(&mut out, format_text, args)) {
+        case Ok(_):
+        case Err(error):
+            return Err(print_from_fmt(error));
+    }
+    return write_stream(stream, &out);
+}
+
+export Result<Unit, PrintError> try_fprintln(void* stream,
+                                             const char* format_text,
+                                             []&fmt args) {
+    StringBuilder out;
+    switch (move builder_new(64)) {
+        case Ok(builder):
+            out = builder;
+        case Err(error):
+            return Err(print_from_fmt(error));
+    }
+    switch (move render_into(&mut out, format_text, args)) {
+        case Ok(_):
+        case Err(error):
+            return Err(print_from_fmt(error));
+    }
+    switch (move fmt_write_char(&mut out, '\n')) {
+        case Ok(_):
+        case Err(error):
+            return Err(print_from_fmt(error));
+    }
+    return write_stream(stream, &out);
+}
+
+export Result<Unit, PrintError> try_print(const char* format_text,
+                                          []&fmt args) {
+    StringBuilder out;
+    switch (move builder_new(64)) {
+        case Ok(builder):
+            out = builder;
+        case Err(error):
+            return Err(print_from_fmt(error));
+    }
+    switch (move render_into(&mut out, format_text, args)) {
+        case Ok(_):
+        case Err(error):
+            return Err(print_from_fmt(error));
+    }
+    return write_fd(1, &out);
+}
+
+export Result<Unit, PrintError> try_println(const char* format_text,
+                                            []&fmt args) {
+    StringBuilder out;
+    switch (move builder_new(64)) {
+        case Ok(builder):
+            out = builder;
+        case Err(error):
+            return Err(print_from_fmt(error));
+    }
+    switch (move render_into(&mut out, format_text, args)) {
+        case Ok(_):
+        case Err(error):
+            return Err(print_from_fmt(error));
+    }
+    switch (move fmt_write_char(&mut out, '\n')) {
+        case Ok(_):
+        case Err(error):
+            return Err(print_from_fmt(error));
+    }
+    return write_fd(1, &out);
+}
+
+export Result<Unit, PrintError> try_fprint0(void* stream,
+                                            const char* format_text) {
+    []&fmt args = [];
+    return try_fprint(stream, format_text, args);
+}
+
+export Result<Unit, PrintError> try_fprintln0(void* stream,
+                                              const char* format_text) {
+    []&fmt args = [];
+    return try_fprintln(stream, format_text, args);
+}
+
+export Result<Unit, PrintError> try_print0(const char* format_text) {
+    []&fmt args = [];
+    return try_print(format_text, args);
+}
+
+export Result<Unit, PrintError> try_println0(const char* format_text) {
+    []&fmt args = [];
+    return try_println(format_text, args);
 }
 
 export void fprint(void* stream, const char* format_text, []&fmt args) {
-    StringBuilder out = builder_new(64);
-    render_into(&mut out, format_text, args);
-    file.fwrite(out.ptr, 1, out.len, stream);
+    must(try_fprint(stream, format_text, args));
 }
 
 export void fprintln(void* stream, const char* format_text, []&fmt args) {
-    StringBuilder out = builder_new(64);
-    render_into(&mut out, format_text, args);
-    builder_push_char(&mut out, '\n');
-    file.fwrite(out.ptr, 1, out.len, stream);
+    must(try_fprintln(stream, format_text, args));
 }
 
 export void print(const char* format_text, []&fmt args) {
-    StringBuilder out = builder_new(64);
-    render_into(&mut out, format_text, args);
-    write_fd(1, &out);
+    must(try_print(format_text, args));
 }
 
 export void println(const char* format_text, []&fmt args) {
-    StringBuilder out = builder_new(64);
-    render_into(&mut out, format_text, args);
-    builder_push_char(&mut out, '\n');
-    write_fd(1, &out);
+    must(try_println(format_text, args));
 }
 
 export void fprint0(void* stream, const char* format_text) {
-    []&fmt args = [];
-    fprint(stream, format_text, args);
+    must(try_fprint0(stream, format_text));
 }
 
 export void fprintln0(void* stream, const char* format_text) {
-    []&fmt args = [];
-    fprintln(stream, format_text, args);
+    must(try_fprintln0(stream, format_text));
 }
 
 export void print0(const char* format_text) {
-    []&fmt args = [];
-    print(format_text, args);
+    must(try_print0(format_text));
 }
 
 export void println0(const char* format_text) {
-    []&fmt args = [];
-    println(format_text, args);
+    must(try_println0(format_text));
+}
+
+impl err(&PrintError value) {}
+
+impl fmt(&PrintError value, &mut StringBuilder out) {
+    PrintError copy = *value;
+    switch (move copy) {
+        case PrintFmtFailed(error):
+            fmt_write_cstr(out, "print formatting failed")?;
+            fmt_write_cstr(out, ": ")?;
+            return fmt(error, out);
+        case PrintFileFailed(error):
+            fmt_write_cstr(out, "print file failed")?;
+            fmt_write_cstr(out, ": ")?;
+            return fmt(error, out);
+        case PrintShortWrite:
+            return fmt_write_cstr(out, "print short write");
+    }
 }

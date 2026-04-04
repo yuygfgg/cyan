@@ -1,4 +1,6 @@
 import /std.sync;
+import /std.result;
+import /std.error;
 
 struct Token {
     &mut i64 counter;
@@ -12,7 +14,7 @@ i64 main() {
     i64 count = 0;
     {
         Token token = {&mut count};
-        Mutex<Token> mutex = mutex_new(token);
+        Mutex<Token> mutex = must(mutex_new(token));
     }
     return count - 1;
 }

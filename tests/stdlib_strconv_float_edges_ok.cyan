@@ -1,6 +1,8 @@
 import /std.cstr as cstr;
 import /std.heap as heap;
 import /std.mem as mem;
+import /std.result;
+import /std.error;
 import /std.strconv as strconv;
 
 bool same_f64_bits(f64 lhs, f64 rhs) {
@@ -31,11 +33,11 @@ i64 expect_text(char* buf, i64 written, const char* expected) {
 }
 
 i64 roundtrip_f64(char* buf, f64 value) {
-    i64 written = strconv.write_f64(buf, 64, value);
+    i64 written = must(strconv.write_f64(buf, 64, value));
     if (written < 0) {
         return 1;
     }
-    f64 parsed = strconv.parse_f64(buf);
+    f64 parsed = must(strconv.parse_f64(buf));
     if (!same_f64_bits(parsed, value)) {
         return 2;
     }
@@ -43,11 +45,11 @@ i64 roundtrip_f64(char* buf, f64 value) {
 }
 
 i64 roundtrip_f32(char* buf, f32 value) {
-    i64 written = strconv.write_f32(buf, 64, value);
+    i64 written = must(strconv.write_f32(buf, 64, value));
     if (written < 0) {
         return 1;
     }
-    f32 parsed = strconv.parse_f32(buf);
+    f32 parsed = must(strconv.parse_f32(buf));
     if (!same_f32_bits(parsed, value)) {
         return 2;
     }
@@ -55,24 +57,24 @@ i64 roundtrip_f32(char* buf, f32 value) {
 }
 
 i64 main() {
-    char* buf = heap.malloc_array<char>(64);
+    char* buf = must(heap.malloc_array<char>(64));
 
-    if (expect_text(buf, strconv.write_f64(buf, 64, 0.1), "0.1") != 0) {
+    if (expect_text(buf, must(strconv.write_f64(buf, 64, 0.1)), "0.1") != 0) {
         return 1;
     }
-    if (expect_text(buf, strconv.write_f64(buf, 64, strconv.parse_f64("-0")), "-0") != 0) {
+    if (expect_text(buf, must(strconv.write_f64(buf, 64, must(strconv.parse_f64("-0")))), "-0") != 0) {
         return 2;
     }
-    if (expect_text(buf, strconv.write_f64(buf, 64, strconv.parse_f64("1e6")), "1e+06") != 0) {
+    if (expect_text(buf, must(strconv.write_f64(buf, 64, must(strconv.parse_f64("1e6")))), "1e+06") != 0) {
         return 3;
     }
-    if (expect_text(buf, strconv.write_f64(buf, 64, strconv.parse_f64("inf")), "inf") != 0) {
+    if (expect_text(buf, must(strconv.write_f64(buf, 64, must(strconv.parse_f64("inf")))), "inf") != 0) {
         return 4;
     }
-    if (expect_text(buf, strconv.write_f64(buf, 64, strconv.parse_f64("-inf")), "-inf") != 0) {
+    if (expect_text(buf, must(strconv.write_f64(buf, 64, must(strconv.parse_f64("-inf")))), "-inf") != 0) {
         return 5;
     }
-    if (expect_text(buf, strconv.write_f64(buf, 64, strconv.parse_f64("nan")), "nan") != 0) {
+    if (expect_text(buf, must(strconv.write_f64(buf, 64, must(strconv.parse_f64("nan")))), "nan") != 0) {
         return 6;
     }
 
@@ -82,13 +84,13 @@ i64 main() {
     if (roundtrip_f64(buf, 1.2345678901234567) != 0) {
         return 8;
     }
-    if (roundtrip_f64(buf, strconv.parse_f64("2.2250738585072014e-308")) != 0) {
+    if (roundtrip_f64(buf, must(strconv.parse_f64("2.2250738585072014e-308"))) != 0) {
         return 9;
     }
-    if (roundtrip_f64(buf, strconv.parse_f64("5e-324")) != 0) {
+    if (roundtrip_f64(buf, must(strconv.parse_f64("5e-324"))) != 0) {
         return 10;
     }
-    if (roundtrip_f64(buf, strconv.parse_f64("-0")) != 0) {
+    if (roundtrip_f64(buf, must(strconv.parse_f64("-0"))) != 0) {
         return 11;
     }
 
@@ -98,10 +100,10 @@ i64 main() {
     if (roundtrip_f32(buf, 1.234567 as f32) != 0) {
         return 13;
     }
-    if (roundtrip_f32(buf, strconv.parse_f32("1e-45")) != 0) {
+    if (roundtrip_f32(buf, must(strconv.parse_f32("1e-45"))) != 0) {
         return 14;
     }
-    if (roundtrip_f32(buf, strconv.parse_f32("-0")) != 0) {
+    if (roundtrip_f32(buf, must(strconv.parse_f32("-0"))) != 0) {
         return 15;
     }
 

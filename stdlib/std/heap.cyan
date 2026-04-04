@@ -1,23 +1,90 @@
-export extern {
-    void* malloc(i64 size);
-    void free(void* ptr);
-    void* realloc(void* ptr, i64 size);
+import /std.err;
+import /std.fmt;
+import /std.ptr as stdptr;
+import /std.result;
+
+extern {
+    //@lower link_case=ret:ptr,arg0:i64:malloc
+    void* malloc_raw(i64 size);
+
+    //@lower link_case=ret:void,arg0:ptr:free
+    void free_raw(void* ptr);
+
+    //@lower link_case=ret:void,arg0:ptr:free
+    void free_typed_raw<T>(T* ptr);
+
+    //@lower link_case=ret:ptr,arg0:ptr,arg1:i64:realloc
+    void* realloc_raw(void* ptr, i64 size);
+
+    //@lower link_case=ret:ptr,arg0:ptr,arg1:i64:realloc
+    T* realloc_typed_raw<T>(T* ptr, i64 size);
 }
 
-export T* malloc_array<T>(i64 count) {
-    unchecked {
-        return malloc(count * sizeof(T)) as T*;
+export enum AllocError {
+    HeapOutOfMemory,
+};
+
+impl err(&AllocError value) {}
+
+impl fmt(&AllocError value, &mut StringBuilder out) {
+    AllocError copy = *value;
+    switch (move copy) {
+        case HeapOutOfMemory:
+            return fmt_write_cstr(out, "heap out of memory");
     }
 }
 
-export T* realloc_array<T>(T* ptr, i64 count) {
-    unchecked {
-        return realloc(ptr as void*, count * sizeof(T)) as T*;
+export Result<void*, AllocError> malloc(i64 size) {
+    if (size <= 0) {
+        return Ok(stdptr.null<void>());
     }
+
+    void* memory = malloc_raw(size);
+    if (memory == stdptr.null<void>()) {
+        return Err(HeapOutOfMemory());
+    }
+    return Ok(memory);
+}
+
+export Result<void*, AllocError> realloc(void* ptr, i64 size) {
+    if (size <= 0) {
+        free_raw(ptr);
+        return Ok(stdptr.null<void>());
+    }
+
+    void* memory = realloc_raw(ptr, size);
+    if (memory == stdptr.null<void>()) {
+        return Err(HeapOutOfMemory());
+    }
+    return Ok(memory);
+}
+
+export void free(void* ptr) {
+    free_raw(ptr);
+}
+
+export Result<T*, AllocError> malloc_array<T>(i64 count) {
+    if (count <= 0) {
+        return Ok(stdptr.null<T>());
+    }
+    void* memory = malloc(count * sizeof(T))?;
+    unchecked {
+        return Ok(memory as T*);
+    }
+}
+
+export Result<T*, AllocError> realloc_array<T>(T* ptr, i64 count) {
+    if (count <= 0) {
+        free_typed_raw(ptr);
+        return Ok(stdptr.null<T>());
+    }
+    T* memory = realloc_typed_raw(ptr, count * sizeof(T));
+    if (memory == stdptr.null<T>()) {
+        return Err(HeapOutOfMemory());
+    }
+    return Ok(memory);
 }
 
 export void free_ptr<T>(T* ptr) {
-    unchecked {
-        free(ptr as void*);
-    }
+    free_typed_raw(ptr);
 }

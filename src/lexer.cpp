@@ -371,6 +371,8 @@ auto Lexer::lexPunctuation() -> std::expected<Token, Diagnostic> {
             return make(TokenKind::EqualEqual);
         }
         return make(TokenKind::Equal);
+    case '?':
+        return make(TokenKind::Question);
     case '!':
         if (!isAtEnd() && current() == '=') {
             advance();

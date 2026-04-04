@@ -1,5 +1,9 @@
 import /std.ptr as ptr;
 import /std.abi;
+import /std.err;
+import /std.fmt;
+import /std.heap as heap;
+import /std.result;
 import /std.view;
 
 extern {
@@ -7,8 +11,6 @@ extern {
     void* cyan_runtime_spawn(void* payload, void* run_fn, void* drop_fn);
     void cyan_runtime_join(void* handle);
     void cyan_runtime_detach(void* handle);
-    void* malloc(i64 size);
-    void free(void* ptr);
 }
 
 export interface<T> void run_task(&T task);
@@ -24,6 +26,29 @@ export struct JoinHandle {
 
 unchecked impl send(JoinHandle);
 
+export enum SpawnError {
+    SpawnAllocFailed(heap.AllocError),
+    SpawnRuntimeFailed,
+};
+
+impl err(&SpawnError value) {}
+
+impl fmt(&SpawnError value, &mut StringBuilder out) {
+    SpawnError copy = *value;
+    switch (move copy) {
+        case SpawnAllocFailed(error):
+            fmt_write_cstr(out, "spawn allocation failed")?;
+            fmt_write_cstr(out, ": ")?;
+            return fmt(error, out);
+        case SpawnRuntimeFailed:
+            return fmt_write_cstr(out, "spawn runtime failed");
+    }
+}
+
+SpawnError spawn_from_alloc(heap.AllocError error) {
+    return SpawnAllocFailed(error);
+}
+
 void require_spawnable(&spawnable value) {}
 
 void spawn_run_once<T>(T* task) {
@@ -37,7 +62,7 @@ void spawn_drop<T>(T* task) {
     unchecked {
         &mut T borrowed = &mut *task;
         drop(borrowed);
-        free(task as void*);
+        heap.free_ptr(task);
     }
 }
 
@@ -55,27 +80,28 @@ export void parallel_do([]&threaded_runnable tasks) {
     }
 }
 
-export JoinHandle spawn<T>(T task) {
+export Result<JoinHandle, SpawnError> spawn<T>(T task) {
     require_spawnable(&mut task);
 
     T* payload;
+    switch (move heap.malloc_array<T>(1)) {
+        case Ok(memory):
+            payload = memory;
+        case Err(error):
+            return Err(spawn_from_alloc(error));
+    }
+
     unchecked {
-        payload = malloc(sizeof(T)) as T*;
-        if (payload == ptr.null<T>()) {
-            run_once(&mut task);
-            return {ptr.null<void>()};
-        }
         *payload = task;
 
         void* handle = cyan_runtime_spawn(payload as void*,
                                           fn_ptr<T>(spawn_run_once),
                                           fn_ptr<T>(spawn_drop));
         if (handle == ptr.null<void>()) {
-            spawn_run_once(payload);
             spawn_drop(payload);
-            return {ptr.null<void>()};
+            return Err(SpawnRuntimeFailed());
         }
-        return {handle};
+        return Ok({handle});
     }
 }
 

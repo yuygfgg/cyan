@@ -1,7 +1,9 @@
 import /std.sync;
+import /std.result;
+import /std.error;
 
 i64 main() {
-    Arc<i64> value = arc_new(9);
+    Arc<i64> value = must(arc_new(9));
     {
         Arc<i64> copy = arc_clone(&value);
         if (*arc_get(&copy) != 9) {

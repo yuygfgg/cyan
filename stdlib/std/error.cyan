@@ -1,0 +1,76 @@
+import /std.err;
+import /std.fmt;
+import /std.panic;
+import /std.result;
+
+export interface error_type = err + fmt;
+
+void require_error_type(&error_type value) {}
+
+T panic_with_error<T, E>(const char* prefix, &E error) {
+    require_error_type(error);
+
+    StringBuilder out;
+    switch (move builder_new(64)) {
+        case Ok(builder):
+            out = builder;
+        case Err(_):
+            panic(prefix);
+    }
+
+    switch (move fmt_write_cstr(&mut out, prefix)) {
+        case Ok(_):
+        case Err(_):
+            panic(prefix);
+    }
+
+    switch (move fmt_write_cstr(&mut out, ": ")) {
+        case Ok(_):
+        case Err(_):
+            panic(prefix);
+    }
+
+    switch (move fmt(error, &mut out)) {
+        case Ok(_):
+            const char* text;
+            unchecked {
+                text = out.ptr as const char*;
+            }
+            panic(text);
+        case Err(_):
+            panic(prefix);
+    }
+
+    panic(prefix);
+}
+
+export T must<T, E>(Result<T, E> value) depends(return on value.Ok) {
+    switch (&value) {
+        case Ok(_):
+        case Err(error):
+            panic_with_error<Unit, E>("must() received Err", error);
+    }
+
+    switch (move value) {
+        case Ok(ok):
+            return ok;
+        case Err(_):
+            panic("must() received Err");
+    }
+}
+
+export T expect<T, E>(Result<T, E> value, const char* message)
+    depends(return on value.Ok) {
+    switch (&value) {
+        case Ok(_):
+        case Err(error):
+            panic_with_error<Unit, E>(message, error);
+    }
+
+    switch (move value) {
+        case Ok(ok):
+            return ok;
+        case Err(_):
+            panic(message);
+    }
+}

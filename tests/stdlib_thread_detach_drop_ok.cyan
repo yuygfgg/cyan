@@ -1,4 +1,6 @@
 import /std.atomic;
+import /std.result;
+import /std.error;
 import /std.thread;
 
 struct SignalTask {
@@ -19,7 +21,7 @@ i64 main() {
 
     {
         SignalTask task = {flag_ptr};
-        JoinHandle handle = spawn(task);
+        JoinHandle handle = must(spawn(task));
     }
 
     while (atomic_load(flag_ptr, atomic_acquire()) == 0) {

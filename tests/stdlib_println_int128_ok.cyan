@@ -2,31 +2,29 @@ import /std.file as file;
 import /std.heap as heap;
 import /std.mem as mem;
 import /std.println;
+import /std.result;
+import /std.error;
 
 i64 main() {
     char[82] expected =
         "-170141183460469231731687303715884105728 340282366920938463463374607431768211455\n";
-    char* out = heap.malloc_array<char>(82);
+    char* out = must(heap.malloc_array<char>(82));
     mem.fill<char>(out, 0, 82);
 
     i128 min_i128 = -170141183460469231731687303715884105728;
     u128 max_u128 = 340282366920938463463374607431768211455 as u128;
 
-    void* handle = file.fopen("tests/cyan_stdlib_println_int128_ok.tmp", "w+b");
+    void* handle = must(file.fopen("tests/cyan_stdlib_println_int128_ok.tmp", "w+b"));
     fprintln(handle, "{} {}", [min_i128, max_u128]);
 
-    if (file.fseek(handle, 0, 0) != 0) {
-        return 1;
-    }
-    if (file.fread(out, 1, 81, handle) != 81) {
+    must(file.fseek(handle, 0, 0));
+    if (must(file.fread(out, 1, 81, handle)) != 81) {
         return 2;
     }
     if (mem.memcmp(out, &expected[0], 82) != 0) {
         return 3;
     }
-    if (file.fclose(handle) != 0) {
-        return 4;
-    }
+    must(file.fclose(handle));
 
     heap.free_ptr(out);
     return 0;

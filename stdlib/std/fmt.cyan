@@ -1,0 +1,432 @@
+import /std.cstr as cstr;
+import /std.err;
+import /std.ptr as stdptr;
+import /std.result;
+import /std.view;
+import /std.ryu as ryu;
+
+extern {
+    //@lower link_case=ret:ptr,arg0:i64:malloc
+    void* malloc_raw(i64 size);
+
+    //@lower link_case=ret:void,arg0:ptr:free
+    void free_raw(char* ptr);
+
+    //@lower link_case=ret:ptr,arg0:ptr,arg1:i64:realloc
+    char* realloc_raw(char* ptr, i64 size);
+}
+
+export struct StringBuilder {
+    char* ptr;
+    i64 len;
+    i64 capacity;
+};
+
+export enum FmtError {
+    FmtAllocFailed,
+    FmtFloatFormatFailed,
+};
+
+impl err(&FmtError value) {}
+
+impl drop(&mut StringBuilder self) {
+    free_raw(self.ptr);
+}
+
+void buffer_push_char(char* out, &mut i64 len, char value) {
+    unchecked {
+        out[*len] = value;
+        *len = *len + 1;
+        out[*len] = '\0';
+    }
+}
+
+void buffer_push_digit(char* out, &mut i64 len, i64 digit) {
+    i64 ascii = ('0' as i64) + digit;
+    buffer_push_char(out, &mut len, ascii as char);
+}
+
+void buffer_append_positive_i64(char* out, &mut i64 len, i64 value) {
+    if (value >= 10) {
+        buffer_append_positive_i64(out, &mut len, value / 10);
+    }
+    buffer_push_digit(out, &mut len, value % 10);
+}
+
+void buffer_append_negative_i64_digits(char* out, &mut i64 len, i64 value) {
+    if (value <= -10) {
+        buffer_append_negative_i64_digits(out, &mut len, value / 10);
+    }
+    buffer_push_digit(out, &mut len, 0 - (value % 10));
+}
+
+void buffer_append_u64_digits(char* out, &mut i64 len, u64 value) {
+    if (value >= (10 as u64)) {
+        buffer_append_u64_digits(out, &mut len, value / (10 as u64));
+    }
+    buffer_push_digit(out, &mut len, (value % (10 as u64)) as i64);
+}
+
+void buffer_append_positive_i128(char* out, &mut i64 len, i128 value) {
+    if (value >= (10 as i128)) {
+        buffer_append_positive_i128(out, &mut len, value / (10 as i128));
+    }
+    buffer_push_digit(out, &mut len, (value % (10 as i128)) as i64);
+}
+
+void buffer_append_negative_i128_digits(char* out, &mut i64 len, i128 value) {
+    if (value <= (-10 as i128)) {
+        buffer_append_negative_i128_digits(out, &mut len, value / (10 as i128));
+    }
+    buffer_push_digit(out, &mut len, (0 as i64) - ((value % (10 as i128)) as i64));
+}
+
+void buffer_append_u128_digits(char* out, &mut i64 len, u128 value) {
+    if (value >= (10 as u128)) {
+        buffer_append_u128_digits(out, &mut len, value / (10 as u128));
+    }
+    buffer_push_digit(out, &mut len, (value % (10 as u128)) as i64);
+}
+
+i64 write_i64_local(char* out, i64 value) {
+    i64 len = 0;
+    unchecked {
+        out[0] = '\0';
+    }
+
+    if (value < 0) {
+        buffer_push_char(out, &mut len, '-');
+        buffer_append_negative_i64_digits(out, &mut len, value);
+        return len;
+    }
+
+    buffer_append_positive_i64(out, &mut len, value);
+    return len;
+}
+
+i64 write_u64_local(char* out, u64 value) {
+    i64 len = 0;
+    unchecked {
+        out[0] = '\0';
+    }
+    buffer_append_u64_digits(out, &mut len, value);
+    return len;
+}
+
+i64 write_i128_local(char* out, i128 value) {
+    i64 len = 0;
+    unchecked {
+        out[0] = '\0';
+    }
+
+    if (value < (0 as i128)) {
+        buffer_push_char(out, &mut len, '-');
+        buffer_append_negative_i128_digits(out, &mut len, value);
+        return len;
+    }
+
+    buffer_append_positive_i128(out, &mut len, value);
+    return len;
+}
+
+i64 write_u128_local(char* out, u128 value) {
+    i64 len = 0;
+    unchecked {
+        out[0] = '\0';
+    }
+    buffer_append_u128_digits(out, &mut len, value);
+    return len;
+}
+
+export Result<StringBuilder, FmtError> builder_new(i64 capacity) {
+    if (capacity <= 0) {
+        capacity = 1;
+    }
+    void* memory = malloc_raw(capacity);
+    if (memory == stdptr.null<void>()) {
+        return Err(FmtAllocFailed());
+    }
+    unchecked {
+        char* ptr = memory as char*;
+        ptr[0] = '\0';
+        return Ok({ptr, 0, capacity});
+    }
+}
+
+Result<Unit, FmtError> builder_reserve(&mut StringBuilder out, i64 needed) {
+    if (needed <= out.capacity) {
+        return Ok(Unit());
+    }
+
+    i64 next_capacity = out.capacity;
+    while (next_capacity < needed) {
+        next_capacity = next_capacity * 2;
+    }
+
+    char* memory = realloc_raw(out.ptr, next_capacity);
+    if (memory == stdptr.null<char>()) {
+        return Err(FmtAllocFailed());
+    }
+
+    out.ptr = memory;
+    out.capacity = next_capacity;
+    return Ok(Unit());
+}
+
+Result<Unit, FmtError> builder_push_char(&mut StringBuilder out, char value) {
+    i64 needed = out.len + 2;
+    builder_reserve(out, needed)?;
+    unchecked {
+        out.ptr[out.len] = value;
+        out.len = out.len + 1;
+        out.ptr[out.len] = '\0';
+    }
+    return Ok(Unit());
+}
+
+Result<Unit, FmtError> builder_append_cstring(&mut StringBuilder out,
+                                              const char* text) {
+    i64 text_len = cstr.strlen(text);
+    i64 needed = out.len + text_len + 1;
+    builder_reserve(out, needed)?;
+
+    unchecked {
+        i64 i = 0;
+        while (i < text_len) {
+            out.ptr[out.len + i] = text[i];
+            i = i + 1;
+        }
+        out.len = out.len + text_len;
+        out.ptr[out.len] = '\0';
+    }
+    return Ok(Unit());
+}
+
+Result<Unit, FmtError> builder_append_slice(&mut StringBuilder out,
+                                            []const char text) {
+    i64 text_len = len(text);
+    i64 needed = out.len + text_len + 1;
+    builder_reserve(out, needed)?;
+
+    i64 i = 0;
+    while (i < text_len) {
+        unchecked {
+            out.ptr[out.len + i] = text[i];
+        }
+        i++;
+    }
+
+    unchecked {
+        out.len = out.len + text_len;
+        out.ptr[out.len] = '\0';
+    }
+    return Ok(Unit());
+}
+
+Result<Unit, FmtError> builder_append_i64(&mut StringBuilder out, i64 value) {
+    i64 needed = out.len + 21;
+    builder_reserve(out, needed)?;
+    unchecked {
+        out.len = out.len + write_i64_local(out.ptr + out.len, value);
+    }
+    return Ok(Unit());
+}
+
+Result<Unit, FmtError> builder_append_u64(&mut StringBuilder out, u64 value) {
+    i64 needed = out.len + 21;
+    builder_reserve(out, needed)?;
+    unchecked {
+        out.len = out.len + write_u64_local(out.ptr + out.len, value);
+    }
+    return Ok(Unit());
+}
+
+Result<Unit, FmtError> builder_append_i128(&mut StringBuilder out, i128 value) {
+    i64 needed = out.len + 41;
+    builder_reserve(out, needed)?;
+    unchecked {
+        out.len = out.len + write_i128_local(out.ptr + out.len, value);
+    }
+    return Ok(Unit());
+}
+
+Result<Unit, FmtError> builder_append_u128(&mut StringBuilder out, u128 value) {
+    i64 needed = out.len + 40;
+    builder_reserve(out, needed)?;
+    unchecked {
+        out.len = out.len + write_u128_local(out.ptr + out.len, value);
+    }
+    return Ok(Unit());
+}
+
+Result<Unit, FmtError> builder_append_f64(&mut StringBuilder out, f64 value) {
+    i64 needed = out.len + 64;
+    builder_reserve(out, needed)?;
+    i64 written;
+    unchecked {
+        char* dst = out.ptr + out.len;
+        written = ryu.write_f64(dst, out.capacity - out.len, value);
+    }
+    if (written < 0) {
+        return Err(FmtFloatFormatFailed());
+    }
+    out.len = out.len + written;
+    return Ok(Unit());
+}
+
+export interface<T> Result<Unit, FmtError> fmt(&T value,
+                                               &mut StringBuilder out);
+
+export Result<Unit, FmtError> fmt_write_char(&mut StringBuilder out,
+                                             char value) {
+    return builder_push_char(out, value);
+}
+
+export Result<Unit, FmtError> fmt_write_cstr(&mut StringBuilder out,
+                                             const char* text) {
+    return builder_append_cstring(out, text);
+}
+
+export Result<Unit, FmtError> fmt_write_slice(&mut StringBuilder out,
+                                              []const char text) {
+    return builder_append_slice(out, text);
+}
+
+export Result<Unit, FmtError> fmt_write_i64(&mut StringBuilder out,
+                                            i64 value) {
+    return builder_append_i64(out, value);
+}
+
+export Result<Unit, FmtError> fmt_write_u64(&mut StringBuilder out,
+                                            u64 value) {
+    return builder_append_u64(out, value);
+}
+
+export Result<Unit, FmtError> fmt_write_f64(&mut StringBuilder out,
+                                            f64 value) {
+    return builder_append_f64(out, value);
+}
+
+export Result<Unit, FmtError> fmt_write_bool(&mut StringBuilder out,
+                                             bool value) {
+    if (value) {
+        return builder_append_cstring(out, "true");
+    }
+    return builder_append_cstring(out, "false");
+}
+
+impl fmt(&FmtError value, &mut StringBuilder out) {
+    FmtError copy = *value;
+    switch (move copy) {
+        case FmtAllocFailed:
+            return fmt_write_cstr(out, "format allocation failed");
+        case FmtFloatFormatFailed:
+            return fmt_write_cstr(out, "format float failed");
+    }
+}
+
+impl fmt(&[]const char value, &mut StringBuilder out) {
+    return builder_append_slice(out, *value);
+}
+
+impl fmt(&const char* value, &mut StringBuilder out) {
+    return builder_append_cstring(out, *value);
+}
+
+impl fmt(&bool value, &mut StringBuilder out) {
+    return fmt_write_bool(out, *value);
+}
+
+impl fmt(&char value, &mut StringBuilder out) {
+    return builder_push_char(out, *value);
+}
+
+impl fmt(&i8 value, &mut StringBuilder out) {
+    return builder_append_i64(out, *value as i64);
+}
+
+impl fmt(&i16 value, &mut StringBuilder out) {
+    return builder_append_i64(out, *value as i64);
+}
+
+impl fmt(&i32 value, &mut StringBuilder out) {
+    return builder_append_i64(out, *value as i64);
+}
+
+impl fmt(&i64 value, &mut StringBuilder out) {
+    return builder_append_i64(out, *value);
+}
+
+impl fmt(&i128 value, &mut StringBuilder out) {
+    return builder_append_i128(out, *value);
+}
+
+impl fmt(&u8 value, &mut StringBuilder out) {
+    return builder_append_u64(out, *value as u64);
+}
+
+impl fmt(&u16 value, &mut StringBuilder out) {
+    return builder_append_u64(out, *value as u64);
+}
+
+impl fmt(&u32 value, &mut StringBuilder out) {
+    return builder_append_u64(out, *value as u64);
+}
+
+impl fmt(&u64 value, &mut StringBuilder out) {
+    return builder_append_u64(out, *value);
+}
+
+impl fmt(&u128 value, &mut StringBuilder out) {
+    return builder_append_u128(out, *value);
+}
+
+impl fmt(&f32 value, &mut StringBuilder out) {
+    return builder_append_f64(out, *value as f64);
+}
+
+impl fmt(&f64 value, &mut StringBuilder out) {
+    return builder_append_f64(out, *value);
+}
+
+export Result<Unit, FmtError> render_into(&mut StringBuilder out,
+                                          const char* format_text,
+                                          []&fmt args) {
+    i64 next_arg = 0;
+
+    unchecked {
+        const char* cursor = format_text;
+        while (*cursor != '\0') {
+            if (cursor[0] == '{' && cursor[1] == '}') {
+                if (next_arg < len(args)) {
+                    fmt(args[next_arg], out)?;
+                    next_arg++;
+                } else {
+                    builder_append_cstring(out, "<missing>")?;
+                }
+                cursor = cursor + 2;
+                continue;
+            }
+
+            if (cursor[0] == '{' && cursor[1] == '{') {
+                builder_push_char(out, '{')?;
+                cursor = cursor + 2;
+                continue;
+            }
+
+            if (cursor[0] == '}' && cursor[1] == '}') {
+                builder_push_char(out, '}')?;
+                cursor = cursor + 2;
+                continue;
+            }
+
+            builder_push_char(out, *cursor)?;
+            cursor = cursor + 1;
+        }
+    }
+
+    if (next_arg < len(args)) {
+        builder_append_cstring(out, " <extra args>")?;
+    }
+    return Ok(Unit());
+}

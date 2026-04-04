@@ -1,0 +1,9 @@
+import /std.result;
+
+Result<i64, i64> load() {
+    return Err(9);
+}
+
+i64 bad() {
+    return load()?;
+}

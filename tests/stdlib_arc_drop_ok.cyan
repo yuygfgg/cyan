@@ -1,4 +1,6 @@
 import /std.sync;
+import /std.result;
+import /std.error;
 
 struct Token {
     &mut i64 counter;
@@ -12,7 +14,7 @@ i64 main() {
     i64 count = 0;
     {
         Token token = {&mut count};
-        Arc<Token> first = arc_new(token);
+        Arc<Token> first = must(arc_new(token));
         Arc<Token> second = arc_clone(&first);
     }
     return count - 1;

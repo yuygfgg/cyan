@@ -1,0 +1,60 @@
+import /std.err;
+import /std.error;
+import /std.fmt;
+import /std.result;
+import /std.view;
+
+enum TailError {
+    TailError,
+};
+
+impl err(&TailError value) {}
+
+impl fmt(&TailError value, &mut StringBuilder out) {
+    return fmt_write_cstr(out, "tail error");
+}
+
+bool span_eq([]const char left, []const char right) {
+    if (len(left) != len(right)) {
+        return false;
+    }
+
+    i64 index = 0;
+    while (index < len(left)) {
+        if (left[index] != right[index]) {
+            return false;
+        }
+        index++;
+    }
+    return true;
+}
+
+Result<[]const char, TailError> tail([]const char text)
+    depends(return.Ok on text) {
+    return Ok(subslice(text, 1, len(text) - 1));
+}
+
+[]const char use_must([]const char text) depends(return on text) {
+    return must(tail(text));
+}
+
+[]const char use_expect([]const char text) depends(return on text) {
+    return expect(tail(text), "tail failed");
+}
+
+i64 main() {
+    []const char text = subslice("cyan", 0, 4);
+    []const char expected = subslice("yan", 0, 3);
+
+    []const char from_must = use_must(text);
+    if (!span_eq(from_must, expected)) {
+        return 1;
+    }
+
+    []const char from_expect = use_expect(text);
+    if (!span_eq(from_expect, expected)) {
+        return 2;
+    }
+
+    return 0;
+}

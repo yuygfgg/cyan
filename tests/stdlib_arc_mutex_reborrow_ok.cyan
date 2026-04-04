@@ -1,4 +1,6 @@
 import /std.sync;
+import /std.result;
+import /std.error;
 
 struct Box {
     Arc<Mutex<i64>> total;
@@ -13,7 +15,7 @@ void bump(&mut Box box) {
 }
 
 i64 main() {
-    Box box = {arc_new(mutex_new(0)), 9};
+    Box box = {must(arc_new(must(mutex_new(0)))), 9};
     bump(&mut box);
     &Mutex<i64> total = arc_get(&box.total);
     MutexGuard<i64> guard = lock(total);

@@ -5,11 +5,9 @@
 #include "cyan/sema.hpp"
 #include "cyan/type.hpp"
 
-#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <optional>
-#include <string>
 #include <string_view>
 
 namespace cyan {

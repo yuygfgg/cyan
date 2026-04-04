@@ -8,13 +8,18 @@ This document lists the public modules shipped in Cyan's standard library and th
 | ------------------ | -------------------------------------------------------- |
 | `/std.view`        | slice length, subslices, raw slice pointer access        |
 | `/std.ptr`         | null pointers                                            |
+| `/std.result`      | `Result<T, E>`, `Unit`                                   |
+| `/std.err`         | error marker interface                                   |
+| `/std.fmt`         | `fmt` interface, `StringBuilder`, format helpers         |
+| `/std.error`       | `error_type`, `must(...)`, `expect(...)`                 |
+| `/std.panic`       | unconditional trap with a message                        |
 | `/std.mem`         | `memcpy`, `memset`, `memcmp`, typed copy/fill            |
 | `/std.heap`        | heap allocation and typed wrappers                       |
 | `/std.cstr`        | C string length and compare                              |
 | `/std.file`        | `FILE*`-style I/O                                        |
 | `/std.strconv`     | text to number, number to text                           |
 | `/std.ryu`         | low-level float formatting                               |
-| `/std.println`     | formatted output and custom formatting                   |
+| `/std.println`     | formatted output                                         |
 | `/std.atomic`      | atomic loads, stores, RMW operations, fences             |
 | `/std.sync`        | `Arc<T>`, `Mutex<T>`, `MutexGuard<T>`                    |
 | `/std.thread`      | spawn threads, join, parallel work over interface values |
@@ -65,6 +70,118 @@ bool is_missing(i64* value) {
 }
 ```
 
+## `/std.result`
+
+Purpose: standard fallible return type.
+
+Public API:
+
+- `Unit`
+- `Result<T, E>`
+
+Typical use:
+
+```cyan
+import /std.result;
+
+enum ParseError {
+    ParseBadText,
+};
+
+Result<i64, ParseError> read(bool ok) {
+    if (ok) {
+        return Ok(42);
+    }
+    return Err(ParseBadText());
+}
+
+Result<i64, ParseError> main_result() {
+    i64 value = read(true)?;
+    return Ok(value);
+}
+```
+
+Use postfix `?` to propagate `Err(...)` from a `Result<T, E>` expression.
+
+## `/std.err`
+
+Purpose: marker interface for error payload types.
+
+Public API:
+
+- `err<T>(&T value) -> void`
+
+Define `impl err(&YourError value) {}` for each error type.
+
+## `/std.fmt`
+
+Purpose: formatting interface and format buffer helpers.
+
+Public API:
+
+- `StringBuilder`
+- `FmtError`
+- `fmt<T>(&T value, &mut StringBuilder out) -> Result<Unit, FmtError>`
+- `fmt_write_char`, `fmt_write_cstr`, `fmt_write_slice`
+- `fmt_write_i64`, `fmt_write_u64`, `fmt_write_f64`, `fmt_write_bool`
+- `render_into(&mut StringBuilder out, const char* format_text, []&fmt args)`
+
+Typical use:
+
+```cyan
+import /std.fmt;
+import /std.result;
+
+struct Point {
+    i64 x;
+    i64 y;
+};
+
+impl fmt(&Point value, &mut StringBuilder out) {
+    fmt_write_cstr(out, "Point(")?;
+    fmt_write_i64(out, value.x)?;
+    fmt_write_cstr(out, ", ")?;
+    fmt_write_i64(out, value.y)?;
+    fmt_write_char(out, ')')?;
+    return Ok(Unit());
+}
+```
+
+## `/std.error`
+
+Purpose: panic-on-error extraction helpers for `Result`.
+
+Public API:
+
+- `error_type = err + fmt`
+- `must<T, E>(Result<T, E> value) -> T`
+- `expect<T, E>(Result<T, E> value, const char* message) -> T`
+
+`must(...)` panics with a default prefix plus formatted error value.
+`expect(...)` panics with the provided message plus formatted error value.
+
+## `/std.panic`
+
+Purpose: terminate execution with an explicit message.
+
+Public API:
+
+- `panic(const char* message) -> void`
+
+Typical use:
+
+```cyan
+import /std.panic;
+
+i64 main() {
+    panic("unreachable state");
+}
+```
+
+`panic(...)` always terminates the program after reporting the message. It is
+the primitive used by `/std.error` helpers and panic-on-failure convenience APIs
+like `println(...)`.
+
 ## `/std.mem`
 
 Purpose: raw memory moves and typed buffer helpers.
@@ -95,20 +212,22 @@ Purpose: heap allocation.
 
 Public API:
 
-- `malloc(i64 size) -> void*`
-- `realloc(void* ptr, i64 size) -> void*`
+- `AllocError`
+- `malloc(i64 size) -> Result<void*, AllocError>`
+- `realloc(void* ptr, i64 size) -> Result<void*, AllocError>`
 - `free(void* ptr)`
-- `malloc_array<T>(i64 count) -> T*`
-- `realloc_array<T>(T* ptr, i64 count) -> T*`
+- `malloc_array<T>(i64 count) -> Result<T*, AllocError>`
+- `realloc_array<T>(T* ptr, i64 count) -> Result<T*, AllocError>`
 - `free_ptr<T>(T* ptr)`
 
 Typical use:
 
 ```cyan
 import /std.heap as heap;
+import /std.error;
 
 i64 main() {
-    i64* values = heap.malloc_array<i64>(8);
+    i64* values = must(heap.malloc_array<i64>(8));
     heap.free_ptr(values);
     return 0;
 }
@@ -139,22 +258,24 @@ Purpose: `FILE*`-style buffered file I/O.
 
 Public API:
 
-- `fopen(const char* path, const char* mode) -> void*`
-- `fdopen(i32 fd, const char* mode) -> void*`
-- `fclose(void* file) -> i32`
-- `fread(char* ptr, i64 size, i64 count, void* file) -> i64`
-- `fwrite(const char* ptr, i64 size, i64 count, void* file) -> i64`
-- `fseek(void* file, i64 offset, i32 whence) -> i32`
-- `ftell(void* file) -> i64`
+- `FileError`
+- `fopen(const char* path, const char* mode) -> Result<void*, FileError>`
+- `fdopen(i32 fd, const char* mode) -> Result<void*, FileError>`
+- `fclose(void* file) -> Result<Unit, FileError>`
+- `fread(char* ptr, i64 size, i64 count, void* file) -> Result<i64, FileError>`
+- `fwrite(const char* ptr, i64 size, i64 count, void* file) -> Result<i64, FileError>`
+- `fseek(void* file, i64 offset, i32 whence) -> Result<Unit, FileError>`
+- `ftell(void* file) -> Result<i64, FileError>`
 
 Typical use:
 
 ```cyan
 import /std.file as file;
+import /std.error;
 
 i64 main() {
-    void* handle = file.fopen("out.txt", "w+b");
-    file.fclose(handle);
+    void* handle = must(file.fopen("out.txt", "w+b"));
+    must(file.fclose(handle));
     return 0;
 }
 ```
@@ -168,6 +289,8 @@ Purpose: number formatting and parsing.
 Public API:
 
 - `write_i64`, `write_u64`, `write_i128`, `write_u128`
+- `StrconvFormatError`
+- `StrconvParseError`
 - `write_f32`, `write_f64`
 - `parse_i64`, `parse_u64`, `parse_i128`, `parse_u128`
 - `parse_f32`, `parse_f64`
@@ -176,15 +299,16 @@ Typical use:
 
 ```cyan
 import /std.strconv as strconv;
+import /std.error;
 
 i64 main() {
     char[32] buf = ['\0'];
     strconv.write_i64(&mut buf[0], 42);
-    return strconv.parse_i64(&buf[0]) - 42;
+    return must(strconv.parse_i64(&buf[0])) - 42;
 }
 ```
 
-`write_*` writes a trailing `'\0'`. `write_f32` and `write_f64` take an explicit capacity. `parse_f32` delegates through `parse_f64` and then casts.
+`write_*` writes a trailing `'\0'`. `write_f32` and `write_f64` return `Result<i64, StrconvFormatError>` and take an explicit capacity. `parse_f32` delegates through `parse_f64` and then casts.
 
 ## `/std.ryu`
 
@@ -210,18 +334,19 @@ Most code should import `/std.strconv` instead. Reach for `/std.ryu` only if you
 
 ## `/std.println`
 
-Purpose: formatted output and custom formatters.
+Purpose: formatted output.
 
 Public API:
 
+- `PrintError`
+- `try_print`, `try_println`
+- `try_fprint`, `try_fprintln`
+- `try_print0`, `try_println0`
+- `try_fprint0`, `try_fprintln0`
 - `print`, `println`
 - `fprint`, `fprintln`
 - `print0`, `println0`
 - `fprint0`, `fprintln0`
-- `StringBuilder`
-- `fmt<T>` interface
-- `fmt_write_char`, `fmt_write_cstr`, `fmt_write_slice`
-- `fmt_write_i64`, `fmt_write_u64`, `fmt_write_f64`, `fmt_write_bool`
 
 Typical use:
 
@@ -242,7 +367,10 @@ Formatting rules:
 - Missing arguments render as `<missing>`.
 - Extra arguments append ` <extra args>`.
 
-For custom types, implement `fmt(&T value, &mut StringBuilder out)`.
+`print(...)` and `println(...)` panic on output failure. Use `try_print(...)`,
+`try_println(...)`, `try_fprint(...)`, or `try_fprintln(...)` if you need to
+handle write errors explicitly.
+Custom type formatting lives in `/std.fmt` (`impl fmt(...)`).
 
 ## `/std.atomic`
 
@@ -275,21 +403,22 @@ Purpose: shared ownership and mutual exclusion.
 Public API:
 
 - `Arc<T>`
-- `arc_new<T>(T value) -> Arc<T>`
+- `arc_new<T>(T value) -> Result<Arc<T>, AllocError>`
 - `arc_clone<T>(&Arc<T> arc) -> Arc<T>`
 - `arc_get<T>(&Arc<T> arc) -> &T`
 - `Mutex<T>`
 - `MutexGuard<T>`
-- `mutex_new<T>(T value) -> Mutex<T>`
+- `mutex_new<T>(T value) -> Result<Mutex<T>, AllocError>`
 - `lock<T>(&Mutex<T> mutex) -> MutexGuard<T>`
 
 Typical use:
 
 ```cyan
 import /std.sync;
+import /std.error;
 
 i64 main() {
-    Mutex<i64> counter = mutex_new(0);
+    Mutex<i64> counter = must(mutex_new(0));
     {
         MutexGuard<i64> guard = lock(&counter);
         *guard.data = *guard.data + 1;
@@ -311,13 +440,15 @@ Public API:
 - composed interfaces: `threaded_runnable`, `spawnable`
 - `JoinHandle`
 - `parallel_do([]&threaded_runnable tasks)`
-- `spawn<T>(T task) -> JoinHandle`
+- `SpawnError`
+- `spawn<T>(T task) -> Result<JoinHandle, SpawnError>`
 - `join(&mut JoinHandle handle)`
 
 Typical use:
 
 ```cyan
 import /std.thread;
+import /std.error;
 
 struct Job {
     i64 value;
@@ -329,7 +460,7 @@ impl run_once(&mut Job self) {
 
 i64 main() {
     Job job = {41};
-    JoinHandle handle = spawn(job);
+    JoinHandle handle = must(spawn(job));
     join(&mut handle);
     return 0;
 }
@@ -369,7 +500,7 @@ Purpose: single-thread reference counting.
 Public API:
 
 - `Rc<T>`
-- `rc_new<T>(T value) -> Rc<T>`
+- `rc_new<T>(T value) -> Result<Rc<T>, AllocError>`
 - `rc_clone<T>(&Rc<T> rc) -> Rc<T>`
 - `rc_get<T>(&Rc<T> rc) -> &T`
 
@@ -377,9 +508,10 @@ Typical use:
 
 ```cyan
 import /std.rc;
+import /std.error;
 
 i64 main() {
-    Rc<i64> value = rc_new(42);
+    Rc<i64> value = must(rc_new(42));
     Rc<i64> copy = rc_clone(&value);
     return *rc_get(&copy) - 42;
 }

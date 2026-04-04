@@ -189,6 +189,8 @@ enum class BuiltinCallKind : std::uint8_t {
     Subslice,
     RawData,
     FunctionPointer,
+    Panic,
+    ResultTry,
     AtomicRelaxedOrder,
     AtomicAcquireOrder,
     AtomicReleaseOrder,
@@ -269,6 +271,7 @@ struct Expr {
     std::optional<ResolvedPlace> slice_source_place;
     std::size_t slice_storage_local_id = 0;
     std::optional<std::vector<CachedViewBinding>> cached_view_bindings;
+    std::vector<std::size_t> early_return_drop_local_ids;
 };
 
 struct VarDeclStmt {

@@ -1,37 +1,33 @@
 import /std.file as file;
 import /std.mem as mem;
+import /std.result;
+import /std.error;
 
 i64 main() {
     char[5] text = "cyan";
     char[5] out = ['\0', '\0', '\0', '\0', '\0'];
 
-    void* handle = file.fopen("tests/cyan_stdlib_file_ok.tmp", "w+b");
-    if (file.fwrite(&text[0], 1, 4, handle) != 4) {
+    void* handle = must(file.fopen("tests/cyan_stdlib_file_ok.tmp", "w+b"));
+    if (must(file.fwrite(&text[0], 1, 4, handle)) != 4) {
         return 1;
     }
-    if (file.ftell(handle) != 4) {
+    if (must(file.ftell(handle)) != 4) {
         return 2;
     }
-    if (file.fseek(handle, 0, 0) != 0) {
-        return 3;
-    }
-    if (file.ftell(handle) != 0) {
+    must(file.fseek(handle, 0, 0));
+    if (must(file.ftell(handle)) != 0) {
         return 4;
     }
-    if (file.fread(&mut out[0], 1, 4, handle) != 4) {
+    if (must(file.fread(&mut out[0], 1, 4, handle)) != 4) {
         return 5;
     }
     if (mem.memcmp(&out[0], &text[0], 4) != 0) {
         return 6;
     }
-    if (file.fseek(handle, 0, 2) != 0) {
-        return 7;
-    }
-    if (file.ftell(handle) != 4) {
+    must(file.fseek(handle, 0, 2));
+    if (must(file.ftell(handle)) != 4) {
         return 8;
     }
-    if (file.fclose(handle) != 0) {
-        return 9;
-    }
+    must(file.fclose(handle));
     return 0;
 }

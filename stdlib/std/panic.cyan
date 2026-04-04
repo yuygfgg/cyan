@@ -1,0 +1,4 @@
+export extern {
+    //@lower builtin=panic
+    void panic(const char* message);
+}

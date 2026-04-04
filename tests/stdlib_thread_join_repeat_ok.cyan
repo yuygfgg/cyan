@@ -1,5 +1,7 @@
 import /std.sync;
 import /std.thread;
+import /std.result;
+import /std.error;
 
 struct CountTask {
     Arc<Mutex<i64>> total;
@@ -12,10 +14,10 @@ impl run_once(&mut CountTask task) {
 }
 
 i64 main() {
-    Arc<Mutex<i64>> root = arc_new(mutex_new(0));
+    Arc<Mutex<i64>> root = must(arc_new(must(mutex_new(0))));
 
     CountTask task = {arc_clone(&root)};
-    JoinHandle handle = spawn(task);
+    JoinHandle handle = must(spawn(task));
     join(&mut handle);
     join(&mut handle);
 

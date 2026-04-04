@@ -1,7 +1,5 @@
-extern {
-    void* malloc(i64 size);
-    void free(void* ptr);
-}
+import /std.heap as heap;
+import /std.result;
 
 export struct Rc<T> {
     i64* strong;
@@ -10,16 +8,22 @@ export struct Rc<T> {
 
 impl local<T>(Rc<T>);
 
-export Rc<T> rc_new<T>(T value) {
-    i64* strong;
+export Result<Rc<T>, heap.AllocError> rc_new<T>(T value) {
+    i64* strong = heap.malloc_array<i64>(1)?;
     T* data;
+    switch (move heap.malloc_array<T>(1)) {
+        case Ok(memory):
+            data = memory;
+        case Err(error):
+            heap.free_ptr(strong);
+            return Err(error);
+    }
+
     unchecked {
-        strong = malloc(sizeof(i64)) as i64*;
-        data = malloc(sizeof(T)) as T*;
         *strong = 1;
         *data = value;
     }
-    return {strong, data};
+    return Ok({strong, data});
 }
 
 export Rc<T> rc_clone<T>(&Rc<T> rc) {
@@ -40,8 +44,8 @@ impl drop<T>(&mut Rc<T> self) {
         *self.strong = *self.strong - 1;
         if (*self.strong == 0) {
             drop(self.data as &mut T on self);
-            free(self.data as void*);
-            free(self.strong as void*);
+            heap.free_ptr(self.data);
+            heap.free_ptr(self.strong);
         }
     }
 }
