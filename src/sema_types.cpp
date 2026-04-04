@@ -1305,9 +1305,12 @@ auto SemanticAnalyzer::sliceSourcePlace(FunctionState& state, ast::Expr& expr)
         if (it != expr.cached_view_bindings->end()) {
             if (!it->source_places.empty()) {
                 auto source_place = placeSetRepresentative(it->source_places);
-                if (source_place.has_value() &&
-                    it->source_local_id.has_value()) {
-                    source_place->owner_local_id = *it->source_local_id;
+                if (source_place.has_value()) {
+                    if (it->owner_local_id.has_value()) {
+                        source_place->owner_local_id = *it->owner_local_id;
+                    } else if (it->source_local_id.has_value()) {
+                        source_place->owner_local_id = *it->source_local_id;
+                    }
                 }
                 return source_place;
             }
@@ -1373,7 +1376,8 @@ auto SemanticAnalyzer::sliceSourcePlace(FunctionState& state, ast::Expr& expr)
 auto SemanticAnalyzer::matchTypePattern(
     const ast::TypeSyntax& pattern, const ast::Module& owner_module,
     const std::vector<std::string>& type_parameters, const Type* actual_type,
-    TypeBindings& type_bindings) -> std::expected<void, Diagnostic> {
+    TypeBindings& type_bindings, bool allow_relaxed_borrow_match)
+    -> std::expected<void, Diagnostic> {
     if (actual_type == nullptr) {
         return make_error("generic argument does not match parameter type",
                           pattern.range);
@@ -1456,9 +1460,10 @@ auto SemanticAnalyzer::matchTypePattern(
 
         for (std::size_t index = 0; index < pattern.type_arguments.size();
              ++index) {
-            auto matched = matchTypePattern(
-                *pattern.type_arguments[index], owner_module, type_parameters,
-                actual_type_arguments[index], type_bindings);
+            auto matched =
+                matchTypePattern(*pattern.type_arguments[index], owner_module,
+                                 type_parameters, actual_type_arguments[index],
+                                 type_bindings, allow_relaxed_borrow_match);
             if (!matched) {
                 return std::unexpected(matched.error());
             }
@@ -1466,26 +1471,35 @@ auto SemanticAnalyzer::matchTypePattern(
         return {};
     }
     case ast::TypeSyntax::Kind::Borrow: {
-        if (actual_type->kind != TypeKind::Borrow ||
-            (pattern.is_mut && !actual_type->is_mut)) {
+        if (actual_type->kind == TypeKind::Borrow) {
+            if (pattern.is_mut && !actual_type->is_mut) {
+                return make_error(
+                    "generic argument does not match parameter type",
+                    pattern.range);
+            }
+            return matchTypePattern(*pattern.element_type, owner_module,
+                                    type_parameters, actual_type->element_type,
+                                    type_bindings, allow_relaxed_borrow_match);
+        }
+        if (!allow_relaxed_borrow_match) {
             return make_error("generic argument does not match parameter type",
                               pattern.range);
         }
         return matchTypePattern(*pattern.element_type, owner_module,
-                                type_parameters, actual_type->element_type,
-                                type_bindings);
+                                type_parameters, actual_type, type_bindings,
+                                allow_relaxed_borrow_match);
     }
     case ast::TypeSyntax::Kind::Slice: {
         const auto* actual_base = types.unqualify(actual_type);
         if (actual_base->kind == TypeKind::Slice) {
             return matchTypePattern(*pattern.element_type, owner_module,
                                     type_parameters, actual_base->element_type,
-                                    type_bindings);
+                                    type_bindings, allow_relaxed_borrow_match);
         }
         if (actual_base->kind == TypeKind::Array) {
             return matchTypePattern(*pattern.element_type, owner_module,
                                     type_parameters, actual_base->element_type,
-                                    type_bindings);
+                                    type_bindings, allow_relaxed_borrow_match);
         }
         return make_error("generic argument does not match parameter type",
                           pattern.range);
@@ -1498,7 +1512,7 @@ auto SemanticAnalyzer::matchTypePattern(
         }
         return matchTypePattern(*pattern.element_type, owner_module,
                                 type_parameters, actual_type->element_type,
-                                type_bindings);
+                                type_bindings, allow_relaxed_borrow_match);
     }
     case ast::TypeSyntax::Kind::Array: {
         if (actual_type->kind != TypeKind::Array ||
@@ -1508,7 +1522,7 @@ auto SemanticAnalyzer::matchTypePattern(
         }
         return matchTypePattern(*pattern.element_type, owner_module,
                                 type_parameters, actual_type->element_type,
-                                type_bindings);
+                                type_bindings, allow_relaxed_borrow_match);
     }
     }
     return make_error("invalid generic type pattern", pattern.range);
@@ -1547,7 +1561,7 @@ auto SemanticAnalyzer::inferTypeBindings(
         }
         auto matched = matchTypePattern(
             *decl.parameters[index].type, *decl.owner_module,
-            decl.type_parameters, *argument_type, type_bindings);
+            decl.type_parameters, *argument_type, type_bindings, true);
         if (!matched) {
             return std::unexpected(matched.error());
         }

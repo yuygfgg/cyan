@@ -141,6 +141,7 @@ struct CachedViewBinding {
     std::vector<std::uint32_t> path;
     std::vector<ResolvedPlace> source_places;
     std::optional<std::size_t> source_local_id;
+    std::optional<std::size_t> owner_local_id;
     std::vector<ResolvedPlace> element_sources;
     const Type* type = nullptr;
 };
@@ -188,6 +189,8 @@ enum class BuiltinCallKind : std::uint8_t {
     Len,
     Subslice,
     RawData,
+    FromRawParts,
+    FromRawPartsOn,
     FunctionPointer,
     Panic,
     ResultTry,
@@ -489,6 +492,7 @@ struct IntrinsicLowering {
 struct BuiltinLowering {
     SourceRange range;
     BuiltinCallKind builtin_kind = BuiltinCallKind::None;
+    bool allow_untracked_view_return = false;
 };
 
 struct FunctionDecl {

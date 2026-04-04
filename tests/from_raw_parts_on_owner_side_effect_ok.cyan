@@ -1,0 +1,30 @@
+import /std.error;
+import /std.heap as heap;
+import /std.view;
+
+struct Buffer {
+    i64* ptr;
+    i64 len;
+};
+
+&Buffer mark(&Buffer buffer, &mut i64 hits) depends(return on buffer) {
+    *hits = *hits + 1;
+    return buffer;
+}
+
+i64 main() {
+    i64* ptr = must(heap.malloc_array<i64>(2));
+    unchecked {
+        ptr[0] = 10;
+        ptr[1] = 20;
+    }
+    Buffer buffer = {ptr, 2};
+    i64 hits = 0;
+    unchecked {
+        []i64 values =
+            from_raw_parts_on(buffer.ptr, buffer.len, mark(buffer, &mut hits));
+        i64 total = values[0] + values[1] + hits;
+        heap.free_ptr(ptr);
+        return total - 31;
+    }
+}

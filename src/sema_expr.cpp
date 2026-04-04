@@ -858,6 +858,8 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                                     .source_places = binding_it->source_places,
                                     .source_local_id =
                                         binding_it->source_local_id,
+                                    .owner_local_id =
+                                        binding_it->owner_local_id,
                                     .element_sources =
                                         binding_it->element_sources,
                                     .type = expr.resolved_type,
@@ -1006,6 +1008,7 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                                 .path = std::move(path),
                                 .source_places = binding.source_places,
                                 .source_local_id = binding.source_local_id,
+                                .owner_local_id = binding.owner_local_id,
                                 .element_sources = binding.element_sources,
                                 .type = binding.type,
                             });
@@ -1099,6 +1102,14 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                                    next_binding.source_local_id) {
                         existing_it->source_local_id.reset();
                     }
+                    if (!existing_it->owner_local_id.has_value()) {
+                        existing_it->owner_local_id =
+                            next_binding.owner_local_id;
+                    } else if (next_binding.owner_local_id.has_value() &&
+                               existing_it->owner_local_id !=
+                                   next_binding.owner_local_id) {
+                        existing_it->owner_local_id.reset();
+                    }
                 };
 
                 for (auto& element : array_literal.elements) {
@@ -1120,6 +1131,7 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                                 .path = std::move(path),
                                 .source_places = binding.source_places,
                                 .source_local_id = binding.source_local_id,
+                                .owner_local_id = binding.owner_local_id,
                                 .element_sources = binding.element_sources,
                                 .type = binding.type,
                             });
@@ -1191,6 +1203,10 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                                           ResolvedPlace>{*expr.slice_source_place}
                                 : std::vector<ast::ResolvedPlace>{},
                         .source_local_id = std::nullopt,
+                        .owner_local_id =
+                            expr.slice_source_place.has_value()
+                                ? expr.slice_source_place->owner_local_id
+                                : std::nullopt,
                         .element_sources = std::move(element_sources),
                         .type = expected_type,
                     });
@@ -1297,6 +1313,8 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                                     top_level_binding->source_places,
                                 .source_local_id =
                                     top_level_binding->source_local_id,
+                                .owner_local_id =
+                                    top_level_binding->owner_local_id,
                                 .element_sources = {},
                                 .type = expr.resolved_type,
                             },
@@ -1309,10 +1327,13 @@ auto SemanticAnalyzer::analyzeExpr(FunctionState& state, ast::Expr& expr,
                             "source",
                             cast_expr.owner_expr->range);
                     }
-                    if (expr.resolved_type->is_mut &&
-                        top_level_binding->source_local_id.has_value()) {
+                    const auto binding_owner_local_id =
+                        top_level_binding->owner_local_id.has_value()
+                            ? top_level_binding->owner_local_id
+                            : top_level_binding->source_local_id;
+                    if (binding_owner_local_id.has_value()) {
                         expr.resolved_place->owner_local_id =
-                            top_level_binding->source_local_id;
+                            binding_owner_local_id;
                     }
                     expr.slice_source_place.reset();
                     return expr.resolved_type;
@@ -1804,8 +1825,12 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
             const auto binding_is_mut =
                 is_borrow_like_type(binding.type) && binding.type->is_mut;
             for (auto loan_place : binding.source_places) {
-                if (binding_is_mut && binding.source_local_id.has_value()) {
-                    loan_place.owner_local_id = binding.source_local_id;
+                if (binding_is_mut && (binding.owner_local_id.has_value() ||
+                                       binding.source_local_id.has_value())) {
+                    loan_place.owner_local_id =
+                        binding.owner_local_id.has_value()
+                            ? binding.owner_local_id
+                            : binding.source_local_id;
                 }
                 state.temporary_loans.push_back(TemporaryLoan{
                     .place = std::move(loan_place),
@@ -1923,6 +1948,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                     .path = std::move(path),
                     .source_places = binding.source_places,
                     .source_local_id = binding.source_local_id,
+                    .owner_local_id = binding.owner_local_id,
                     .element_sources = binding.element_sources,
                     .type = binding.type,
                 });
@@ -2031,13 +2057,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
     };
     const auto builtin_decl_is_template_instance =
         builtin_decl != nullptr && builtin_decl->template_decl != nullptr;
-    if (((call.callee == "__builtin_atomic_relaxed" ||
-          call.callee == "__builtin_atomic_acquire" ||
-          call.callee == "__builtin_atomic_release" ||
-          call.callee == "__builtin_atomic_acq_rel" ||
-          call.callee == "__builtin_atomic_seq_cst") &&
-         builtin_available) ||
-        builtin_decl_kind == ast::BuiltinCallKind::AtomicRelaxedOrder ||
+    if (builtin_decl_kind == ast::BuiltinCallKind::AtomicRelaxedOrder ||
         builtin_decl_kind == ast::BuiltinCallKind::AtomicAcquireOrder ||
         builtin_decl_kind == ast::BuiltinCallKind::AtomicReleaseOrder ||
         builtin_decl_kind == ast::BuiltinCallKind::AtomicAcqRelOrder ||
@@ -2055,26 +2075,13 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                     "() expects exactly zero arguments",
                 expr.range);
         }
-        if (builtin_decl_kind != ast::BuiltinCallKind::None) {
-            call.builtin_kind = builtin_decl_kind;
-        } else if (call.callee == "__builtin_atomic_relaxed") {
-            call.builtin_kind = ast::BuiltinCallKind::AtomicRelaxedOrder;
-        } else if (call.callee == "__builtin_atomic_acquire") {
-            call.builtin_kind = ast::BuiltinCallKind::AtomicAcquireOrder;
-        } else if (call.callee == "__builtin_atomic_release") {
-            call.builtin_kind = ast::BuiltinCallKind::AtomicReleaseOrder;
-        } else if (call.callee == "__builtin_atomic_acq_rel") {
-            call.builtin_kind = ast::BuiltinCallKind::AtomicAcqRelOrder;
-        } else {
-            call.builtin_kind = ast::BuiltinCallKind::AtomicSeqCstOrder;
-        }
+        call.builtin_kind = builtin_decl_kind;
         bind_builtin_decl();
         expr.resolved_type = types.i64Type();
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (((call.callee == "__builtin_len") && builtin_available) ||
-        builtin_decl_kind == ast::BuiltinCallKind::Len) {
+    if (builtin_decl_kind == ast::BuiltinCallKind::Len) {
         if (call.arguments.size() != 1) {
             return unexpected_result<const Type*>(
                 "len() expects exactly one argument", expr.range);
@@ -2167,8 +2174,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
             state, [](const LocalState& local) { return local.in_scope; });
         return expr.resolved_type;
     }
-    if (((call.callee == "__builtin_panic") && builtin_available) ||
-        builtin_decl_kind == ast::BuiltinCallKind::Panic) {
+    if (builtin_decl_kind == ast::BuiltinCallKind::Panic) {
         if (!call.explicit_type_arguments.empty() &&
             !builtin_decl_is_template_instance) {
             return unexpected_result<const Type*>(
@@ -2201,8 +2207,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (((call.callee == "__builtin_raw_data") && builtin_available) ||
-        builtin_decl_kind == ast::BuiltinCallKind::RawData) {
+    if (builtin_decl_kind == ast::BuiltinCallKind::RawData) {
         if (!call.explicit_type_arguments.empty() &&
             !builtin_decl_is_template_instance) {
             return unexpected_result<const Type*>(
@@ -2230,8 +2235,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (((call.callee == "__builtin_fn_ptr") && builtin_available) ||
-        builtin_decl_kind == ast::BuiltinCallKind::FunctionPointer) {
+    if (builtin_decl_kind == ast::BuiltinCallKind::FunctionPointer) {
         if (state.unchecked_depth == 0) {
             return unexpected_result<const Type*>(
                 "fn_ptr() is only allowed in unchecked blocks", expr.range);
@@ -2306,8 +2310,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (((call.callee == "__builtin_subslice") && builtin_available) ||
-        builtin_decl_kind == ast::BuiltinCallKind::Subslice) {
+    if (builtin_decl_kind == ast::BuiltinCallKind::Subslice) {
         if (call.arguments.size() != 3) {
             return unexpected_result<const Type*>(
                 "subslice() expects exactly three arguments", expr.range);
@@ -2342,7 +2345,9 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                             return binding.path.empty();
                         });
                     if (it != bindings->end()) {
-                        ignored_local = it->source_local_id;
+                        ignored_local = it->owner_local_id.has_value()
+                                            ? it->owner_local_id
+                                            : it->source_local_id;
                     }
                 }
             }
@@ -2449,6 +2454,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                                           ResolvedPlace>{*expr.slice_source_place}
                                 : std::vector<ast::ResolvedPlace>{},
                         .source_local_id = binding_it->source_local_id,
+                        .owner_local_id = binding_it->owner_local_id,
                         .element_sources = binding_it->element_sources,
                         .type = result_type,
                     },
@@ -2457,8 +2463,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         }
         return expr.resolved_type;
     }
-    if (((call.callee == "__builtin_atomic_load") && builtin_available) ||
-        builtin_decl_kind == ast::BuiltinCallKind::AtomicLoad) {
+    if (builtin_decl_kind == ast::BuiltinCallKind::AtomicLoad) {
         if (!call.explicit_type_arguments.empty() &&
             !builtin_decl_is_template_instance) {
             return unexpected_result<const Type*>(
@@ -2491,8 +2496,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (((call.callee == "__builtin_atomic_store") && builtin_available) ||
-        builtin_decl_kind == ast::BuiltinCallKind::AtomicStore) {
+    if (builtin_decl_kind == ast::BuiltinCallKind::AtomicStore) {
         if (!call.explicit_type_arguments.empty() &&
             !builtin_decl_is_template_instance) {
             return unexpected_result<const Type*>(
@@ -2530,8 +2534,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (((call.callee == "__builtin_atomic_exchange") && builtin_available) ||
-        builtin_decl_kind == ast::BuiltinCallKind::AtomicExchange) {
+    if (builtin_decl_kind == ast::BuiltinCallKind::AtomicExchange) {
         if (!call.explicit_type_arguments.empty() &&
             !builtin_decl_is_template_instance) {
             return unexpected_result<const Type*>(
@@ -2570,9 +2573,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (((call.callee == "__builtin_atomic_compare_exchange") &&
-         builtin_available) ||
-        builtin_decl_kind == ast::BuiltinCallKind::AtomicCompareExchange) {
+    if (builtin_decl_kind == ast::BuiltinCallKind::AtomicCompareExchange) {
         if (!call.explicit_type_arguments.empty() &&
             !builtin_decl_is_template_instance) {
             return unexpected_result<const Type*>(
@@ -2625,13 +2626,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (((call.callee == "__builtin_atomic_fetch_add" ||
-          call.callee == "__builtin_atomic_fetch_sub" ||
-          call.callee == "__builtin_atomic_fetch_and" ||
-          call.callee == "__builtin_atomic_fetch_or" ||
-          call.callee == "__builtin_atomic_fetch_xor") &&
-         builtin_available) ||
-        builtin_decl_kind == ast::BuiltinCallKind::AtomicFetchAdd ||
+    if (builtin_decl_kind == ast::BuiltinCallKind::AtomicFetchAdd ||
         builtin_decl_kind == ast::BuiltinCallKind::AtomicFetchSub ||
         builtin_decl_kind == ast::BuiltinCallKind::AtomicFetchAnd ||
         builtin_decl_kind == ast::BuiltinCallKind::AtomicFetchOr ||
@@ -2672,25 +2667,12 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
         }
         static_cast<void>(*order);
         bind_builtin_decl();
-        if (builtin_decl_kind != ast::BuiltinCallKind::None) {
-            call.builtin_kind = builtin_decl_kind;
-        } else if (call.callee == "__builtin_atomic_fetch_add") {
-            call.builtin_kind = ast::BuiltinCallKind::AtomicFetchAdd;
-        } else if (call.callee == "__builtin_atomic_fetch_sub") {
-            call.builtin_kind = ast::BuiltinCallKind::AtomicFetchSub;
-        } else if (call.callee == "__builtin_atomic_fetch_and") {
-            call.builtin_kind = ast::BuiltinCallKind::AtomicFetchAnd;
-        } else if (call.callee == "__builtin_atomic_fetch_or") {
-            call.builtin_kind = ast::BuiltinCallKind::AtomicFetchOr;
-        } else {
-            call.builtin_kind = ast::BuiltinCallKind::AtomicFetchXor;
-        }
+        call.builtin_kind = builtin_decl_kind;
         expr.resolved_type = (*pointer_type)->element_type;
         expr.resolved_place.reset();
         return expr.resolved_type;
     }
-    if (((call.callee == "__builtin_atomic_fence") && builtin_available) ||
-        builtin_decl_kind == ast::BuiltinCallKind::AtomicFence) {
+    if (builtin_decl_kind == ast::BuiltinCallKind::AtomicFence) {
         if (!call.explicit_type_arguments.empty() &&
             !builtin_decl_is_template_instance) {
             return unexpected_result<const Type*>(
@@ -2999,6 +2981,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                         .path = std::move(path),
                         .source_places = binding.source_places,
                         .source_local_id = binding.source_local_id,
+                        .owner_local_id = binding.owner_local_id,
                         .element_sources = binding.element_sources,
                         .type = binding.type,
                     });
@@ -3080,6 +3063,22 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
             expr.range);
     }
 
+    const auto builtin_call_kind =
+        resolved_function.builtin_lowering.has_value()
+            ? resolved_function.builtin_lowering->builtin_kind
+            : ast::BuiltinCallKind::None;
+    if (builtin_call_kind == ast::BuiltinCallKind::FromRawParts ||
+        builtin_call_kind == ast::BuiltinCallKind::FromRawPartsOn) {
+        if (state.unchecked_depth == 0) {
+            return unexpected_result<const Type*>(
+                builtin_call_kind == ast::BuiltinCallKind::FromRawPartsOn
+                    ? "from_raw_parts_on() is only allowed in unchecked blocks"
+                    : "from_raw_parts() is only allowed in unchecked blocks",
+                expr.range);
+        }
+        call.builtin_kind = builtin_call_kind;
+    }
+
     std::unordered_map<std::size_t, std::vector<ViewLeafBinding>>
         dependency_argument_bindings;
     std::vector<bool> include_projected_argument_bindings(call.arguments.size(),
@@ -3123,8 +3122,9 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
             if (!analyzed_dependency_argument) {
                 return std::unexpected(analyzed_dependency_argument.error());
             }
-            auto bindings = collectExprViewBindings(
-                state, *call.arguments[parameter_index]);
+            auto bindings = collectCallArgumentViewBindings(
+                state, *call.arguments[parameter_index],
+                resolved_function.parameters[parameter_index].resolved_type);
             if (!bindings) {
                 return std::unexpected(bindings.error());
             }
@@ -3219,6 +3219,7 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                 .path = std::move(bindings->path),
                 .source_places = std::move(bindings->source_places),
                 .source_local_id = bindings->source_local_id,
+                .owner_local_id = bindings->owner_local_id,
                 .element_sources = std::move(bindings->element_sources),
                 .type = bindings->type,
             });
@@ -3244,14 +3245,26 @@ auto SemanticAnalyzer::analyzeCall(FunctionState& state, ast::Expr& expr,
                         expr.range);
                 }
                 expr.resolved_place = *source_place;
-                if (expr.resolved_type->is_mut &&
-                    it->source_local_id.has_value()) {
-                    expr.resolved_place->owner_local_id = it->source_local_id;
+                const auto binding_owner_local_id =
+                    it->owner_local_id.has_value() ? it->owner_local_id
+                                                   : it->source_local_id;
+                if (binding_owner_local_id.has_value()) {
+                    expr.resolved_place->owner_local_id =
+                        binding_owner_local_id;
                 }
                 expr.slice_source_place.reset();
             } else {
                 expr.slice_source_place =
                     placeSetRepresentative(it->source_places);
+                if (expr.slice_source_place.has_value()) {
+                    const auto binding_owner_local_id =
+                        it->owner_local_id.has_value() ? it->owner_local_id
+                                                       : it->source_local_id;
+                    if (binding_owner_local_id.has_value()) {
+                        expr.slice_source_place->owner_local_id =
+                            binding_owner_local_id;
+                    }
+                }
                 expr.resolved_place.reset();
             }
         } else {

@@ -1,0 +1,12 @@
+enum WrapA<T> {
+    Value(T),
+};
+
+enum WrapB<T> {
+    Value(&mut T),
+};
+
+i64 main() {
+    Value(1);
+    return 0;
+}

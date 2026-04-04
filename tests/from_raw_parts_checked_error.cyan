@@ -1,0 +1,7 @@
+import /std.ptr as ptr;
+import /std.view;
+
+i64 main() {
+    []i64 values = from_raw_parts(ptr.null<i64>(), 0);
+    return len(values);
+}

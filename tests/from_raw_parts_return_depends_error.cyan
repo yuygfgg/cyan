@@ -1,0 +1,16 @@
+import /std.view;
+
+struct Buffer {
+    i64* ptr;
+    i64 len;
+};
+
+[]i64 bad(&Buffer buffer) depends(return on buffer) {
+    unchecked {
+        return from_raw_parts(buffer.ptr, buffer.len);
+    }
+}
+
+i64 main() {
+    return 0;
+}

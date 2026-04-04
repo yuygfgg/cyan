@@ -6,7 +6,7 @@ This document lists the public modules shipped in Cyan's standard library and th
 
 | Module             | Use it for                                               |
 | ------------------ | -------------------------------------------------------- |
-| `/std.view`        | slice length, subslices, raw slice pointer access        |
+| `/std.view`        | slice length, subslices, raw slice construction/access   |
 | `/std.ptr`         | null pointers                                            |
 | `/std.result`      | `Result<T, E>`, `Unit`                                   |
 | `/std.err`         | error marker interface                                   |
@@ -37,6 +37,8 @@ Public API:
 - `len<T>([]T values) -> i64`
 - `subslice<T>([]T values, i64 start, i64 count) -> []T`
 - `raw_data<T>([]T values) -> const void*`
+- `from_raw_parts<T>(T* ptr, i64 count) -> []T`
+- `from_raw_parts_on<T, Owner>(T* ptr, i64 count, &Owner owner) -> []T`
 
 Typical use:
 
@@ -51,6 +53,10 @@ i64 main() {
 ```
 
 Use `raw_data(...)` when you need to pass a slice buffer to an extern function.
+Use `from_raw_parts(...)` inside `unchecked` blocks when you need a temporary
+slice view over raw memory. Use `from_raw_parts_on(...)` when that raw slice
+must inherit provenance from an existing owner so it can satisfy
+`depends(return on ...)` in APIs such as future dynamic-array accessors.
 
 ## `/std.ptr`
 

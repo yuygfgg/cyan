@@ -256,6 +256,8 @@ auto parse_builtin_lowering_kind(std::string_view text)
             {"len", Len},
             {"subslice", Subslice},
             {"raw_data", RawData},
+            {"from_raw_parts", FromRawParts},
+            {"from_raw_parts_on", FromRawPartsOn},
             {"fn_ptr", FunctionPointer},
             {"panic", Panic},
             {"atomic_relaxed", AtomicRelaxedOrder},
@@ -278,6 +280,15 @@ auto parse_builtin_lowering_kind(std::string_view text)
         return it->second;
     }
     return std::nullopt;
+}
+
+auto builtin_allow_untracked_view_return(ast::BuiltinCallKind kind) -> bool {
+    switch (kind) {
+    case ast::BuiltinCallKind::FromRawParts:
+        return true;
+    default:
+        return false;
+    }
 }
 
 auto parse_symbol_case(std::string_view value, SourceRange range,
@@ -603,6 +614,8 @@ auto apply_lowerings(ast::Module& module,
             function->builtin_lowering = ast::BuiltinLowering{
                 .range = lowering.range,
                 .builtin_kind = lowering.builtin_kind,
+                .allow_untracked_view_return =
+                    builtin_allow_untracked_view_return(lowering.builtin_kind),
             };
         } else if (!lowering.extern_symbol_cases.empty()) {
             function->extern_symbol_cases = lowering.extern_symbol_cases;

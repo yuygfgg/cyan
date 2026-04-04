@@ -2402,6 +2402,54 @@ class LLVMCodegen {
         return builder.CreateExtractValue(slice_value, {0}, "raw.data");
     }
 
+    auto emitFromRawPartsBuiltin(ast::CallExpr& call) -> llvm::Value* {
+        if ((call.builtin_kind == ast::BuiltinCallKind::FromRawParts &&
+             call.arguments.size() != 2) ||
+            (call.builtin_kind == ast::BuiltinCallKind::FromRawPartsOn &&
+             call.arguments.size() != 3) ||
+            call.arguments.empty() ||
+            call.arguments[0]->resolved_type == nullptr ||
+            call.arguments.size() < 2 ||
+            call.arguments[1]->resolved_type == nullptr) {
+            return nullptr;
+        }
+
+        const auto* pointer_type =
+            types.unqualify(call.arguments[0]->resolved_type);
+        if (pointer_type->kind != TypeKind::Pointer ||
+            pointer_type->element_type == nullptr) {
+            return nullptr;
+        }
+
+        auto* data_pointer = emitExpr(*call.arguments[0]);
+        auto* count = emitExpr(*call.arguments[1]);
+        if (data_pointer == nullptr || count == nullptr) {
+            return nullptr;
+        }
+        if (call.builtin_kind == ast::BuiltinCallKind::FromRawPartsOn) {
+            if (emitBorrowOperand(*call.arguments[2]) == nullptr) {
+                return nullptr;
+            }
+        }
+        count = extendOrTruncateInteger(count, call.arguments[1]->resolved_type,
+                                        types.i64Type());
+
+        auto* zero = lengthConstant(0);
+        auto* negative =
+            builder.CreateICmpSLT(count, zero, "from_raw_parts.neg");
+        emitTrapIf(negative,
+                   call.builtin_kind == ast::BuiltinCallKind::FromRawPartsOn
+                       ? "from_raw_parts_on"
+                       : "from_raw_parts");
+
+        llvm::Value* slice_value = llvm::UndefValue::get(sliceStorageType());
+        slice_value = builder.CreateInsertValue(slice_value, data_pointer, {0},
+                                                "from_raw_parts.ptr");
+        slice_value = builder.CreateInsertValue(slice_value, count, {1},
+                                                "from_raw_parts.len");
+        return slice_value;
+    }
+
     auto emitSubsliceBuiltin(ast::CallExpr& call) -> llvm::Value* {
         if (call.arguments.size() != 3 ||
             call.arguments.front()->resolved_type == nullptr) {
@@ -2964,6 +3012,10 @@ class LLVMCodegen {
                         call.builtin_kind != ast::BuiltinCallKind::Len &&
                         call.builtin_kind != ast::BuiltinCallKind::Subslice &&
                         call.builtin_kind != ast::BuiltinCallKind::RawData &&
+                        call.builtin_kind !=
+                            ast::BuiltinCallKind::FromRawParts &&
+                        call.builtin_kind !=
+                            ast::BuiltinCallKind::FromRawPartsOn &&
                         call.builtin_kind != ast::BuiltinCallKind::Panic) {
                         return emitAtomicBuiltin(call);
                     }
@@ -2987,6 +3039,12 @@ class LLVMCodegen {
                     }
                     if (call.builtin_kind == ast::BuiltinCallKind::RawData) {
                         return emitRawDataBuiltin(call);
+                    }
+                    if (call.builtin_kind ==
+                            ast::BuiltinCallKind::FromRawParts ||
+                        call.builtin_kind ==
+                            ast::BuiltinCallKind::FromRawPartsOn) {
+                        return emitFromRawPartsBuiltin(call);
                     }
                     if (call.function != nullptr &&
                         call.function->intrinsic_lowering.has_value()) {

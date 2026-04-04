@@ -1,0 +1,14 @@
+import /std.error;
+import /std.heap as heap;
+import /std.view;
+
+i64 main() {
+    i64* ptr = must(heap.malloc_array<i64>(1));
+    unchecked {
+        ptr[0] = 9;
+        []i64 values = from_raw_parts<i64>(ptr, 1);
+        i64 total = values[0];
+        heap.free_ptr(ptr);
+        return total - 9;
+    }
+}

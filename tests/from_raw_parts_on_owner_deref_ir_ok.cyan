@@ -1,0 +1,14 @@
+import /std.view;
+
+void keep(i64* data, i64* owner_ptr) {
+    unchecked {
+        []i64 values = from_raw_parts_on(data, 1, *owner_ptr);
+        if (len(values) == 2) {
+            return;
+        }
+    }
+}
+
+i64 main() {
+    return 0;
+}

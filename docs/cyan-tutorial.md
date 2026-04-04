@@ -580,6 +580,24 @@ If you try to index into a raw pointer (`ptr[0]`) or cast away `const` outside o
 
 To acquire a null pointer, use the standard library helper `ptr.null<T>()`, making sure to explicitly provide the generic type since the compiler cannot infer it from an empty invocation.
 
+If you need to turn a raw `T*` plus a count into a slice, import `/std.view`
+and stay inside `unchecked`:
+
+```cyan
+import /std.view as view;
+
+[]i64 as_slice(i64* ptr, i64 count) {
+    unchecked {
+        return view.from_raw_parts(ptr, count);
+    }
+}
+```
+
+That raw form creates a slice with no compiler-tracked provenance, so it is
+best kept inside low-level implementation code. If you need the returned slice
+to be tied to an owner for `depends(return on ...)`, use
+`view.from_raw_parts_on(ptr, count, owner)` instead.
+
 ---
 
 ## 11. Concurrency

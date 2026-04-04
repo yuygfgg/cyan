@@ -1,0 +1,24 @@
+import /std.error;
+import /std.heap as heap;
+import /std.view;
+
+struct Buffer {
+    i64* ptr;
+    i64 len;
+};
+
+i64 main() {
+    i64* ptr = must(heap.malloc_array<i64>(3));
+    unchecked {
+        ptr[0] = 10;
+        ptr[1] = 20;
+        ptr[2] = 30;
+    }
+    Buffer buffer = {ptr, 3};
+    unchecked {
+        []i64 values = from_raw_parts_on(buffer.ptr, buffer.len, buffer);
+        i64 total = values[0] + values[2];
+        heap.free_ptr(ptr);
+        return total - 40;
+    }
+}

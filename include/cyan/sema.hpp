@@ -176,6 +176,7 @@ class SemanticAnalyzer {
         std::vector<std::uint32_t> path;
         std::vector<ast::ResolvedPlace> source_places;
         std::optional<std::size_t> source_local_id;
+        std::optional<std::size_t> owner_local_id;
         std::vector<ast::ResolvedPlace> element_sources;
         const Type* type = nullptr;
     };
@@ -351,6 +352,10 @@ class SemanticAnalyzer {
         FunctionState& state,
         const std::vector<ast::ResolvedPlace>& base_places, const Type* type)
         -> std::expected<std::vector<ViewLeafBinding>, Diagnostic>;
+    auto collectCallArgumentViewBindings(FunctionState& state,
+                                         ast::Expr& argument,
+                                         const Type* parameter_type)
+        -> std::expected<std::vector<ViewLeafBinding>, Diagnostic>;
     auto collectExprViewBindings(FunctionState& state, ast::Expr& expr)
         -> std::expected<std::vector<ViewLeafBinding>, Diagnostic>;
     auto setAggregateViewSlots(FunctionState& state,
@@ -442,7 +447,8 @@ class SemanticAnalyzer {
     auto matchTypePattern(const ast::TypeSyntax& pattern,
                           const ast::Module& owner_module,
                           const std::vector<std::string>& type_parameters,
-                          const Type* actual_type, TypeBindings& type_bindings)
+                          const Type* actual_type, TypeBindings& type_bindings,
+                          bool allow_relaxed_borrow_match = false)
         -> std::expected<void, Diagnostic>;
     auto validateResolvedImplSignature(ast::FunctionDecl& decl,
                                        const Type* target_type)

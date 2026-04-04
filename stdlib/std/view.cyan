@@ -5,6 +5,12 @@ export extern {
     //@lower builtin=raw_data
     const void* raw_data<T>([]T values);
 
+    //@lower builtin=from_raw_parts
+    []T from_raw_parts<T>(T* ptr, i64 count);
+
+    //@lower builtin=from_raw_parts_on
+    []T from_raw_parts_on<T, Owner>(T* ptr, i64 count, &Owner owner);
+
     //@lower builtin=subslice
     []T subslice<T>([]T values, i64 start, i64 count);
 }

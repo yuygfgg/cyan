@@ -228,6 +228,7 @@ auto SemanticAnalyzer::buildLeafDependencyBinding(
                                       : std::vector<std::uint32_t>{},
         .source_places = source_binding->source_places,
         .source_local_id = source_binding->source_local_id,
+        .owner_local_id = source_binding->owner_local_id,
         .element_sources = source_binding->element_sources,
         .type = dependency.target.resolved_type,
     };
@@ -421,6 +422,7 @@ auto SemanticAnalyzer::collectSlotBindings(FunctionState& state,
             .source_local_id = is_borrow_like_type(slot.type)
                                    ? std::optional<std::size_t>(slot.unique_id)
                                    : std::nullopt,
+            .owner_local_id = slot.unique_id,
             .element_sources = slot.element_origins,
             .type = leaf.type,
         });
@@ -455,6 +457,12 @@ auto SemanticAnalyzer::collectProjectedViewBindings(
                    existing_it->source_local_id !=
                        next_binding.source_local_id) {
             existing_it->source_local_id.reset();
+        }
+        if (!existing_it->owner_local_id.has_value()) {
+            existing_it->owner_local_id = next_binding.owner_local_id;
+        } else if (next_binding.owner_local_id.has_value() &&
+                   existing_it->owner_local_id != next_binding.owner_local_id) {
+            existing_it->owner_local_id.reset();
         }
     };
 
@@ -582,6 +590,7 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                 .path = binding.path,
                 .source_places = binding.source_places,
                 .source_local_id = binding.source_local_id,
+                .owner_local_id = binding.owner_local_id,
                 .element_sources = binding.element_sources,
                 .type = binding.type,
             });
@@ -606,6 +615,7 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
             .path = {},
             .source_places = {},
             .source_local_id = std::nullopt,
+            .owner_local_id = std::nullopt,
             .element_sources = {},
             .type = expr_type,
         };
@@ -615,6 +625,13 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                 return std::unexpected(local_id.error());
             }
             binding.source_local_id = *local_id;
+            if (expr.resolved_place.has_value() &&
+                expr.resolved_place->owner_local_id.has_value()) {
+                binding.owner_local_id = expr.resolved_place->owner_local_id;
+            }
+            if (!binding.owner_local_id.has_value()) {
+                binding.owner_local_id = binding.source_local_id;
+            }
             if (!binding.source_local_id.has_value() &&
                 expr.resolved_place.has_value()) {
                 const auto slot_index = findViewSlotLocal(
@@ -623,6 +640,10 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                 if (slot_index.has_value()) {
                     binding.source_local_id =
                         state.locals[*slot_index].unique_id;
+                    if (!binding.owner_local_id.has_value()) {
+                        binding.owner_local_id =
+                            state.locals[*slot_index].unique_id;
+                    }
                 }
             }
             if (expr.cached_view_bindings.has_value()) {
@@ -652,6 +673,10 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                         binding.source_local_id =
                             state.locals[*slot_index].unique_id;
                     }
+                    if (!binding.owner_local_id.has_value()) {
+                        binding.owner_local_id =
+                            state.locals[*slot_index].unique_id;
+                    }
                 }
             }
             if (binding.source_places.empty()) {
@@ -674,6 +699,10 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                     return std::unexpected(place.error());
                 }
                 binding.source_places = {*place};
+                if (!binding.owner_local_id.has_value() &&
+                    place->owner_local_id.has_value()) {
+                    binding.owner_local_id = place->owner_local_id;
+                }
             }
         } else {
             if (expr.resolved_place.has_value()) {
@@ -681,7 +710,7 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                     state, expr.resolved_place->is_external,
                     expr.resolved_place->root_id, expr.resolved_place->fields);
                 if (slot_index.has_value()) {
-                    binding.source_local_id =
+                    binding.owner_local_id =
                         state.locals[*slot_index].unique_id;
                 }
             }
@@ -708,6 +737,9 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                 }
                 if (place->has_value()) {
                     binding.source_places = {**place};
+                    if ((*place)->owner_local_id.has_value()) {
+                        binding.owner_local_id = (*place)->owner_local_id;
+                    }
                 }
             }
         }
@@ -816,8 +848,10 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
                 }
                 const auto parameter_index = *dependency.source.parameter_index;
                 if (!argument_ready[parameter_index]) {
-                    auto argument_bindings = collectExprViewBindings(
-                        state, *call->arguments[parameter_index]);
+                    auto argument_bindings = collectCallArgumentViewBindings(
+                        state, *call->arguments[parameter_index],
+                        call->function->parameters[parameter_index]
+                            .resolved_type);
                     if (!argument_bindings) {
                         return std::unexpected(argument_bindings.error());
                     }
@@ -850,6 +884,65 @@ auto SemanticAnalyzer::collectExprViewBindings(FunctionState& state,
 
     return unexpected_result<std::vector<ViewLeafBinding>>(
         "could not determine aggregate borrow or slice sources", expr.range);
+}
+
+auto SemanticAnalyzer::collectCallArgumentViewBindings(
+    FunctionState& state, ast::Expr& argument, const Type* parameter_type)
+    -> std::expected<std::vector<ViewLeafBinding>, Diagnostic> {
+    auto bindings = collectExprViewBindings(state, argument);
+    if (!bindings) {
+        return std::unexpected(bindings.error());
+    }
+    if (parameter_type == nullptr || parameter_type->kind != TypeKind::Borrow ||
+        parameter_type->element_type == nullptr) {
+        return bindings;
+    }
+
+    auto source_places = projectedPlaceTargets(state, argument);
+    if (!source_places) {
+        return std::unexpected(source_places.error());
+    }
+    if (source_places->empty() && argument.resolved_place.has_value()) {
+        source_places->push_back(*argument.resolved_place);
+    }
+
+    std::optional<std::size_t> owner_local_id;
+    if (argument.resolved_place.has_value()) {
+        if (argument.resolved_place->owner_local_id.has_value()) {
+            owner_local_id = argument.resolved_place->owner_local_id;
+        } else if (!argument.resolved_place->is_external) {
+            owner_local_id = argument.resolved_place->root_id;
+        }
+    }
+
+    if (auto* top_level_binding = findViewBinding(*bindings, {});
+        top_level_binding != nullptr) {
+        if (top_level_binding->source_places.empty()) {
+            top_level_binding->source_places = *source_places;
+        }
+        if (!top_level_binding->owner_local_id.has_value()) {
+            top_level_binding->owner_local_id = owner_local_id;
+        }
+        return bindings;
+    }
+    if (source_places->empty()) {
+        return bindings;
+    }
+
+    auto element_sources = projectedPlaceSources(state, argument);
+    if (!element_sources) {
+        return std::unexpected(element_sources.error());
+    }
+
+    bindings->push_back(ViewLeafBinding{
+        .path = {},
+        .source_places = std::move(*source_places),
+        .source_local_id = std::nullopt,
+        .owner_local_id = owner_local_id,
+        .element_sources = std::move(*element_sources),
+        .type = parameter_type,
+    });
+    return bindings;
 }
 
 auto SemanticAnalyzer::setAggregateViewSlots(
@@ -1043,6 +1136,9 @@ auto SemanticAnalyzer::resolveDependencyPath(
 auto SemanticAnalyzer::validateReturnDependencies(ast::FunctionDecl& decl)
     -> std::expected<void, Diagnostic> {
     const auto returns_views = typeContainsViews(decl.resolved_return_type);
+    const auto allow_untracked_view_return =
+        decl.builtin_lowering.has_value() &&
+        decl.builtin_lowering->allow_untracked_view_return;
     const auto has_mut_view_parameter = std::ranges::any_of(
         decl.parameters, [&](const ast::Parameter& parameter) {
             return parameter.resolved_type != nullptr &&
@@ -1068,6 +1164,9 @@ auto SemanticAnalyzer::validateReturnDependencies(ast::FunctionDecl& decl)
     const auto return_leaves = collectViewLeafInfos(decl.resolved_return_type);
 
     if (returns_views && decl.return_dependencies.empty()) {
+        if (allow_untracked_view_return) {
+            return {};
+        }
         if (is_view_like_type(types, decl.resolved_return_type)) {
             std::optional<std::size_t> only_view_parameter;
             for (std::size_t index = 0; index < decl.parameters.size();

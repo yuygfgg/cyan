@@ -497,9 +497,13 @@ auto SemanticAnalyzer::requireReadable(FunctionState& state, ast::Expr& expr,
                                      [](const ast::CachedViewBinding& binding) {
                                          return binding.path.empty();
                                      });
-            if (it != source_expr.cached_view_bindings->end() &&
-                it->source_local_id.has_value()) {
-                return it->source_local_id;
+            if (it != source_expr.cached_view_bindings->end()) {
+                if (it->owner_local_id.has_value()) {
+                    return it->owner_local_id;
+                }
+                if (it->source_local_id.has_value()) {
+                    return it->source_local_id;
+                }
             }
         }
 
@@ -525,6 +529,9 @@ auto SemanticAnalyzer::requireReadable(FunctionState& state, ast::Expr& expr,
                     return binding.path.empty();
                 });
             if (it != bindings->end()) {
+                if (it->owner_local_id.has_value()) {
+                    return it->owner_local_id;
+                }
                 return it->source_local_id;
             }
         }
@@ -1223,9 +1230,12 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
                 }
                 if (temporary_only) {
                     for (auto loan_place : (*binding)->element_sources) {
-                        if ((*binding)->source_local_id.has_value()) {
-                            loan_place.owner_local_id =
-                                (*binding)->source_local_id;
+                        const auto binding_owner_local_id =
+                            (*binding)->owner_local_id.has_value()
+                                ? (*binding)->owner_local_id
+                                : (*binding)->source_local_id;
+                        if (binding_owner_local_id.has_value()) {
+                            loan_place.owner_local_id = binding_owner_local_id;
                         }
                         push_temporary_loan(std::move(loan_place), false,
                                             expr.range);
@@ -1235,10 +1245,25 @@ auto SemanticAnalyzer::borrowFromExpr(FunctionState& state, ast::Expr& expr,
                     if (auto origin =
                             placeSetRepresentative((*binding)->source_places);
                         origin.has_value()) {
+                        const auto binding_owner_local_id =
+                            (*binding)->owner_local_id.has_value()
+                                ? (*binding)->owner_local_id
+                                : (*binding)->source_local_id;
+                        if (binding_owner_local_id.has_value()) {
+                            origin->owner_local_id = binding_owner_local_id;
+                        }
                         return *origin;
                     }
                 }
-                return (*binding)->element_sources.front();
+                auto origin = (*binding)->element_sources.front();
+                const auto binding_owner_local_id =
+                    (*binding)->owner_local_id.has_value()
+                        ? (*binding)->owner_local_id
+                        : (*binding)->source_local_id;
+                if (binding_owner_local_id.has_value()) {
+                    origin.owner_local_id = binding_owner_local_id;
+                }
+                return origin;
             }
         }
         if (expr.resolved_place.has_value()) {
